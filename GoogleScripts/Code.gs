@@ -9,13 +9,19 @@
 
 const CONFIG = {
   CALENDAR_ID: '7gml08968kada988va91mu3i2qkci0ts@import.calendar.google.com',
-  TODOIST_API_TOKEN: '4309998c3e3588535556645b55f67769ea65430c', 
+  // Token veilig opgeslagen in UserProperties (los quotum, niet in broncode)
+  get TODOIST_API_TOKEN() {
+    return PropertiesService.getUserProperties().getProperty('TODOIST_API_TOKEN')
+        || PropertiesService.getScriptProperties().getProperty('TODOIST_API_TOKEN');
+  },
   SHEET_NAME_ROSTER: 'DienstenData',
   SHEET_NAME_DASHBOARD: 'Todoist_Dashboard',
   SHEET_NAME_DB: 'Tasks_Todoist_DB',
   SYNC_DAYS_FORWARD: 90,
+  SYNC_DAYS_BACK: 30,     // Scan ook 30 dagen terug — diensten die vóór de sync lagen worden nu wél opgehaald
   TODOIST_PROJECT_ID: null, 
   TODOIST_LABEL: 'Rooster',
+  ARCHIVE_CALENDAR_NAME: 'Diensten Archief', // Native Google Calendar voor permanente geschiedenis
   KEYWORDS_INCLUDE: ['dienst', 'sdb', 'shift'], 
   KEYWORDS_EXCLUDE: ['vrij', 'vakantie'],
   COLORS: { PRIMARY: "#e44332", ACCENT: "#1a73e8", SUCCESS: "#0f9d58", WARNING: "#f4b400", ERROR: "#d93025" },
@@ -51,6 +57,110 @@ function setHomeappProperties() {
 }
 
 // ============================================================================
+// 🔑 EENMALIGE TOKEN SETUP — Sla Todoist token veilig op in UserProperties
+// ============================================================================
+// UserProperties heeft een apart quotum (los van ScriptProperties).
+// Voer dit 1x uit via 🚀 Master Tools → Sla Todoist Token Op.
+// Na uitvoering: verwijder de token-waarde hieronder uit de code.
+
+function setTodoistToken() {
+  const TOKEN = '4309998c3e3588535556645b55f67769ea65430c'; // ← na 1x uitvoeren: vervang door 'VERVANG_MET_JOUW_TOKEN'
+
+  if (!TOKEN || TOKEN === 'VERVANG_MET_JOUW_TOKEN') {
+    throw new Error('❌ Token al opgeslagen of TOKEN-variabele is leeg.');
+  }
+
+  PropertiesService.getUserProperties().setProperty('TODOIST_API_TOKEN', TOKEN);
+  Logger.log('✅ Todoist API token opgeslagen in UserProperties');
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    '✅ Token veilig opgeslagen! Vervang nu de tokenwaarde in de code door VERVANG_MET_JOUW_TOKEN.',
+    '🔑 Token Setup', 10
+  );
+}
+
+/**
+ * Diagnose: test de Todoist-verbinding stap voor stap.
+ * Run via 🚀 Master Tools → 🔎 Diagnose Todoist Verbinding
+ */
+function debugTodoistSync() {
+  const token = CONFIG.TODOIST_API_TOKEN;
+  Logger.log('=== TODOIST DIAGNOSE ===');
+
+  // Stap 1: Token check
+  if (!token) {
+    Logger.log('❌ STAP 1 MISLUKT: Token is null/leeg. Voer setTodoistToken() uit!');
+    safeToast('Diagnose', '❌ Token ontbreekt — voer 🔑 Sla Todoist Token Op uit', 10);
+    return;
+  }
+  Logger.log(`✅ Stap 1: Token aanwezig (eindigt op ...${token.slice(-6)})`);
+
+  // Stap 2: API bereikbaar?
+  try {
+    const res = UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + 'projects', {
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    Logger.log(`✅ Stap 2: API bereikbaar — HTTP ${res.getResponseCode()}`);
+    if (res.getResponseCode() === 401) {
+      Logger.log('❌ HTTP 401 = Token ongeldig of verlopen!');
+      safeToast('Diagnose', '❌ Token ongeldig (401)', 10);
+      return;
+    }
+    if (res.getResponseCode() !== 200) {
+      Logger.log(`❌ Onverwachte HTTP ${res.getResponseCode()}: ${res.getContentText()}`);
+      safeToast('Diagnose', `❌ API fout HTTP ${res.getResponseCode()}`, 10);
+      return;
+    }
+  } catch(e) {
+    Logger.log(`❌ Stap 2 MISLUKT: Netwerk fout — ${e.message}`);
+    return;
+  }
+
+  // Stap 3: Labels check
+  const labels = fetchPaginated('labels');
+  const roosterLabel = labels.find(l => (l.name || '').toLowerCase() === CONFIG.TODOIST_LABEL.toLowerCase());
+  if (roosterLabel) {
+    Logger.log(`✅ Stap 3: Label '${CONFIG.TODOIST_LABEL}' gevonden (ID: ${roosterLabel.id})`);
+  } else {
+    Logger.log(`⚠️ Stap 3: Label '${CONFIG.TODOIST_LABEL}' NIET gevonden. Beschikbaar: ${labels.map(l => l.name).join(', ')}`);
+    Logger.log('   → Taken worden aangemaakt ZONDER label. Dit blokkeert de sync NIET.');
+  }
+
+  // Stap 4: Bestaande taken ophalen
+  const tasks = fetchPaginated('tasks');
+  const roosterTasks = tasks.filter(t => t.description && t.description.includes('[EID:'));
+  Logger.log(`✅ Stap 4: ${tasks.length} actieve taken, waarvan ${roosterTasks.length} rooster-taken (met EID)`);
+
+  // Stap 5: Test taak aanmaken
+  try {
+    const testPayload = {
+      content: '🧪 DIAGNOSE TEST — mag worden verwijderd',
+      description: 'Automatische diagnose. Verwijder deze taak.',
+      due_date: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+      labels: roosterLabel ? [CONFIG.TODOIST_LABEL] : []
+    };
+    const res = UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + 'tasks', {
+      method: 'post',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      payload: JSON.stringify(testPayload),
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() === 200) {
+      const created = JSON.parse(res.getContentText());
+      Logger.log(`✅ Stap 5: Test taak aangemaakt (ID: ${created.id}) — verwijder deze handmatig in Todoist`);
+      safeToast('Diagnose Gelukt ✅', 'Alles werkt! Zie logs voor details.', 10);
+    } else {
+      Logger.log(`❌ Stap 5 MISLUKT: HTTP ${res.getResponseCode()}\nResponse: ${res.getContentText()}`);
+      safeToast('Diagnose', `❌ Taak aanmaken mislukt: HTTP ${res.getResponseCode()}`, 15);
+    }
+  } catch(e) {
+    Logger.log(`❌ Stap 5 fout: ${e.message}`);
+  }
+
+  Logger.log('=== EINDE DIAGNOSE ===');
+}
+
+// ============================================================================
 // MENU
 // ============================================================================
 
@@ -60,9 +170,13 @@ function onOpen() {
     .addSeparator()
     .addItem('🧹 Eenmalige Opschoning (Oude Taken)', 'purgeLegacyTasks')
     .addItem('🗑️ Cleanup Duplicaten Todoist', 'cleanupTodoistDuplicates')
+    .addItem('🧽 Opschoon Legacy Todoist IDs', 'cleanupLegacyTodoistIds')
     .addSeparator()
     .addItem('📊 Update Todoist Dashboard', 'mainTodoistDashboardSync')
     .addItem('📊 Bouw Diensten Dashboard', 'buildOptimizedDashboard')
+    .addSeparator()
+    .addItem('🔑 Sla Todoist Token Op (1x uitvoeren)', 'setTodoistToken')
+    .addItem('🔎 Diagnose Todoist Verbinding', 'debugTodoistSync')
     .addToUi();
 }
 
@@ -156,10 +270,18 @@ function syncCalendarToSheet() {
     const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_ID);
     if (!calendar) throw new Error("Agenda niet gevonden! Check CALENDAR_ID.");
 
-    const startScanDate = new Date();
-    const endScanDate = new Date(startScanDate);
+    // Scan window: SYNC_DAYS_BACK dagen terug t/m SYNC_DAYS_FORWARD dagen vooruit.
+    // Zo worden diensten die al plaatsvonden (maar nog niet in de sheet staan)
+    // alsnog opgehaald en als 'Gedraaid' geregistreerd.
+    // Todoist-taken worden alleen aangemaakt voor toekomstige diensten (guard op regel ~230).
+    const now = new Date();
+    const startScanDate = new Date(now);
+    startScanDate.setDate(startScanDate.getDate() - CONFIG.SYNC_DAYS_BACK);
+    startScanDate.setHours(0, 0, 0, 0); // altijd vanaf dag-begin
+    const endScanDate = new Date(now);
     endScanDate.setDate(endScanDate.getDate() + CONFIG.SYNC_DAYS_FORWARD);
     
+    Logger.log(`📅 Scan window: ${startScanDate.toDateString()} → ${endScanDate.toDateString()}`);
     const events = calendar.getEvents(startScanDate, endScanDate);
     Logger.log(`ℹ️ ${events.length} agenda events.`);
 
@@ -195,27 +317,67 @@ function syncCalendarToSheet() {
       const todoistId = mappedData ? mappedData.id : null;
       const existingHash = mappedData ? mappedData.hash : null;
 
-      if (new Date(event.getEndTime()) > new Date()) { 
+      // Bestaande sheet-rij voor dit event — nodig voor Archief ID dedup
+      const existingRow = existingSheetMap.get(eventId);
+      const archiefIdx = headerRow.indexOf('Archief ID');
+      const existingArchiefId = (existingRow && archiefIdx !== -1) ? existingRow[archiefIdx] : '';
+
+      if (new Date(event.getEndTime()) > new Date()) {
+        // ── TOEKOMSTIGE DIENST: Todoist aanmaken of bijwerken ──────────────────
         let result;
         if (todoistId) {
-          // ✅ Directe check op hash zonder extra API call
           if (existingHash === currentHash) {
             stats.unchanged++;
             newRow[todoistIdIdx] = todoistId;
           } else {
             result = _syncToTodoist(event, todoistId, currentHash);
-            if (result) {
-              newRow[todoistIdIdx] = result;
-              stats.updated++;
-            }
+            if (result) { newRow[todoistIdIdx] = result; stats.updated++; }
           }
         } else {
           Logger.log(`➕ Nieuwe taak: ${event.getTitle()}`);
           result = _syncToTodoist(event, null, currentHash);
-          if (result) {
-            newRow[todoistIdIdx] = result;
-            stats.added++;
-            Logger.log(`   → ID: ${result}`);
+          if (result) { newRow[todoistIdIdx] = result; stats.added++; }
+        }
+        // Bewaar bestaand Archief ID (dienst nog niet gedraaid)
+        if (archiefIdx !== -1 && existingArchiefId) newRow[archiefIdx] = existingArchiefId;
+
+      } else {
+        // ── GEDRAAIDE DIENST: Todoist sluiten + Google Calendar archiveren ────
+        
+        // 1. Todoist taak SLUITEN (niet verwijderen — blijft zichtbaar in geschiedenis)
+        //    Taak staat alleen in todoistMap als hij nog actief/open is.
+        if (todoistId) {
+          _closeTodoistTask(todoistId);
+          Logger.log(`✅ Todoist taak gesloten (Gedraaid): ${event.getTitle()} → ID ${todoistId}`);
+          // Todoist ID wissen: gesloten taken zijn niet meer actief opvraagbaar
+          newRow[todoistIdIdx] = '';
+        } else {
+          // Fallback: check sheet voor eventueel nog open ID (bv. van vóór de close-logica)
+          if (existingRow) {
+            const sheetTodoistId = existingRow[todoistIdIdx];
+            if (_isValidTodoistId(sheetTodoistId)) {
+              _closeTodoistTask(sheetTodoistId);
+              Logger.log(`✅ Todoist taak gesloten (sheet fallback): ${event.getTitle()}`);
+              newRow[todoistIdIdx] = '';
+            } else if (existingRow) {
+              newRow[todoistIdIdx] = existingRow[todoistIdIdx] || '';
+            }
+          }
+        }
+
+        // 2. Google Calendar Archief: schrijf éénmalig naar native kalender
+        //    Dedup: als Archief ID al bestaat → nooit opnieuw aanmaken
+        if (archiefIdx !== -1) {
+          if (existingArchiefId) {
+            // Al gearchiveerd — bewaar ID
+            newRow[archiefIdx] = existingArchiefId;
+          } else {
+            // Nog niet gearchiveerd → nu wegschrijven
+            const archiefId = _archiveShiftToCalendar(event);
+            if (archiefId) {
+              newRow[archiefIdx] = archiefId;
+              Logger.log(`📅 Dienst gearchiveerd in '${CONFIG.ARCHIVE_CALENDAR_NAME}': ${event.getTitle()} → ${archiefId}`);
+            }
           }
         }
       }
@@ -246,9 +408,9 @@ function syncCalendarToSheet() {
         Logger.log(`👻 Ghost gevonden: EID=${id}, datum=${row[dateIdx]}`);
 
         const mapped = todoistMap.get(id);
-        const tId = mapped ? mapped.id : row[todoistIdIdx];
-        // BUG FIX 3: _deleteTodoistTask i.p.v. _closeTodoistTask —
-        //            gecancelde dienst als 'gedaan' markeren is misleidend.
+        // Gebruik altijd het Todoist ID uit de live API-map (betrouwbaar).
+        // Val ALLEEN terug op sheet-waarde als dat een echt Todoist ID is.
+        const tId = mapped ? mapped.id : (_isValidTodoistId(row[todoistIdIdx]) ? row[todoistIdIdx] : null);
         if (tId) _deleteTodoistTask(tId);
         processedRows.push(row);
       } else if (!isAlreadyDeleted) {
@@ -373,10 +535,12 @@ function _syncToTodoist(event, existingTaskId, currentHash) {
   let durationMin = Math.floor((end - start) / (1000 * 60)) || 15;
   const description = `Locatie: ${event.getLocation() || 'Onbekend'}\nDuur: ${Math.round(durationMin / 60 * 10)/10} uur\nHash: ${currentHash}\n\n[EID:${event.getId()}]`;
 
+  // BUG FIX: Todoist REST API v1 gebruikt 'labels' (array van naam-strings),
+  // NIET 'label_ids'. label_ids is de oude v8/v9 API en wordt stil genegeerd.
   const payload = {
     content: title,
     description: description,
-    label_ids: LABEL_ID_ROOSTER ? [LABEL_ID_ROOSTER] : []
+    labels: [CONFIG.TODOIST_LABEL]  // Altijd 'Rooster' label meegeven op naam
   };
 
   if (CONFIG.TODOIST_PROJECT_ID) payload.project_id = CONFIG.TODOIST_PROJECT_ID;
@@ -409,14 +573,23 @@ function _syncToTodoist(event, existingTaskId, currentHash) {
       muteHttpExceptions: true
     });
 
-    if (res.getResponseCode() >= 400) {
-      Logger.log(`Sync error ${res.getResponseCode()}: ${res.getContentText()}`);
+    const httpCode = res.getResponseCode();
+    const body = res.getContentText();
+
+    if (httpCode >= 400) {
+      // Log de volledige response zodat we exact weten wat er misging
+      Logger.log(`❌ Todoist API fout HTTP ${httpCode} voor "${event.getTitle()}"`);
+      Logger.log(`   URL: ${url}`);
+      Logger.log(`   Response: ${body}`);
+      Logger.log(`   Payload: ${JSON.stringify(payload)}`);
       return null;
     }
 
-    return JSON.parse(res.getContentText()).id;
+    const created = JSON.parse(body);
+    Logger.log(`✅ Todoist taak ${existingTaskId ? 'bijgewerkt' : 'aangemaakt'}: "${created.content}" (ID: ${created.id})`);
+    return created.id;
   } catch (e) {
-    Logger.log(`_syncToTodoist fout: ${e.message}`);
+    Logger.log(`❌ _syncToTodoist netwerk fout voor "${event.getTitle()}": ${e.message}`);
     return null;
   }
 }
@@ -432,11 +605,65 @@ function _deleteTodoistTask(taskId) {
 
 function _closeTodoistTask(taskId) {
   try {
-    UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + `tasks/${taskId}/close`, {
+    const res = UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + `tasks/${taskId}/close`, {
       method: "post",
-      headers: { "Authorization": "Bearer " + CONFIG.TODOIST_API_TOKEN }
+      headers: { "Authorization": "Bearer " + CONFIG.TODOIST_API_TOKEN },
+      muteHttpExceptions: true
     });
-  } catch (e) {}
+    if (res.getResponseCode() !== 204) {
+      Logger.log(`⚠️ Close task ${taskId} HTTP ${res.getResponseCode()}: ${res.getContentText()}`);
+    }
+  } catch (e) {
+    Logger.log(`❌ _closeTodoistTask fout: ${e.message}`);
+  }
+}
+
+// ============================================================================
+// 📅 GOOGLE CALENDAR ARCHIEF HELPERS
+// ============================================================================
+
+/**
+ * Haal de native archief-kalender op, of maak hem aan als hij niet bestaat.
+ * De naam is instelbaar via CONFIG.ARCHIVE_CALENDAR_NAME.
+ */
+function _getOrCreateArchiveCalendar() {
+  const name = CONFIG.ARCHIVE_CALENDAR_NAME;
+  const existing = CalendarApp.getCalendarsByName(name);
+  if (existing.length > 0) return existing[0];
+
+  // Kalender bestaat nog niet — aanmaken
+  Logger.log(`📅 Archief-kalender '${name}' niet gevonden — aanmaken...`);
+  const cal = CalendarApp.createCalendar(name, {
+    color: CalendarApp.Color.TEAL,
+    summary: 'Permanente geschiedenis van gedraaide diensten (bijgehouden door het GAS sync-script).'
+  });
+  Logger.log(`✅ Archief-kalender aangemaakt: ${cal.getId()}`);
+  return cal;
+}
+
+/**
+ * Schrijft een gedraaide dienst als permanent event naar de archief-kalender.
+ * @returns {string|null} Calendar event ID (als dedup-sleutel in de sheet)
+ */
+function _archiveShiftToCalendar(event) {
+  try {
+    const cal = _getOrCreateArchiveCalendar();
+    const title = `✅ ${event.getTitle()}`;
+    const desc  = `Gedraaid op ${_formatDate(new Date())}\n` +
+                  `Origineel agenda-event: ${event.getId()}\n\n` +
+                  (event.getDescription() || '');
+
+    let archived;
+    if (event.isAllDayEvent()) {
+      archived = cal.createAllDayEvent(title, event.getStartTime(), { description: desc, location: event.getLocation() || '' });
+    } else {
+      archived = cal.createEvent(title, event.getStartTime(), event.getEndTime(), { description: desc, location: event.getLocation() || '' });
+    }
+    return archived.getId();
+  } catch (e) {
+    Logger.log(`❌ _archiveShiftToCalendar fout voor "${event.getTitle()}": ${e.message}`);
+    return null;
+  }
 }
 
 function cleanupTodoistDuplicates() {
@@ -577,13 +804,15 @@ function _processTaskForDB(task, pMap, status) {
 // ============================================================================
 
 function _setupSheetHeaders(sheet) {
-  const headers = ['Event ID', 'Titel', 'Start Datum', 'Start Tijd', 'Eind Datum', 'Eind Tijd', 'Werktijd', 'Locatie', 'Team Prefix', 'Shift Type', 'Prioriteit', 'Duur (uur)', 'Weeknr', 'Dag', 'Status', 'Beschrijving', 'Hele Dag', 'Hash', 'Todoist ID', 'Laatst Bijgewerkt'];
+  const headers = ['Event ID', 'Titel', 'Start Datum', 'Start Tijd', 'Eind Datum', 'Eind Tijd', 'Werktijd', 'Locatie', 'Team Prefix', 'Shift Type', 'Prioriteit', 'Duur (uur)', 'Weeknr', 'Dag', 'Status', 'Beschrijving', 'Hele Dag', 'Hash', 'Todoist ID', 'Archief ID', 'Laatst Bijgewerkt'];
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sheet.setFrozenRows(1);
   } else {
     const current = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    if (current.indexOf('Todoist ID') === -1) {
+    // Update header als verplichte kolommen ontbreken
+    const needsUpdate = !current.includes('Todoist ID') || !current.includes('Archief ID');
+    if (needsUpdate) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     }
   }
@@ -633,15 +862,19 @@ function _computeRowData(event, hash, headers) {
     'Shift Type': type,
     'Prioriteit': prio,
     'Duur (uur)': Math.round(((end - start) / 36e5) * 100) / 100,
-    'Weeknr': `${Utilities.formatDate(start, tz, "yyyy")}-${Utilities.formatDate(start, tz, "w")}`,
+    // ISO 8601 week notatie (YYYY-WNN) — zero-padded zodat Sheets dit NOOIT als
+    // datum interpreteert. Zonder W-prefix zet Sheets '2026-12' om naar 1 dec 2026.
+    'Weeknr': `${Utilities.formatDate(start, tz, "YYYY")}-W${Utilities.formatDate(start, tz, "ww")}`,
     'Dag': ["Zondag","Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag"][start.getDay()],
     'Status': status,
     'Beschrijving': event.getDescription() || "",
     'Hele Dag': isAllDay ? "Ja" : "Nee",
     'Hash': hash,
+    'Archief ID': '',        // Wordt gevuld door de sync loop na archivering
+    'Todoist ID': '',        // Wordt gevuld door de sync loop
     'Laatst Bijgewerkt': Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss")
   };
-  return headers.map(h => map[h] || "");
+  return headers.map(h => map[h] !== undefined ? map[h] : '');
 }
 
 function _setupConditionalFormatting(sheet, headers) {
@@ -668,6 +901,64 @@ function _formatDate(d) {
   return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
 }
 
+/**
+ * Controleert of een waarde eruitziet als een echt Todoist ID.
+ * Filtert epoch-datums (1970-01-01...), Sheets-datums (2025-11-27...) en lege strings eruit.
+ * Echte Todoist IDs zijn alfanumerieke strings zoals '6g965HhrMRVFFCmg'.
+ */
+function _isValidTodoistId(val) {
+  if (!val && val !== 0) return false;
+  // Sheets levert datumcellen terug als Date objecten (NIET als strings).
+  // String(new Date('1970-01-01')) = "Thu Jan 01 1970 01:00:00 GMT+0100..." → regex match nooit.
+  if (val instanceof Date) return false;
+  const s = String(val).trim();
+  if (s === '') return false;
+  // Patroon: datum- of timestamp-achtige strings → ongeldig (voor string-representaties)
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return false; // '2025-11-27 22:40:27' of '1970-01-01'
+  if (/^\d{1,2}-\d{1,2}-\d{4}/.test(s)) return false; // '27-11-2025' (NL formaat)
+  return true;
+}
+
+/**
+ * Ruimt legacy garbage-waarden op in de Todoist ID kolom.
+ * Doet: epoch-datums, timestamps en NL-datums → lege string.
+ * Veilig: alleen cellen die geen geldig Todoist ID bevatten worden gereset.
+ * Run via 🚀 Master Tools → 🧽 Opschoon Legacy Todoist IDs
+ */
+function cleanupLegacyTodoistIds() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME_ROSTER);
+  if (!sheet || sheet.getLastRow() < 2) {
+    safeToast('Cleanup', 'Geen data gevonden.', 5);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const tidIdx = headers.indexOf('Todoist ID');
+  if (tidIdx === -1) { safeToast('Cleanup', 'Todoist ID kolom niet gevonden.', 5); return; }
+
+  const dataRange = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length);
+  const data = dataRange.getValues();
+
+  let fixed = 0;
+  data.forEach((row, i) => {
+    const val = row[tidIdx];
+    if (!_isValidTodoistId(val) && val !== '') {
+      Logger.log(`🧹 Rij ${i+2}: Todoist ID '${val}' → leeg`);
+      row[tidIdx] = '';
+      fixed++;
+    }
+  });
+
+  if (fixed > 0) {
+    dataRange.setValues(data);
+    Logger.log(`✅ ${fixed} legacy Todoist IDs opgeschoond.`);
+    safeToast('Opschoning', `✅ ${fixed} ongeldige Todoist IDs verwijderd.`, 8);
+  } else {
+    safeToast('Opschoning', 'Geen garbage IDs gevonden — sheet is al schoon ✅', 8);
+  }
+}
+
 function _getColLetter(c) {
   let l = '';
   while (c > 0) {
@@ -679,34 +970,32 @@ function _getColLetter(c) {
 }
 
 /**
- * Eenmalige opschoning: verwijder alle Todoist taken waarvan de dienst
- * al voorbij is (due_date of due_datetime in het verleden).
+ * Eenmalige opschoning: SLUIT alle Todoist taken waarvan de dienst al voorbij is.
+ * Taken worden GESLOTEN (niet verwijderd) zodat ze zichtbaar blijven in geschiedenis.
  * Wordt getriggerd via 🚀 Master Tools → Eenmalige Opschoning.
  */
 function purgeLegacyTasks() {
   let ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch (e) {}
 
-  Logger.log('🧹 Start purgeLegacyTasks...');
+  Logger.log('🧹 Start purgeLegacyTasks (CLOSE modus)...');
 
   try {
     const tasks = fetchPaginated('tasks');
     const now = new Date();
-    now.setHours(0, 0, 0, 0); // vergelijk op dagbasis
+    now.setHours(0, 0, 0, 0);
 
-    // Filter: alleen rooster-taken (hebben [EID:...] in description)
     const roosterTasks = tasks.filter(t =>
       t.description && t.description.includes('[EID:')
     );
 
-    // Bepaal welke taken verlopen zijn (due date in het verleden)
     const expired = roosterTasks.filter(t => {
-      if (!t.due) return false; // geen due date → sla over
+      if (!t.due) return false;
       const dueStr = t.due.datetime || t.due.date;
       if (!dueStr) return false;
       const due = new Date(dueStr);
       due.setHours(0, 0, 0, 0);
-      return due < now; // in het verleden
+      return due < now;
     });
 
     Logger.log(`Gevonden: ${roosterTasks.length} rooster-taken, ${expired.length} verlopen.`);
@@ -717,46 +1006,41 @@ function purgeLegacyTasks() {
       return;
     }
 
-    // Bevestiging vragen
     if (ui) {
       const resp = ui.alert(
         '🧹 Todoist Opschoning',
-        `${expired.length} verlopen dienst-taken gevonden (due date in het verleden).\n\nDeze worden permanent verwijderd uit Todoist.\n\nDoorgaan?`,
+        `${expired.length} verlopen dienst-taken gevonden.\n\nDeze worden als VOLTOOID gemarkeerd (niet verwijderd) — ze blijven zichtbaar in je geschiedenis.\n\nDoorgaan?`,
         ui.ButtonSet.YES_NO
       );
-      if (resp !== ui.Button.YES) {
-        Logger.log('Opschoning geannuleerd door gebruiker.');
-        return;
-      }
+      if (resp !== ui.Button.YES) { Logger.log('Opschoning geannuleerd.'); return; }
     }
 
-    // Verwijder verlopen taken
-    let deleted = 0;
-    let failed = 0;
+    let closed = 0, failed = 0;
 
     expired.forEach(task => {
       try {
-        const res = UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + `tasks/${task.id}`, {
-          method: 'delete',
+        const res = UrlFetchApp.fetch(CONFIG.TODOIST_API_BASE + `tasks/${task.id}/close`, {
+          method: 'post',
           headers: { 'Authorization': 'Bearer ' + CONFIG.TODOIST_API_TOKEN },
           muteHttpExceptions: true
         });
-        if (res.getResponseCode() === 204 || res.getResponseCode() === 200) {
-          deleted++;
-          Logger.log(`🗑️ Verwijderd: "${task.content}" (ID: ${task.id})`);
+        if (res.getResponseCode() === 204) {
+          closed++;
+          Logger.log(`✅ Gesloten: "${task.content}" (ID: ${task.id})`);
         } else {
           failed++;
-          Logger.log(`❌ Fout bij verwijderen ${task.id}: HTTP ${res.getResponseCode()}`);
+          Logger.log(`❌ Fout bij sluiten ${task.id}: HTTP ${res.getResponseCode()}`);
         }
-        Utilities.sleep(100); // voorkom rate limiting
+        Utilities.sleep(100);
       } catch (e) {
         failed++;
         Logger.log(`Fout: ${e.message}`);
       }
     });
 
-    const msg = `Opschoning klaar! ${deleted} taken verwijderd${failed > 0 ? `, ${failed} mislukt` : ''}.`;
+    const msg = `Opschoning klaar! ${closed} taken voltooid${failed > 0 ? `, ${failed} mislukt` : ''}.`;
     Logger.log(msg);
+
     safeToast('Opschoning Voltooid', msg, 10);
     if (ui) ui.alert(msg);
 
