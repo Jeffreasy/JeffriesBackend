@@ -15,8 +15,12 @@ class DeviceRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_all(self, skip: int = 0, limit: int = 100) -> list[Device]:
-        result = await self.db.execute(select(Device).offset(skip).limit(limit))
+    async def get_all(self, skip: int = 0, limit: int | None = None) -> list[Device]:
+        """Return all devices. Pass limit= to cap results (e.g. for paginated API endpoints)."""
+        q = select(Device).offset(skip)
+        if limit is not None:
+            q = q.limit(limit)
+        result = await self.db.execute(q)
         return list(result.scalars().all())
 
     async def get_by_id(self, device_id: uuid.UUID) -> Device | None:

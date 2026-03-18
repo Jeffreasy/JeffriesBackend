@@ -17,13 +17,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
+import zoneinfo
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from app.services.wiz.service import WizService
 
 logger = logging.getLogger(__name__)
+
+# Timezone voor automation tijdvergelijking — altijd Amsterdam, ongeacht Docker TZ env
+_AMS = zoneinfo.ZoneInfo("Europe/Amsterdam")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Scene definitions — mirrors lib/automations.ts SCENE_DEFINITIONS.
@@ -104,7 +108,7 @@ class AutomationEngine:
             await asyncio.sleep(ENGINE_INTERVAL)
 
     async def _tick(self):
-        now = datetime.now()
+        now = datetime.now(_AMS)  # altijd Amsterdam tijd, ongeacht TZ env var
         today = now.strftime("%Y-%m-%d")
 
         async with httpx.AsyncClient(timeout=10) as client:
@@ -150,6 +154,10 @@ class AutomationEngine:
                 self._fired_at[auto_id] = now
                 await self._mark_fired(client, headers, auto_id)
 
+        # Cleanup in-memory fired_at dict (verwijder entries ouder dan 1 uur)
+        cutoff = now - timedelta(hours=1)
+        self._fired_at = {k: v for k, v in self._fired_at.items() if v > cutoff}
+
         # Elke STATUS_POLL_EVERY ticks: ping lampen en update online/offline status
         self._tick_count += 1
         if self._tick_count % STATUS_POLL_EVERY == 0:
@@ -171,23 +179,39 @@ class AutomationEngine:
         if not time_str:
             return False
 
-        # Check tijdstip (±30 seconden nauwkeurig)
+        # Check tijdstip — 2-minuten venster om engine-vertraging op te vangen.
+        # MIN_FIRE_INTERVAL (55s) voorkomt dat dezelfde automation dubbel vist.
         try:
             t_h, t_m = map(int, time_str.split(":"))
         except ValueError:
             return False
 
-        within_window = (now.hour == t_h and now.minute == t_m)
+        now_total = now.hour * 60 + now.minute
+        target_total = t_h * 60 + t_m
+        within_window = abs(now_total - target_total) <= 1
         if not within_window:
             return False
 
+        # Controleer Convex lastFiredAt — voorkomt dubbel vuren na herstart
+        last_fired_at = auto.get("lastFiredAt")
+        if last_fired_at:
+            try:
+                last = datetime.fromisoformat(last_fired_at.replace("Z", "+00:00"))
+                # Converteer now naar UTC voor vergelijking
+                now_utc = now.astimezone(timezone.utc)
+                if (now_utc - last).total_seconds() < MIN_FIRE_INTERVAL:
+                    return False
+            except ValueError:
+                pass  # Ongeldige datum → negeer de check
+
         # Check dag van de week (0=maandag, 6=zondag)
-        # Zelfde als frontend: days ?? ALL_DAYS — lege array = nooit vuren
         current_weekday = now.weekday()  # Python: 0=maandag
-        if days is None or len(days) == 0:
-            # None → ALL_DAYS (altijd vuren), [] → zou nooit vuren (UI voorkomt dit)
-            # Wij volgen frontend: None=altijd, [] behandelen als altijd (veiligst)
+        if days is None:
+            # None → ALL_DAYS (altijd vuren)
             effective_days = list(range(7))
+        elif len(days) == 0:
+            # Expliciet lege array → nooit vuren
+            return False
         else:
             effective_days = days
         if current_weekday not in effective_days:
@@ -212,6 +236,7 @@ class AutomationEngine:
                 params={"userId": self.user_id},
                 headers=headers,
             )
+            resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
                 logger.warning("Automations API fout: %s", data)
@@ -230,6 +255,7 @@ class AutomationEngine:
                 params={"userId": self.user_id, "date": date},
                 headers=headers,
             )
+            resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
                 logger.warning("Schedule API fout: %s", data)
@@ -243,11 +269,12 @@ class AutomationEngine:
         self, client: httpx.AsyncClient, headers: dict, automation_id: str
     ):
         try:
-            await client.post(
+            resp = await client.post(
                 f"{self.convex_url}/mark-fired",
                 json={"automationId": automation_id},
                 headers=headers,
             )
+            resp.raise_for_status()
         except Exception as e:
             logger.warning("markFired mislukt voor %s: %s", automation_id, e)
 
