@@ -291,8 +291,10 @@ class AutomationEngine:
 
     # ── Device IPs ophalen ────────────────────────────────────────────────────
 
-    async def _get_device_map(self) -> dict[str, str]:
-        """Haal {device_id_str → ip_address} op voor alle geregistreerde WiZ apparaten."""
+    async def _get_device_map(self) -> dict[str, dict]:
+        """
+        Haal {device_id_str → {ip}} op voor alle geregistreerde WiZ lampen.
+        """
         try:
             from app.db.session import AsyncSessionLocal
             from app.db.repositories.device_repository import DeviceRepository
@@ -300,37 +302,50 @@ class AutomationEngine:
             async with AsyncSessionLocal() as session:
                 repo = DeviceRepository(session)
                 devices = await repo.get_all()
-                return {str(d.id): d.ip_address for d in devices if d.ip_address}
+                return {
+                    str(d.id): {
+                        "ip":          d.ip_address,
+                        "mac":         d.mac_address,
+                        "device_type": d.device_type,
+                    }
+                    for d in devices
+                    if d.ip_address  # skip devices zonder IP
+                }
 
         except Exception as e:
             logger.warning("Device map ophalen mislukt (DB): %s", e)
-            # Fallback: bekende IPs uit env — geen ID, gebruik IP als key
+            # Fallback: bekende IPs uit env — alleen lampen (geen airco-fallback)
             fallback = os.getenv("WIZ_DEVICE_IPS", "")
-            return {ip: ip for ip in fallback.split(",") if ip.strip()}
+            return {
+                ip: {"ip": ip, "mac": None, "device_type": "color_light"}
+                for ip in fallback.split(",") if ip.strip()
+            }
 
 
     # ── WiZ actie uitvoeren ────────────────────────────────────────────────────
 
-    async def _execute_action(self, auto: dict, device_map: dict[str, str]):
+    async def _execute_action(self, auto: dict, device_map: dict[str, dict]):
         action = auto.get("action", {})
         action_type = action.get("type", "on")
         device_ids = action.get("deviceIds")  # lijst van device UUID strings, of None
 
         if device_ids:
-            # Target specifieke devices — zelfde logica als frontend
-            ips = [device_map[did] for did in device_ids if did in device_map]
+            infos = [device_map[did] for did in device_ids if did in device_map]
         else:
-            # Geen specifieke targets → alle bekende apparaten
-            ips = list(device_map.values())
+            infos = list(device_map.values())
 
-        if not ips:
-            logger.warning("Geen IPs voor automation '%s' — skip", auto.get("name"))
+        if not infos:
+            logger.warning("Geen apparaten voor automation '%s' — skip", auto.get("name"))
             return
 
-        tasks = [self._apply_action(ip, action_type, action) for ip in ips]
+        tasks = [self._apply_action(info, action_type, action) for info in infos]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _apply_action(self, ip: str, action_type: str, action: dict):
+    async def _apply_action(self, device_info: dict, action_type: str, action: dict):
+        ip          = device_info["ip"]
+        mac         = device_info.get("mac")
+        device_type = device_info.get("device_type", "color_light")
+
         try:
             if action_type == "off":
                 await self.wiz.turn_off(ip)
@@ -366,7 +381,6 @@ class AutomationEngine:
 
         except Exception as e:
             logger.warning("WiZ actie %s op %s mislukt: %s", action_type, ip, e)
-
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:

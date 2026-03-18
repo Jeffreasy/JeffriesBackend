@@ -31,21 +31,43 @@ class DeviceRepository:
         result = await self.db.execute(select(Device).where(Device.ip_address == ip_address))
         return result.scalar_one_or_none()
 
+    async def get_by_mac(self, mac_address: str) -> Device | None:
+        result = await self.db.execute(select(Device).where(Device.mac_address == mac_address))
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         name: str,
         device_type: str,
         ip_address: str | None = None,
+        mac_address: str | None = None,
         matter_node_id: int = 0,
         matter_endpoint_id: int = 1,
         room_id: uuid.UUID | None = None,
         manufacturer: str | None = None,
         model: str | None = None,
     ) -> Device:
+        # Kies de juiste default state op basis van device type
+        if device_type == "airco":
+            default_state = {
+                "on":          False,
+                "temperature": 22.0,
+                "mode":        "cool",
+                "fan_speed":   "auto",
+            }
+        else:
+            default_state = {
+                "on": False,
+                "brightness": 100,
+                "color_temp": 4000,
+                "r": 0, "g": 0, "b": 0,
+            }
+
         device = Device(
             matter_node_id=matter_node_id,
             matter_endpoint_id=matter_endpoint_id,
             ip_address=ip_address,
+            mac_address=mac_address,
             name=name,
             device_type=device_type,
             room_id=room_id,
@@ -53,12 +75,7 @@ class DeviceRepository:
             model=model,
             status="online",
             last_seen=datetime.now(timezone.utc),
-            current_state={
-                "on": False,
-                "brightness": 100,
-                "color_temp": 4000,
-                "r": 0, "g": 0, "b": 0,
-            },
+            current_state=default_state,
         )
         self.db.add(device)
         await self.db.flush()

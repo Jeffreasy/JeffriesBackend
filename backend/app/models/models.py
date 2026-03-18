@@ -38,8 +38,10 @@ class Device(Base):
         UUID(as_uuid=True), ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True
     )
 
-    # Primary control address — WiZ local UDP
+    # Primary control address — WiZ local UDP / Broadlink TCP
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True, index=True)
+    # MAC address — vereist voor Broadlink auth handshake (airco modules)
+    mac_address: Mapped[str | None] = mapped_column(String(17), nullable=True)  # "aa:bb:cc:dd:ee:ff"
 
     # Matter identifiers — kept for future Matter device compatibility
     matter_node_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

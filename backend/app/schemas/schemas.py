@@ -44,6 +44,7 @@ class DeviceResponse(BaseModel):
     device_type: str
     room_id: uuid.UUID | None
     ip_address: str | None
+    mac_address: str | None = None
     current_state: dict[str, Any]
     status: str
     last_seen: datetime | None
@@ -120,3 +121,5 @@ class AutomationResponse(AutomationCreate):
     last_triggered: datetime | None
     created_at: datetime
     model_config = {"from_attributes": True}
+
+

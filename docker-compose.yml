@@ -95,6 +95,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - homeapp-net
 
