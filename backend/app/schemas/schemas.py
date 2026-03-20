@@ -39,19 +39,18 @@ class DeviceUpdate(BaseModel):
 
 class DeviceResponse(BaseModel):
     """Full device representation returned by the API."""
-    id: uuid.UUID
+    id: str                          # Convex _id string
     name: str
     device_type: str
-    room_id: uuid.UUID | None
+    room_id: str | None              # Convex string, not UUID
     ip_address: str | None
     mac_address: str | None = None
     current_state: dict[str, Any]
     status: str
-    last_seen: datetime | None
-    commissioned_at: datetime
+    last_seen: str | None            # ISO string from Convex
+    commissioned_at: str             # ISO string from Convex
     manufacturer: str | None = None
     model: str | None = None
-    model_config = {"from_attributes": True}
 
 class DeviceCommandRequest(BaseModel):
     """
@@ -71,8 +70,8 @@ class DeviceCommandRequest(BaseModel):
 class DeviceRegisterRequest(BaseModel):
     """Register a WiZ bulb by its LAN IP address — no Matter/BLE commissioning needed."""
     ip_address: str = Field(..., examples=["192.168.1.139"], description="LAN IP of the WiZ bulb")
-    name: str = Field(..., max_length=150, examples=["WiZ GU10 Training 3 - 1"])
-    room_id: uuid.UUID | None = None
+    name: str = Field(..., max_length=150, examples=["WiZ GU10 Woonkamer"])
+    room_id: str | None = None       # Optional Convex room ID
 
 
 # ─── Scene ────────────────────────────────────────────────────────────────────

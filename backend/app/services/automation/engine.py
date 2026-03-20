@@ -281,36 +281,38 @@ class AutomationEngine:
     # ── Device status poller ──────────────────────────────────────────────────
 
     async def _poll_device_status(self):
-        """Ping alle geregistreerde lampen en update online/offline status.
-        Wordt elke STATUS_POLL_EVERY ticks uitgevoerd (~5 minuten)."""
+        """Ping alle geregistreerde lampen en update online/offline in Convex."""
         logger.info("🔍 Device status poll gestart...")
         try:
-            from app.db.session import AsyncSessionLocal
-            from app.db.repositories.device_repository import DeviceRepository
+            headers = {
+                "Authorization": f"Bearer {self.secret}",
+                "Content-Type": "application/json",
+            }
+            device_map = await self._get_device_map()
+            if not device_map:
+                return
 
-            async with AsyncSessionLocal() as session:
-                repo = DeviceRepository(session)
-                devices = await repo.get_all()
-
-                for device in devices:
-                    if not device.ip_address:
+            async with httpx.AsyncClient(timeout=8) as client:
+                for device_id, info in device_map.items():
+                    ip = info.get("ip")
+                    if not ip:
                         continue
                     try:
-                        state = await self.wiz.get_state(device.ip_address)
+                        state = await self.wiz.get_state(ip)
                         new_status = "online" if state else "offline"
                     except Exception:
                         new_status = "offline"
 
-                    if device.status != new_status:
-                        await repo.set_status(device.id, new_status)
-                        logger.info(
-                            "Device '%s' status: %s → %s",
-                            device.name, device.status, new_status,
+                    try:
+                        await client.patch(
+                            f"{self.convex_url}/devices/{device_id}/status",
+                            headers=headers,
+                            json={"status": new_status},
                         )
+                    except Exception as e:
+                        logger.debug("Status update mislukt voor %s: %s", device_id, e)
 
-                await session.commit()
-                logger.info("✅ Device status poll klaar (%d apparaten)", len(devices))
-
+            logger.info("✅ Device status poll klaar (%d apparaten)", len(device_map))
         except Exception as e:
             logger.warning("Device status poll mislukt: %s", e)
 
@@ -320,31 +322,37 @@ class AutomationEngine:
 
     async def _get_device_map(self) -> dict[str, dict]:
         """
-        Haal {device_id_str → {ip}} op voor alle geregistreerde WiZ lampen.
+        Haal {device_id_str → {ip, device_type}} op uit Convex.
+        Fallback: WIZ_DEVICE_IPS env var als Convex niet bereikbaar is.
         """
         try:
-            from app.db.session import AsyncSessionLocal
-            from app.db.repositories.device_repository import DeviceRepository
-
-            async with AsyncSessionLocal() as session:
-                repo = DeviceRepository(session)
-                devices = await repo.get_all()
-                return {
-                    str(d.id): {
-                        "ip":          d.ip_address,
-                        "mac":         d.mac_address,
-                        "device_type": d.device_type,
-                    }
-                    for d in devices
-                    if d.ip_address  # skip devices zonder IP
+            headers = {
+                "Authorization": f"Bearer {self.secret}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    f"{self.convex_url}/devices",
+                    headers=headers,
+                    params={"userId": self.user_id},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            devices = data.get("devices", [])
+            return {
+                d["_id"]: {
+                    "ip":          d.get("ipAddress"),
+                    "device_type": d.get("deviceType", "color_light"),
                 }
-
+                for d in devices
+                if d.get("ipAddress")
+            }
         except Exception as e:
-            logger.warning("Device map ophalen mislukt (DB): %s", e)
-            # Fallback: bekende IPs uit env — alleen lampen (geen airco-fallback)
+            logger.warning("Device map ophalen mislukt (Convex): %s", e)
+            # Fallback: bekende IPs uit env
             fallback = os.getenv("WIZ_DEVICE_IPS", "")
             return {
-                ip: {"ip": ip, "mac": None, "device_type": "color_light"}
+                ip: {"ip": ip, "device_type": "color_light"}
                 for ip in fallback.split(",") if ip.strip()
             }
 

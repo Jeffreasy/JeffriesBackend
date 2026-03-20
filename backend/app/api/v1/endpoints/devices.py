@@ -1,195 +1,198 @@
 """
 Devices endpoint — WiZ Local UDP for direct lamp control.
-Devices are registered by LAN IP address, no Matter/BLE commissioning needed.
+Device metadata is stored in Convex (cloud-persistent).
+Only UDP commands and registration verification happen here (require LAN access).
 """
 import colorsys
-import uuid
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, status
+import httpx
 
-from app.db.session import get_db
-from app.db.repositories.device_repository import DeviceRepository
-from app.schemas.schemas import DeviceUpdate, DeviceResponse, DeviceCommandRequest, DeviceRegisterRequest
+from app.core.config import settings
+from app.schemas.schemas import DeviceCommandRequest, DeviceRegisterRequest
 from app.services.wiz.service import WizService
-from app.api.security import require_api_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
 wiz = WizService()
 
 
-# ─── CRUD ─────────────────────────────────────────────────────────────────────
+# ─── Convex helpers ───────────────────────────────────────────────────────────
 
-@router.get("", response_model=list[DeviceResponse])
-async def list_devices(
-    skip: int = 0,
-    limit: int = 100,
-    db: AsyncSession = Depends(get_db),
-):
-    """Return registered devices. Use skip/limit for pagination."""
-    return await DeviceRepository(db).get_all(skip=skip, limit=limit)
+def _convex_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {settings.HOMEAPP_GAS_SECRET}",
+        "Content-Type": "application/json",
+    }
 
 
-@router.get("/discover", response_model=list[dict])
-async def discover_devices():
-    """
-    Broadcast a UDP ping on the LAN to find WiZ bulbs.
-
-    Note: requires the API to run on a host with direct Wi-Fi LAN access.
-    Inside Docker on Windows this may not return results — run the scan
-    from the Windows host instead (see README).
-    """
-    return await wiz.discover(timeout=3.0)
+def _convex_url(path: str) -> str:
+    return f"{settings.CONVEX_SITE_URL}{path}"
 
 
-@router.get("/{device_id}", response_model=DeviceResponse)
-async def get_device(device_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    repo = DeviceRepository(db)
-    device = await repo.get_by_id(device_id)
-    if not device:
+def _map_device(doc: dict) -> dict:
+    """Map a Convex device doc to the DeviceResponse shape."""
+    state = doc.get("currentState", {})
+    return {
+        "id":             doc["_id"],
+        "name":           doc.get("name", ""),
+        "device_type":    doc.get("deviceType", "color_light"),
+        "room_id":        doc.get("roomId"),
+        "ip_address":     doc.get("ipAddress"),
+        "mac_address":    None,
+        "current_state":  {
+            "on":          state.get("on", False),
+            "brightness":  state.get("brightness", 100),
+            "color_temp":  state.get("color_temp", 4000),
+            "r":           state.get("r", 0),
+            "g":           state.get("g", 0),
+            "b":           state.get("b", 0),
+        },
+        "status":         doc.get("status", "offline"),
+        "last_seen":      doc.get("lastSeen"),
+        "commissioned_at": doc.get("commissionedAt", ""),
+        "manufacturer":   doc.get("manufacturer"),
+        "model":          doc.get("model"),
+    }
+
+
+# ─── CRUD (proxied to Convex) ─────────────────────────────────────────────────
+
+@router.get("")
+async def list_devices(skip: int = 0, limit: int = 100):
+    """Return registered devices from Convex."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            _convex_url("/devices"),
+            headers=_convex_headers(),
+            params={"userId": settings.HOMEAPP_USER_ID},
+        )
+        r.raise_for_status()
+    docs = r.json().get("devices", [])
+    devices = [_map_device(d) for d in docs]
+    return devices[skip: skip + limit] if limit else devices[skip:]
+
+
+@router.get("/{device_id}")
+async def get_device(device_id: str):
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            _convex_url(f"/devices/{device_id}"),
+            headers=_convex_headers(),
+        )
+    if r.status_code == 404:
         raise HTTPException(status_code=404, detail="Device not found")
-    return device
+    r.raise_for_status()
+    return _map_device(r.json()["device"])
 
 
-@router.patch("/{device_id}", response_model=DeviceResponse, dependencies=[Depends(require_api_key)])
-async def update_device(device_id: uuid.UUID, data: DeviceUpdate, db: AsyncSession = Depends(get_db)):
-    repo = DeviceRepository(db)
-    device = await repo.get_by_id(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    update_data = data.model_dump(exclude_none=True)
-
-    # ── IP-adres wijziging: verifieer bereikbaarheid first ────────────────────
-    if "ip_address" in update_data and update_data["ip_address"] != device.ip_address:
-        new_ip = update_data["ip_address"]
-
-        # Check duplicate
-        existing = await repo.get_by_ip(new_ip)
-        if existing and existing.id != device_id:
-            raise HTTPException(
-                status_code=409,
-                detail=f"IP {new_ip} is al in gebruik door '{existing.name}'",
-            )
-
-        # Ping-verificatie
+@router.patch("/{device_id}")
+async def update_device(device_id: str, data: dict):
+    payload = {}
+    if "name" in data:       payload["name"]      = data["name"]
+    if "room_id" in data:    payload["roomId"]    = data["room_id"]
+    if "ip_address" in data:
+        new_ip = data["ip_address"]
+        # Verify new IP is reachable
         state = await wiz.get_state(new_ip)
         if state is None:
-            raise HTTPException(
-                status_code=502,
-                detail=f"WiZ lamp op {new_ip} niet bereikbaar. Controleer het IP-adres.",
-            )
+            raise HTTPException(status_code=502, detail=f"WiZ lamp op {new_ip} niet bereikbaar.")
+        payload["ipAddress"] = new_ip
 
-        # Sync live state
-        update_data["status"] = "online"
-        logger.info(f"IP bijgewerkt: '{device.name}' {device.ip_address} → {new_ip}")
-
-    result = await repo.update(device_id, **update_data)
-    if not result:
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.patch(
+            _convex_url(f"/devices/{device_id}"),
+            headers=_convex_headers(),
+            json=payload,
+        )
+    if r.status_code == 404:
         raise HTTPException(status_code=404, detail="Device not found")
-    return result
+    r.raise_for_status()
+    return _map_device(r.json()["device"])
 
 
-
-@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT,
-               dependencies=[Depends(require_api_key)])
-async def delete_device(device_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    repo = DeviceRepository(db)
-    if not await repo.delete(device_id):
+@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_device(device_id: str):
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.delete(
+            _convex_url(f"/devices/{device_id}"),
+            headers=_convex_headers(),
+        )
+    if r.status_code == 404:
         raise HTTPException(status_code=404, detail="Device not found")
+    r.raise_for_status()
 
 
 # ─── Registration ─────────────────────────────────────────────────────────────
 
-@router.post("/register", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_api_key)])
-async def register_device(data: DeviceRegisterRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register_device(data: DeviceRegisterRequest):
     """
-    Add a WiZ bulb to the system by its LAN IP address.
-
-    The endpoint pings the bulb via UDP to verify it's reachable and syncs
-    its current state (on/off, brightness, color temp) before saving to DB.
-
-    **Finding the IP:**
-    - Run `GET /api/v1/devices/discover` (requires host network access)
-    - Or check your router's DHCP table for 'Espressif' / 'WiZ' devices
+    Register a WiZ bulb: verifies reachability via UDP, then stores in Convex.
     """
     state = await wiz.get_state(data.ip_address)
     if state is None:
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"Cannot reach WiZ bulb at {data.ip_address}:38899. "
-                "Check: (1) IP is correct, (2) bulb is powered on, "
-                "(3) host and bulb are on the same Wi-Fi network."
-            ),
+            detail=f"Cannot reach WiZ bulb at {data.ip_address}:38899.",
         )
 
-    repo = DeviceRepository(db)
+    payload = {
+        "userId":       settings.HOMEAPP_USER_ID,
+        "name":         data.name,
+        "ipAddress":    data.ip_address,
+        "deviceType":   "color_light",
+        "roomId":       str(data.room_id) if data.room_id else None,
+        "manufacturer": "WiZ",
+        "model":        "GU10 Color",
+        "currentState": {
+            "on":         state.on,
+            "brightness": state.brightness,
+            "color_temp": state.color_temp,
+            "r":          state.r,
+            "g":          state.g,
+            "b":          state.b,
+        },
+    }
 
-    existing = await repo.get_by_ip(data.ip_address)
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Device with IP {data.ip_address} already exists (id={existing.id})",
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(
+            _convex_url("/devices/create"),
+            headers=_convex_headers(),
+            json=payload,
         )
 
-    device = await repo.create(
-        ip_address=data.ip_address,
-        name=data.name,
-        device_type="color_light",
-        room_id=data.room_id,
-        manufacturer="WiZ",
-        model="GU10 Color",
-    )
+    if r.status_code == 409:
+        raise HTTPException(status_code=409, detail=r.json().get("error", "Al geregistreerd"))
+    r.raise_for_status()
 
-    await repo.update_state(device.id, {
-        "on": state.on,
-        "brightness": state.brightness,
-        "color_temp": state.color_temp,
-        "r": state.r,
-        "g": state.g,
-        "b": state.b,
-    })
-    logger.info(f"Registered WiZ bulb '{data.name}' at {data.ip_address}")
-    return await repo.get_by_id(device.id)
+    logger.info(f"Registered WiZ bulb '{data.name}' at {data.ip_address} in Convex")
+    return _map_device(r.json()["device"])
 
 
 # ─── Device Control ───────────────────────────────────────────────────────────
 
 @router.post("/{device_id}/command", status_code=status.HTTP_204_NO_CONTENT)
-async def send_command(
-    device_id: uuid.UUID,
-    cmd: DeviceCommandRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def send_command(device_id: str, cmd: DeviceCommandRequest):
     """
     Send a control command to a WiZ bulb via local UDP.
-    All fields are optional — include only what you want to change.
-
-    | Field | Range | Notes |
-    |---|---|---|
-    | `on` | bool | Turn on/off |
-    | `brightness` | 10–100 | Percent |
-    | `color_temp_mireds` | 153–500 | Auto-converted to Kelvin |
-    | `r` / `g` / `b` | 0–255 | Direct RGB |
-    | `hue` / `saturation` | 0–254 | Converted to RGB internally |
+    Device IP is looked up from Convex. State is stored back in Convex after command.
     """
-    repo = DeviceRepository(db)
-    device = await repo.get_by_id(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    # Use the dedicated ip_address column — not current_state JSONB
-    ip = device.ip_address
-    if not ip:
-        raise HTTPException(
-            status_code=422,
-            detail="Device has no IP address. Re-register with POST /api/v1/devices/register.",
+    # 1. Get device IP from Convex
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            _convex_url(f"/devices/{device_id}"),
+            headers=_convex_headers(),
         )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Device not found")
+    r.raise_for_status()
+    doc = r.json()["device"]
+    ip = doc.get("ipAddress")
+    if not ip:
+        raise HTTPException(status_code=422, detail="Device heeft geen IP-adres.")
 
+    # 2. Build UDP kwargs + state patch
     kwargs: dict = {}
     state_patch: dict = {}
 
@@ -218,9 +221,9 @@ async def send_command(
         kwargs["b"] = cmd.b or 0
         state_patch.update({"r": kwargs["r"], "g": kwargs["g"], "b": kwargs["b"]})
 
+    # 3. Execute UDP command
     try:
         if cmd.scene_id is not None:
-            # WiZ native scene: bypasses set_state kwargs, uses setPilot{sceneId}
             await wiz.set_scene(ip, cmd.scene_id)
             state_patch["on"] = True
         elif kwargs:
@@ -229,5 +232,14 @@ async def send_command(
         logger.error(f"WiZ command failed for device {device_id} ({ip}): {e}")
         raise HTTPException(status_code=502, detail=f"WiZ command failed: {e}")
 
+    # 4. Update state in Convex
     if state_patch:
-        await repo.update_state(device_id, state_patch)
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.patch(
+                    _convex_url(f"/devices/{device_id}/state"),
+                    headers=_convex_headers(),
+                    json=state_patch,
+                )
+        except Exception as e:
+            logger.warning(f"Convex state update failed for {device_id}: {e}")
