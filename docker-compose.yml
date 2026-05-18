@@ -21,7 +21,7 @@ x-logging: &default-logging
 services:
   # ─── Matter Controller ────────────────────────────────────────
   matter-server:
-    <<: *default-logging
+    logging: *default-logging
     image: ghcr.io/home-assistant-libs/python-matter-server:stable
     container_name: homeapp-matter-server
     restart: unless-stopped
@@ -42,7 +42,7 @@ services:
 
   # ─── PostgreSQL Database ──────────────────────────────────────
   postgres:
-    <<: *default-logging
+    logging: *default-logging
     image: postgres:16-alpine
     container_name: homeapp-postgres
     restart: unless-stopped
@@ -65,7 +65,7 @@ services:
 
   # ─── Go API Backend ────────────────────────────────────────────
   api:
-    <<: *default-logging
+    logging: *default-logging
     build:
       context: ./backend
       dockerfile: ../infra/docker/api/Dockerfile
@@ -91,7 +91,7 @@ services:
   # Draait 24/7 op Docker Desktop → bestuurt WiZ lampen via UDP.
   # Haalt alle data van PostgreSQL (geen Convex meer).
   automation-engine:
-    <<: *default-logging
+    logging: *default-logging
     build:
       context: ./backend
       dockerfile: ../infra/docker/automation-engine/Dockerfile
