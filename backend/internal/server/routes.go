@@ -74,6 +74,7 @@ func registerRoutes(
 		r.Route("/automations", func(r chi.Router) {
 			r.Get("/", automations.List)
 			r.With(authMw).Post("/", automations.Create)
+			r.With(authMw).Put("/{id}", automations.Update)
 			r.With(authMw).Post("/{id}/toggle", automations.Toggle)
 			r.With(authMw).Delete("/{id}", automations.Delete)
 			r.With(authMw).Delete("/group", automations.DeleteByGroup)
@@ -170,6 +171,7 @@ func registerRoutes(
 			r.With(authMw).Patch("/leads/{id}", lcH.UpdateLead)
 			r.With(authMw).Post("/leads/{id}/convert", lcH.ConvertLeadToProject)
 			r.Get("/projects", lcH.ListProjects)
+			r.With(authMw).Post("/projects", lcH.CreateProject)
 			r.With(authMw).Patch("/projects/{id}", lcH.UpdateProject)
 			r.Get("/actions", lcH.ListActions)
 			r.With(authMw).Post("/actions", lcH.CreateAction)

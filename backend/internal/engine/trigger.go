@@ -88,6 +88,17 @@ func ShouldFire(auto map[string]any, now time.Time, todayShiftTypes map[string]b
 		}
 	}
 
+	// Smart Exclusions: check if any excluded shift is active today
+	if excluded, ok := trigger["excludedShifts"].([]any); ok {
+		for _, ex := range excluded {
+			if shiftType, ok := ex.(string); ok {
+				if todayShiftTypes[shiftType] {
+					return false // Do not fire if an excluded shift is active today
+				}
+			}
+		}
+	}
+
 	return true
 }
 

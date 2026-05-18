@@ -74,6 +74,38 @@ func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, created)
 }
 
+// Update modifies an existing automation.
+// @Summary Update automation
+// @Description Modifies a home automation rule
+// @Tags Automations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Automation ID (UUID)"
+// @Param request body model.AutomationRow true "Automation Details"
+// @Success 200 {object} model.AutomationRow
+// @Failure 400 {string} string "invalid id or JSON"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations/{id} [put]
+func (h *AutomationHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var body model.AutomationRow
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		Error(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	updated, err := h.store.Update(r.Context(), id, body)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, updated)
+}
+
 // Toggle flips the enabled flag.
 // @Summary Toggle automation
 // @Description Enables or disables an automation

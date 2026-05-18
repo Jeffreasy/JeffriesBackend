@@ -64,6 +64,16 @@ type LCProject struct {
 	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
 }
 
+type LCProjectCreate struct {
+	Naam            string  `json:"naam"`
+	Fase            string  `json:"fase"`
+	Status          string  `json:"status"`
+	WaardeIndicatie *int    `json:"waarde_indicatie"`
+	StartDatum      *string `json:"start_datum"`
+	Deadline        *string `json:"deadline"`
+	Samenvatting    *string `json:"samenvatting"`
+}
+
 type LCProjectUpdate struct {
 	Fase            *string `json:"fase,omitempty"`
 	Status          *string `json:"status,omitempty"`

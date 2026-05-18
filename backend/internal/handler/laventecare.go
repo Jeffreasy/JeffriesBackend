@@ -186,6 +186,47 @@ func (h *LaventeCareHandler) ListProjects(w http.ResponseWriter, r *http.Request
 	JSON(w, http.StatusOK, projects)
 }
 
+// CreateProject creates a new active project.
+// @Summary Create Project
+// @Description Creates a new CRM project directly
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCProjectCreate true "Project Details"
+// @Success 201 {object} model.LCProject
+// @Failure 400 {string} string "Invalid request body or missing name"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/projects [post]
+func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	var input model.LCProjectCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Naam == "" {
+		Error(w, http.StatusBadRequest, "Naam is verplicht")
+		return
+	}
+
+	projectToCreate := model.LCProject{
+		Naam:            input.Naam,
+		Fase:            input.Fase,
+		Status:          input.Status,
+		WaardeIndicatie: input.WaardeIndicatie,
+		StartDatum:      input.StartDatum,
+		Deadline:        input.Deadline,
+		Samenvatting:    input.Samenvatting,
+	}
+
+	project, err := h.store.CreateProject(r.Context(), h.userID, projectToCreate)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, project)
+}
+
 // UpdateProject modifies project fields.
 // @Summary Update Project
 // @Description Modifies an existing CRM project

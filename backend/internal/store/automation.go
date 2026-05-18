@@ -35,6 +35,13 @@ func (s *AutomationStore) List(ctx context.Context, userID string) ([]model.Auto
 
 // Create inserts a new automation.
 func (s *AutomationStore) Create(ctx context.Context, a model.AutomationRow) (model.AutomationRow, error) {
+	// Prevent duplicates
+	var existing int
+	errCheck := s.db.Pool.QueryRow(ctx, `SELECT count(1) FROM automations WHERE user_id = $1 AND name = $2`, a.UserID, a.Name).Scan(&existing)
+	if errCheck == nil && existing > 0 {
+		return model.AutomationRow{}, pgx.ErrNoRows // Or a custom error
+	}
+
 	a.ID = uuid.New()
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now()
@@ -54,6 +61,20 @@ func (s *AutomationStore) Create(ctx context.Context, a model.AutomationRow) (mo
 func (s *AutomationStore) Toggle(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.Pool.Exec(ctx, `UPDATE automations SET enabled = NOT enabled WHERE id = $1`, id)
 	return err
+}
+
+// Update modifies an existing automation.
+func (s *AutomationStore) Update(ctx context.Context, id uuid.UUID, a model.AutomationRow) (model.AutomationRow, error) {
+	var out model.AutomationRow
+	err := s.db.Pool.QueryRow(ctx, `
+		UPDATE automations
+		SET name = $2, trigger_config = $3, action_config = $4
+		WHERE id = $1
+		RETURNING `+autoCols,
+		id, a.Name, a.TriggerConfig, a.ActionConfig,
+	).Scan(&out.ID, &out.UserID, &out.Name, &out.Enabled, &out.CreatedAt,
+		&out.LastFiredAt, &out.GroupName, &out.TriggerConfig, &out.ActionConfig)
+	return out, err
 }
 
 // Delete removes an automation.
