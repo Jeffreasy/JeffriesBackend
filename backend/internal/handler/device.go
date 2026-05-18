@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"math"
@@ -325,7 +326,7 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	// Update state in PostgreSQL
 	if len(statePatch) > 0 {
 		go func() {
-			if err := h.devices.UpdateState(r.Context(), id, statePatch); err != nil {
+			if err := h.devices.UpdateState(context.Background(), id, statePatch); err != nil {
 				slog.Warn("state update failed", "device", id, "error", err)
 			}
 		}()

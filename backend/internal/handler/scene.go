@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -186,30 +187,36 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 			on := true
 			opts := wiz.StateOpts{On: &on}
+			statePatch := map[string]any{"on": true}
 
 			if v, ok := a.TargetState["brightness"]; ok {
 				if b, ok := toIntVal(v); ok {
 					opts.Brightness = &b
+					statePatch["brightness"] = b
 				}
 			}
 			if v, ok := a.TargetState["color_temp"]; ok {
 				if ct, ok := toIntVal(v); ok {
 					opts.ColorTemp = &ct
+					statePatch["color_temp"] = ct
 				}
 			}
 			if rv, ok := a.TargetState["r"]; ok {
 				if r, ok := toIntVal(rv); ok {
 					opts.R = &r
+					statePatch["r"] = r
 				}
 			}
 			if gv, ok := a.TargetState["g"]; ok {
 				if g, ok := toIntVal(gv); ok {
 					opts.G = &g
+					statePatch["g"] = g
 				}
 			}
 			if bv, ok := a.TargetState["b"]; ok {
 				if b, ok := toIntVal(bv); ok {
 					opts.B = &b
+					statePatch["b"] = b
 				}
 			}
 
@@ -217,6 +224,13 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 				slog.Error("WiZ command failed", "ip", *device.IPAddress, "error", err)
 				return
 			}
+			
+			if len(statePatch) > 0 {
+				if err := h.devices.UpdateState(context.Background(), a.DeviceID, statePatch); err != nil {
+					slog.Warn("scene state update failed", "device", a.DeviceID, "error", err)
+				}
+			}
+
 			slog.Info("scene activated", "scene", scene.Name, "device", device.Name)
 		}(action)
 	}
