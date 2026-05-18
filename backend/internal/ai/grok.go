@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/sony/gobreaker"
 )
 
 const (
@@ -23,12 +25,28 @@ const (
 type GrokClient struct {
 	apiKey     string
 	httpClient *http.Client
+	cb         *gobreaker.CircuitBreaker
 }
 
 func NewGrokClient(apiKey string) *GrokClient {
+	// Configure Circuit Breaker: 3 consecutive failures -> open state for 30s
+	st := gobreaker.Settings{
+		Name:        "GrokAPI",
+		MaxRequests: 1, // When half-open, allow 1 request to test
+		Interval:    0,
+		Timeout:     30 * time.Second, // Time before transitioning from Open to Half-Open
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 3
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			slog.Warn("CircuitBreaker state changed", "name", name, "from", from.String(), "to", to.String())
+		},
+	}
+
 	return &GrokClient{
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 60 * time.Second},
+		cb:         gobreaker.NewCircuitBreaker(st),
 	}
 }
 
@@ -121,10 +139,28 @@ func (c *GrokClient) Chat(
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return ChatResult{Error: fmt.Sprintf("API error: %v", err)}
+		// Execute request through Circuit Breaker
+		respInterface, cbErr := c.cb.Execute(func() (interface{}, error) {
+			resp, err := c.httpClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode >= 500 { // Only trip on server errors, not 4xx client errors
+				defer resp.Body.Close()
+				return nil, fmt.Errorf("server error: %d", resp.StatusCode)
+			}
+			return resp, nil
+		})
+
+		if cbErr != nil {
+			// Check if Circuit Breaker is open
+			if cbErr == gobreaker.ErrOpenState {
+				return ChatResult{Error: "De AI server is tijdelijk onbereikbaar wegens overbelasting. Probeer het later opnieuw."}
+			}
+			return ChatResult{Error: fmt.Sprintf("API error: %v", cbErr)}
 		}
+
+		resp := respInterface.(*http.Response)
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 

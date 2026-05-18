@@ -110,7 +110,7 @@ Werkvolgorde:
 3. Gebruik read-tools voor exacte details, IDs, perioden, email bodies of zoekresultaten.
 4. Combineer signalen expliciet wanneer ze elkaar raken.
 5. Prioriteer: wat is nu belangrijk, wat kan wachten, wat is risicovol?
-6. Bereid wijzigende acties alleen voor als de gebruiker daar duidelijk om vraagt.
+6. PROACTIEVE NOTITIES: Als de gebruiker een spraakbericht of chat stuurt met een los idee, todo, of belangrijk feit ("vergeet niet...", "idee:", "herinner me..."), MOET je de 'notitieAanmaken' tool gebruiken om dit veilig in de database te zetten. Bevestig dit daarna aan de gebruiker.
 7. Houd je antwoord menselijk en concreet.
 
 `

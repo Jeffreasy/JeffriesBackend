@@ -15,6 +15,7 @@ import (
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/handler"
+	customMiddleware "github.com/Jeffreasy/JeffriesBackend/internal/middleware"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/telegram"
 	"github.com/Jeffreasy/JeffriesBackend/internal/wiz"
@@ -37,6 +38,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	r.Use(slogMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.CORSOrigins))
+	r.Use(customMiddleware.RateLimiter())
 
 	// Handlers
 	wizClient := wiz.NewClient()

@@ -13,6 +13,7 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	tg "github.com/Jeffreasy/JeffriesBackend/internal/telegram"
+	"github.com/google/uuid"
 )
 
 // loopTelegram polls for Telegram updates and processes them natively in Go.
@@ -29,6 +30,7 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 	_ = client.DeleteWebhook(false)
 
 	var offset int64
+	backoff := 3 * time.Second
 
 	for {
 		select {
@@ -39,27 +41,34 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 
 		updates, err := client.GetUpdates(offset, 25)
 		if err != nil {
-			slog.Error("telegram getUpdates failed", "error", err)
-			sleepCtx(ctx, 3*time.Second)
+			slog.Error("telegram getUpdates failed", "error", err, "backoff", backoff)
+			sleepCtx(ctx, backoff)
+			backoff *= 2
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
 			continue
 		}
+
+		// Reset backoff on success
+		backoff = 3 * time.Second
 
 		if len(updates) > 0 {
 			slog.Info("📩 telegram updates received", "count", len(updates))
 		}
 
 		for _, update := range updates {
-			func() {
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
+			}
+			go func(u tg.Update) {
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Error("telegram processUpdate panic", "recover", r)
 					}
 				}()
-				e.processUpdate(ctx, client, update)
-			}()
-			if update.UpdateID >= offset {
-				offset = update.UpdateID + 1
-			}
+				e.processUpdate(ctx, client, u)
+			}(update)
 		}
 
 		sleepCtx(ctx, 100*time.Millisecond)
@@ -67,6 +76,27 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 }
 
 func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg.Update) {
+	// Handle Callback Queries (Button Clicks)
+	if cb := update.CallbackQuery; cb != nil {
+		if cb.Message == nil || cb.Message.Chat == nil {
+			return
+		}
+		chatID := cb.Message.Chat.ID
+
+		ownerID := e.cfg.TelegramChatID
+		if ownerID == "" || strconv.FormatInt(chatID, 10) != ownerID {
+			_ = client.AnswerCallbackQuery(cb.ID, "Ongeautoriseerd.")
+			return
+		}
+
+		// Acknowledge the click immediately so the loading spinner goes away
+		_ = client.AnswerCallbackQuery(cb.ID, "")
+		
+		// Process the callback data exactly as if the user typed it
+		e.processText(ctx, client, chatID, strings.TrimSpace(cb.Data))
+		return
+	}
+
 	msg := update.Message
 	if msg == nil || msg.Chat == nil {
 		return
@@ -95,6 +125,25 @@ func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg
 	}
 
 	e.processText(ctx, client, chatID, strings.TrimSpace(msg.Text))
+}
+
+// sendTypingLoop keeps the "typing..." indicator alive during long AI tasks.
+func sendTypingLoop(ctx context.Context, client *tg.Client, chatID int64) context.CancelFunc {
+	tCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		_ = client.SendTyping(chatID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-tCtx.Done():
+				return
+			case <-ticker.C:
+				_ = client.SendTyping(chatID)
+			}
+		}
+	}()
+	return cancel
 }
 
 func (e *Engine) handleVoice(ctx context.Context, client *tg.Client, chatID int64, fileID string) {
@@ -140,13 +189,22 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	// Built-in commands
 	switch {
 	case text == "/start":
-		_ = client.SendMessage(chatID, buildWelcomeText())
+		_ = client.SendMessageWithKeyboard(chatID, buildWelcomeText(), buildMainMenu())
 		return
 	case text == "/help":
-		_ = client.SendMessage(chatID, buildHelpText())
+		_ = client.SendMessageWithKeyboard(chatID, buildHelpText(), buildMainMenu())
 		return
 	case text == "/status" || text == "/health":
 		_ = client.SendMessage(chatID, "⚙️ Go backend actief")
+		return
+	case text == "/notities":
+		e.handleNotitiesDashboard(ctx, client, chatID)
+		return
+	case strings.HasPrefix(text, "note_read_"):
+		e.handleNoteRead(ctx, client, chatID, strings.TrimPrefix(text, "note_read_"))
+		return
+	case strings.HasPrefix(text, "note_archive_"):
+		e.handleNoteArchive(ctx, client, chatID, strings.TrimPrefix(text, "note_archive_"))
 		return
 	}
 
@@ -182,8 +240,9 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		return
 	}
 
-	// Route to Grok AI
-	_ = client.SendTyping(chatID)
+	// Route to Grok AI with continuous typing
+	stopTyping := sendTypingLoop(ctx, client, chatID)
+	defer stopTyping()
 
 	agentID := routeFreeText(text)
 	agent := ai.GetAgent(agentID)
@@ -362,6 +421,102 @@ func detectLampCommand(text string) *lampCommand {
 	return nil
 }
 
+// ─── Native Telegram Dashboards ─────────────────────────────────────────────
+
+func (e *Engine) handleNotitiesDashboard(ctx context.Context, client *tg.Client, chatID int64) {
+	nStore := store.NewNoteStore(e.db)
+	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		return
+	}
+
+	if len(notes) == 0 {
+		_ = client.SendMessage(chatID, "📝 Je hebt nog geen notities. Stuur een spraakbericht of typ een idee, en ik sla het voor je op!")
+		return
+	}
+
+	// Neem de top 5 notities
+	limit := 5
+	if len(notes) < limit {
+		limit = len(notes)
+	}
+	topNotes := notes[:limit]
+
+	var keyboard [][]tg.InlineKeyboardButton
+	text := "📝 **Jouw Laatste Notities**\n\n"
+
+	for i, n := range topNotes {
+		titel := "Naamloze notitie"
+		if n.Titel != nil && *n.Titel != "" {
+			titel = *n.Titel
+		}
+		pinStr := ""
+		if n.IsPinned {
+			pinStr = "📌 "
+		}
+		
+		text += fmt.Sprintf("%d. %s%s\n", i+1, pinStr, titel)
+
+		row := []tg.InlineKeyboardButton{
+			{Text: fmt.Sprintf("👁️ Lees %d", i+1), CallbackData: "note_read_" + n.ID.String()},
+			{Text: fmt.Sprintf("📥 Arch. %d", i+1), CallbackData: "note_archive_" + n.ID.String()},
+		}
+		keyboard = append(keyboard, row)
+	}
+
+	text += "\n_Tip: Reageer in de chat met een idee om direct een nieuwe notitie aan te maken._"
+
+	markup := tg.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	_ = client.SendMessageWithKeyboard(chatID, text, markup)
+}
+
+func (e *Engine) handleNoteRead(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+	id, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		return
+	}
+	nStore := store.NewNoteStore(e.db)
+	note, err := nStore.Get(ctx, id)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Notitie niet gevonden.")
+		return
+	}
+
+	titel := "Naamloze notitie"
+	if note.Titel != nil && *note.Titel != "" {
+		titel = *note.Titel
+	}
+
+	text := fmt.Sprintf("📝 **%s**\n", titel)
+	if len(note.Tags) > 0 {
+		text += fmt.Sprintf("Tags: %s\n", strings.Join(note.Tags, ", "))
+	}
+	text += fmt.Sprintf("\n%s\n\n_Laatst gewijzigd: %s_", note.Inhoud, note.Gewijzigd.Format("02-01-2006 15:04"))
+
+	_ = client.SendMessage(chatID, text)
+}
+
+func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+	id, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		return
+	}
+	nStore := store.NewNoteStore(e.db)
+	
+	_, err = nStore.Update(ctx, id, map[string]any{"is_archived": true})
+	if err != nil {
+		_ = client.SendMessage(chatID, "Fout bij archiveren.")
+		return
+	}
+
+	_ = client.SendMessage(chatID, "✅ Notitie gearchiveerd.")
+	// Refresh dashboard
+	e.handleNotitiesDashboard(ctx, client, chatID)
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 func normalizeAssistantText(text string) string {
@@ -374,11 +529,39 @@ func normalizeAssistantText(text string) string {
 }
 
 func buildWelcomeText() string {
-	return "👋 Welkom bij Jeffries HomeBot!\n\nJeffries Brain is je centrale cockpit.\nTyp of spreek — ik combineer planning, agenda, mail, notities, habits, lampen en systeemstatus.\n\n💡 'Lampen uit'  📅 'Wanneer werk ik?'\n💰 'Salaris'  📧 'Ongelezen emails'\n📝 'Noteer: ...'  ⚙️ '/status'\n\nType /help voor alle commando's."
+	return "👋 Welkom bij Jeffries HomeBot!\n\nJeffries Brain is je centrale cockpit.\nTyp of spreek — ik combineer planning, agenda, mail, notities, habits, lampen en systeemstatus."
 }
 
 func buildHelpText() string {
 	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain.\n\n/status — systeem health\n/brain — centrale assistent\n/lampen — lamp status\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notities\n/habits — habits\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'dim'\n🎙️ Spraakberichten worden automatisch herkend."
+}
+
+func buildMainMenu() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "🧠 Vraag Brain", CallbackData: "/brain wat is mijn status?"},
+				{Text: "💡 Lampen", CallbackData: "/lampen"},
+			},
+			{
+				{Text: "📅 Agenda", CallbackData: "/agenda"},
+				{Text: "📋 Werkrooster", CallbackData: "/rooster"},
+			},
+			{
+				{Text: "💰 Salaris", CallbackData: "/finance"},
+				{Text: "📧 Inbox", CallbackData: "/email"},
+			},
+			{
+				{Text: "✅ Habits", CallbackData: "/habits"},
+				{Text: "📝 Notities", CallbackData: "/notities"},
+			},
+			{
+				{Text: "💡 Lampen Uit", CallbackData: "lampen uit"},
+				{Text: "🌅 Ochtend", CallbackData: "ochtend"},
+				{Text: "🌙 Nacht", CallbackData: "nacht"},
+			},
+		},
+	}
 }
 
 // noopExecutor is a placeholder until tool execution is wired.

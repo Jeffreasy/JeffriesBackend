@@ -165,6 +165,32 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "notitieAanmaken",
+			Description: "Maakt een nieuwe notitie aan in het systeem op basis van wat de gebruiker vertelt.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"titel": {
+						"type": "string",
+						"description": "Een korte en bondige titel voor de notitie."
+					},
+					"inhoud": {
+						"type": "string",
+						"description": "De volledige inhoud van de notitie. Mag markdown bevatten."
+					},
+					"tags": {
+						"type": "array",
+						"items": {"type": "string"},
+						"description": "Lijst van tags (zonder #), bijv. ['idee', 'werk', 'huis']."
+					}
+				},
+				"required": ["titel", "inhoud"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "habitsOverzicht",
 			Description: "Haalt een overzicht van actieve habits op.",
 			Parameters: json.RawMessage(`{

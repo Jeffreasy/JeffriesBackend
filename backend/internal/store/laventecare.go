@@ -270,6 +270,34 @@ func (s *LaventeCareStore) ListDocuments(ctx context.Context, userID string) ([]
 	return pgx.CollectRows(rows, scanDocument)
 }
 
+func (s *LaventeCareStore) SearchDocuments(ctx context.Context, userID string, query string, limit int) ([]model.LCDocument, error) {
+	if query == "" {
+		rows, err := s.db.Pool.Query(ctx,
+			`SELECT id, user_id, document_key, titel, categorie, fase, versie,
+			        source_path, samenvatting, tags, created_at, updated_at
+			 FROM lc_documents WHERE user_id = $1
+			 ORDER BY categorie, titel LIMIT $2`, userID, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return pgx.CollectRows(rows, scanDocument)
+	}
+
+	search := "%" + strings.ToLower(query) + "%"
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, document_key, titel, categorie, fase, versie,
+		        source_path, samenvatting, tags, created_at, updated_at
+		 FROM lc_documents 
+		 WHERE user_id = $1 AND (LOWER(titel) LIKE $2 OR LOWER(samenvatting) LIKE $2 OR LOWER(categorie) LIKE $2)
+		 ORDER BY categorie, titel LIMIT $3`, userID, search, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanDocument)
+}
+
 func (s *LaventeCareStore) SeedDocuments(ctx context.Context, userID string, docs []model.LCDocument) (inserted, updated int, err error) {
 	now := time.Now().UTC()
 	for _, doc := range docs {

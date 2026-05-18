@@ -66,6 +66,50 @@ func (c *Client) SendMessage(chatID int64, text string) error {
 	return err
 }
 
+// SendMessageWithKeyboard sends a text message with an inline keyboard.
+func (c *Client) SendMessageWithKeyboard(chatID int64, text string, keyboard InlineKeyboardMarkup) error {
+	if len(text) > 4000 {
+		text = text[:3997] + "..."
+	}
+	_, err := c.post("sendMessage", map[string]any{
+		"chat_id":      chatID,
+		"text":         escapeHTML(text),
+		"parse_mode":   "HTML",
+		"reply_markup": keyboard,
+	})
+	return err
+}
+
+// AnswerCallbackQuery removes the loading state from a clicked inline button.
+func (c *Client) AnswerCallbackQuery(callbackQueryID string, text string) error {
+	payload := map[string]any{
+		"callback_query_id": callbackQueryID,
+	}
+	if text != "" {
+		payload["text"] = text
+	}
+	_, err := c.post("answerCallbackQuery", payload)
+	return err
+}
+
+// EditMessageText replaces the text and optionally keyboard of an existing message.
+func (c *Client) EditMessageText(chatID int64, messageID int64, text string, keyboard *InlineKeyboardMarkup) error {
+	if len(text) > 4000 {
+		text = text[:3997] + "..."
+	}
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       escapeHTML(text),
+		"parse_mode": "HTML",
+	}
+	if keyboard != nil {
+		payload["reply_markup"] = *keyboard
+	}
+	_, err := c.post("editMessageText", payload)
+	return err
+}
+
 // SendTyping sends the "typing..." indicator.
 func (c *Client) SendTyping(chatID int64) error {
 	_, err := c.post("sendChatAction", map[string]any{
@@ -127,7 +171,7 @@ func (c *Client) GetUpdates(offset int64, timeout int) ([]Update, error) {
 	data, _ := json.Marshal(map[string]any{
 		"offset":          offset,
 		"timeout":         timeout,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	})
 	resp, err := client.Do(mustReq("POST", c.apiURL("getUpdates"), data))
 	if err != nil {
@@ -155,15 +199,31 @@ type BotInfo struct {
 }
 
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message,omitempty"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+}
+
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    User     `json:"from"`
+	Message *Message `json:"message,omitempty"`
+	Data    string   `json:"data,omitempty"`
+}
+
+type User struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username,omitempty"`
 }
 
 type Message struct {
-	Chat  *Chat  `json:"chat,omitempty"`
-	Text  string `json:"text,omitempty"`
-	Voice *Voice `json:"voice,omitempty"`
-	Audio *Voice `json:"audio,omitempty"`
+	MessageID int64  `json:"message_id"`
+	Chat      *Chat  `json:"chat,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Voice     *Voice `json:"voice,omitempty"`
+	Audio     *Voice `json:"audio,omitempty"`
 }
 
 type Chat struct {
@@ -172,6 +232,16 @@ type Chat struct {
 
 type Voice struct {
 	FileID string `json:"file_id"`
+}
+
+type InlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data,omitempty"`
+	URL          string `json:"url,omitempty"`
+}
+
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

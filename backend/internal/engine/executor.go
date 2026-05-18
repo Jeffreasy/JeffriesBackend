@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -52,6 +53,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		if args.Limit <= 0 {
 			args.Limit = 5
+		}
+		if args.Limit > 10 {
+			args.Limit = 10
 		}
 		emailStore := store.NewEmailStore(&store.DB{Pool: e.pool})
 		emails, err := emailStore.Search(ctx, e.userID, args.Query, args.Limit)
@@ -101,6 +105,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if args.Limit <= 0 {
 			args.Limit = 10
 		}
+		if args.Limit > 20 {
+			args.Limit = 20
+		}
 		tStore := store.NewTransactionStore(&store.DB{Pool: e.pool})
 		filter := store.TransactionFilter{Zoekterm: args.Query, Limit: args.Limit}
 		txs, _, err := tStore.ListFiltered(ctx, e.userID, filter)
@@ -119,12 +126,32 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
 		}
 		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
-		notes, err := nStore.Search(ctx, e.userID, args.Query, 10)
+		notes, err := nStore.Search(ctx, e.userID, args.Query, 5) // Hard cap op 5
 		if err != nil {
 			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
 		}
 		b, _ := json.Marshal(notes)
 		return string(b)
+
+	case "notitieAanmaken":
+		var args struct {
+			Titel  string   `json:"titel"`
+			Inhoud string   `json:"inhoud"`
+			Tags   []string `json:"tags"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		}
+		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
+		n, err := nStore.Create(ctx, e.userID, model.Note{
+			Titel:  &args.Titel,
+			Inhoud: args.Inhoud,
+			Tags:   args.Tags,
+		})
+		if err != nil {
+			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+		}
+		return fmt.Sprintf(`{"success": true, "note_id": "%s"}`, n.ID)
 
 	// ── AGENDA ───────────────────────────────────────────────────────
 	case "afsprakenOpvragen":
@@ -164,7 +191,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
 		}
 		lcStore := store.NewLaventeCareStore(&store.DB{Pool: e.pool})
-		docs, err := lcStore.ListDocuments(ctx, e.userID)
+		docs, err := lcStore.SearchDocuments(ctx, e.userID, args.Query, 5)
 		if err != nil {
 			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
 		}
