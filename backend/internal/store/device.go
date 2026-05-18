@@ -114,7 +114,7 @@ func (s *DeviceStore) UpdateState(ctx context.Context, id uuid.UUID, patch map[s
 
 	_, err = s.db.Pool.Exec(ctx,
 		`UPDATE devices
-		 SET current_state = current_state || $2::jsonb,
+		 SET current_state = COALESCE(current_state, '{}'::jsonb) || $2::jsonb,
 		     last_seen = $3
 		 WHERE id = $1`,
 		id, patchJSON, time.Now().UTC(),

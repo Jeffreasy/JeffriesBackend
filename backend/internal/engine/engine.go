@@ -374,7 +374,7 @@ func (e *Engine) pollDeviceStatus(ctx context.Context) {
 	}
 
 	for idStr, info := range deviceMap {
-		_, err := e.wiz.GetState(info.IP)
+		state, err := e.wiz.GetState(info.IP)
 		status := "online"
 		if err != nil {
 			status = "offline"
@@ -386,6 +386,19 @@ func (e *Engine) pollDeviceStatus(ctx context.Context) {
 		}
 		if err := e.devStore.SetStatus(ctx, id, status); err != nil {
 			slog.Debug("status update failed", "device", idStr, "error", err)
+		}
+		if state != nil {
+			patch := map[string]any{
+				"on":         state.On,
+				"brightness": state.Brightness,
+				"color_temp": state.ColorTemp,
+				"r":          state.R,
+				"g":          state.G,
+				"b":          state.B,
+			}
+			if err := e.devStore.UpdateState(ctx, id, patch); err != nil {
+				slog.Debug("state update failed", "device", idStr, "error", err)
+			}
 		}
 	}
 	slog.Info("✅ device status poll done", "count", len(deviceMap))
