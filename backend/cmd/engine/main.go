@@ -39,6 +39,10 @@ func main() {
 	defer cancel()
 
 	eng := engine.New(cfg, db)
+	
+	// Start the background cleanup service
+	engine.StartCleaner(ctx, db)
+
 	eng.Run(ctx) // blocks until SIGTERM/SIGINT
 
 	slog.Info("✅ automation engine cleanly stopped")

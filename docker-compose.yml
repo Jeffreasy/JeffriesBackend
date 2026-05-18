@@ -12,10 +12,16 @@
 #   UDP unicast (specifiek IP) werkt wel vanuit containers → WiZ controle OK.
 #   UDP broadcast (253.255.255.255) werkt NIET → discovery via PowerShell.
 # ─────────────────────────────────────────────────────────────────────────────
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   # ─── Matter Controller ────────────────────────────────────────
   matter-server:
+    <<: *default-logging
     image: ghcr.io/home-assistant-libs/python-matter-server:stable
     container_name: homeapp-matter-server
     restart: unless-stopped
@@ -36,6 +42,7 @@ services:
 
   # ─── PostgreSQL Database ──────────────────────────────────────
   postgres:
+    <<: *default-logging
     image: postgres:16-alpine
     container_name: homeapp-postgres
     restart: unless-stopped
@@ -58,6 +65,7 @@ services:
 
   # ─── Go API Backend ────────────────────────────────────────────
   api:
+    <<: *default-logging
     build:
       context: ./backend
       dockerfile: ../infra/docker/api/Dockerfile
@@ -83,6 +91,7 @@ services:
   # Draait 24/7 op Docker Desktop → bestuurt WiZ lampen via UDP.
   # Haalt alle data van PostgreSQL (geen Convex meer).
   automation-engine:
+    <<: *default-logging
     build:
       context: ./backend
       dockerfile: ../infra/docker/automation-engine/Dockerfile

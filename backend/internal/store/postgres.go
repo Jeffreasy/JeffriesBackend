@@ -47,6 +47,16 @@ func (db *DB) Ping(ctx context.Context) error {
 	return db.Pool.Ping(ctx)
 }
 
+// CleanOldAuditLogs deletes records from the audit_logs table older than the specified number of days.
+func (db *DB) CleanOldAuditLogs(ctx context.Context, days int) (int64, error) {
+	query := `DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '1 day' * $1`
+	res, err := db.Pool.Exec(ctx, query, days)
+	if err != nil {
+		return 0, fmt.Errorf("clean audit_logs: %w", err)
+	}
+	return res.RowsAffected(), nil
+}
+
 // sanitizeURL hides the password in log output.
 func sanitizeURL(url string) string {
 	// Basic sanitization — hide password between : and @
