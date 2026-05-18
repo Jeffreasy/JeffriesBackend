@@ -1,0 +1,24 @@
+{
+  "name": "JeffriesBackend DevContainer",
+  "dockerComposeFile": [
+    "../docker-compose.yml"
+  ],
+  "service": "api",
+  "workspaceFolder": "/app",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.extraPaths": [
+          "/app"
+        ],
+        "python.analysis.typeCheckingMode": "basic"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.pylance",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}

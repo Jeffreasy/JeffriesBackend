@@ -1,18 +1,26 @@
-FROM python:3.12-slim
+# ─── Homeapp API — Multi-stage Go build ───────────────────────────────────────
+# Produces a ~15MB Alpine image with a single static binary.
 
-WORKDIR /app
+FROM golang:alpine AS builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Copy application source
+# Build
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
 
-# Run database migrations then start server
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+# ─── Runtime ──────────────────────────────────────────────────────────────────
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=builder /api /api
+COPY migrations/ /migrations/
+
+EXPOSE 8000
+
+CMD ["/api"]

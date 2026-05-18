@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS email_sync_meta;
+DROP TABLE IF EXISTS emails;

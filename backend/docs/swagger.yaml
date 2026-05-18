@@ -1,0 +1,4073 @@
+basePath: /api/v1
+definitions:
+  handler.LoonstrokenImportRequest:
+    properties:
+      items:
+        items:
+          additionalProperties: {}
+          type: object
+        type: array
+      userId:
+        type: string
+    type: object
+  handler.LoonstrokenImportResponse:
+    properties:
+      inserted:
+        type: integer
+      ok:
+        type: boolean
+      total:
+        type: integer
+    type: object
+  handler.TransactionImportResponse:
+    properties:
+      inserted:
+        type: integer
+      ok:
+        type: boolean
+      skipped:
+        type: integer
+      total:
+        type: integer
+    type: object
+  handler.TransactionListResponse:
+    properties:
+      isDone:
+        type: boolean
+      page:
+        items:
+          $ref: '#/definitions/model.Transaction'
+        type: array
+      totalCount:
+        type: integer
+    type: object
+  handler.noteCreateBody:
+    properties:
+      deadline:
+        type: string
+      inhoud:
+        type: string
+      kleur:
+        type: string
+      linkedEventId:
+        type: string
+      prioriteit:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+    type: object
+  handler.noteUpdateBody:
+    properties:
+      deadline:
+        type: string
+      inhoud:
+        type: string
+      isArchived:
+        type: boolean
+      isPinned:
+        type: boolean
+      kleur:
+        type: string
+      linkedEventId:
+        type: string
+      prioriteit:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+    type: object
+  model.AutomationRow:
+    properties:
+      action_config:
+        type: object
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      group_name:
+        type: string
+      id:
+        type: string
+      last_fired_at:
+        type: string
+      name:
+        type: string
+      trigger_config:
+        type: object
+      user_id:
+        type: string
+    type: object
+  model.DeviceCommandRequest:
+    properties:
+      b:
+        type: integer
+      brightness:
+        type: integer
+      color_temp_mireds:
+        type: integer
+      g:
+        type: integer
+      hue:
+        type: integer
+      "on":
+        type: boolean
+      r:
+        type: integer
+      saturation:
+        type: integer
+      scene_id:
+        type: integer
+    type: object
+  model.DeviceRegisterRequest:
+    properties:
+      ip_address:
+        type: string
+      name:
+        type: string
+      room_id:
+        type: string
+    type: object
+  model.DeviceResponse:
+    properties:
+      commissioned_at:
+        type: string
+      current_state:
+        additionalProperties: {}
+        type: object
+      device_type:
+        type: string
+      id:
+        type: string
+      ip_address:
+        type: string
+      last_seen:
+        type: string
+      mac_address:
+        type: string
+      manufacturer:
+        type: string
+      model:
+        type: string
+      name:
+        type: string
+      room_id:
+        type: string
+      status:
+        type: string
+    type: object
+  model.Email:
+    properties:
+      bcc:
+        type: string
+      bijlagen_count:
+        type: integer
+      categorie:
+        type: string
+      cc:
+        type: string
+      created_at:
+        type: string
+      datum:
+        type: string
+      from_addr:
+        type: string
+      gmail_id:
+        type: string
+      heeft_bijlagen:
+        type: boolean
+      id:
+        type: string
+      is_draft:
+        type: boolean
+      is_gelezen:
+        type: boolean
+      is_ster:
+        type: boolean
+      is_verwijderd:
+        type: boolean
+      label_ids:
+        items:
+          type: string
+        type: array
+      ontvangen:
+        type: integer
+      search_text:
+        type: string
+      snippet:
+        type: string
+      subject:
+        type: string
+      synced_at:
+        type: string
+      thread_id:
+        type: string
+      to_addr:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.Habit:
+    properties:
+      aangemaakt:
+        type: string
+      aangepaste_dagen:
+        items:
+          type: integer
+        type: array
+      beschrijving:
+        type: string
+      doel_aantal:
+        type: integer
+      doel_tijd:
+        type: string
+      doel_waarde:
+        type: number
+      eenheid:
+        type: string
+      emoji:
+        type: string
+      financie_categorie:
+        type: string
+      frequentie:
+        type: string
+      gepauzeer_om:
+        type: string
+      gewijzigd:
+        type: string
+      huidige_streak:
+        type: integer
+      id:
+        type: string
+      is_actief:
+        type: boolean
+      is_kwantitatief:
+        type: boolean
+      is_pauze:
+        type: boolean
+      kleur:
+        type: string
+      langste_streak:
+        type: integer
+      moeilijkheid:
+        type: string
+      naam:
+        type: string
+      rooster_filter:
+        type: string
+      totaal_voltooid:
+        type: integer
+      totaal_xp:
+        type: integer
+      type:
+        type: string
+      user_id:
+        type: string
+      volgorde:
+        type: integer
+      xp_per_voltooiing:
+        type: integer
+    type: object
+  model.HabitBadge:
+    properties:
+      badge_id:
+        type: string
+      behaald_op:
+        type: string
+      beschrijving:
+        type: string
+      emoji:
+        type: string
+      habit_id:
+        type: string
+      id:
+        type: string
+      naam:
+        type: string
+      user_id:
+        type: string
+      xp_bonus:
+        type: integer
+    type: object
+  model.LCActionCreate:
+    properties:
+      action_type:
+        type: string
+      due_date:
+        type: string
+      linked_lead_id:
+        type: string
+      linked_project_id:
+        type: string
+      priority:
+        type: string
+      source:
+        type: string
+      source_id:
+        type: string
+      summary:
+        type: string
+      title:
+        type: string
+    type: object
+  model.LCActionItem:
+    properties:
+      action_type:
+        type: string
+      created_at:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      linked_lead_id:
+        type: string
+      linked_project_id:
+        type: string
+      priority:
+        type: string
+      source:
+        type: string
+      source_id:
+        type: string
+      status:
+        type: string
+      summary:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.LCBusinessSignal:
+    properties:
+      action_hint:
+        type: string
+      date:
+        type: string
+      id:
+        type: string
+      matched_term:
+        type: string
+      source:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+      urgency:
+        type: string
+    type: object
+  model.LCChangeRequest:
+    properties:
+      budget_impact:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      impact:
+        type: string
+      planning_impact:
+        type: string
+      project_id:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.LCCockpit:
+    properties:
+      actionItems:
+        items:
+          $ref: '#/definitions/model.LCActionItem'
+        type: array
+      activeLeads:
+        items:
+          $ref: '#/definitions/model.LCLead'
+        type: array
+      activeProjects:
+        items:
+          $ref: '#/definitions/model.LCProject'
+        type: array
+      businessSignals:
+        items:
+          $ref: '#/definitions/model.LCBusinessSignal'
+        type: array
+      documentCatalog:
+        items:
+          $ref: '#/definitions/model.LCDocument'
+        type: array
+      followUps:
+        items:
+          $ref: '#/definitions/model.LCFollowUpSignal'
+        type: array
+      openChanges:
+        items:
+          $ref: '#/definitions/model.LCChangeRequest'
+        type: array
+      openIncidents:
+        items:
+          $ref: '#/definitions/model.LCSlaIncident'
+        type: array
+      recentDecisions:
+        items:
+          $ref: '#/definitions/model.LCDecision'
+        type: array
+      summary:
+        $ref: '#/definitions/model.LCCockpitSummary'
+    type: object
+  model.LCCockpitSummary:
+    properties:
+      actionItems:
+        type: integer
+      activeLeads:
+        type: integer
+      activeProjects:
+        type: integer
+      businessSignals:
+        type: integer
+      decisions:
+        type: integer
+      documents:
+        type: integer
+      documentsSeeded:
+        type: boolean
+      followUps:
+        type: integer
+      leads:
+        type: integer
+      openChanges:
+        type: integer
+      openIncidents:
+        type: integer
+      projects:
+        type: integer
+    type: object
+  model.LCConvertLeadToProject:
+    properties:
+      fase:
+        type: string
+      lead_id:
+        type: string
+      naam:
+        type: string
+      samenvatting:
+        type: string
+      status:
+        type: string
+    type: object
+  model.LCConvertSignalToLead:
+    properties:
+      action_hint:
+        type: string
+      date:
+        type: string
+      matched_term:
+        type: string
+      source:
+        type: string
+      source_id:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+      urgency:
+        type: string
+    type: object
+  model.LCDecision:
+    properties:
+      besluit:
+        type: string
+      created_at:
+        type: string
+      datum:
+        type: string
+      id:
+        type: string
+      impact:
+        type: string
+      project_id:
+        type: string
+      reden:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.LCDocument:
+    properties:
+      categorie:
+        type: string
+      created_at:
+        type: string
+      document_key:
+        type: string
+      fase:
+        type: string
+      id:
+        type: string
+      samenvatting:
+        type: string
+      source_path:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      versie:
+        type: string
+    type: object
+  model.LCFollowUpSignal:
+    properties:
+      action_hint:
+        type: string
+      date:
+        type: string
+      id:
+        type: string
+      priority:
+        type: string
+      source:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+    type: object
+  model.LCLead:
+    properties:
+      bron:
+        type: string
+      company_id:
+        type: string
+      contact_id:
+        type: string
+      created_at:
+        type: string
+      fit_score:
+        type: integer
+      id:
+        type: string
+      pijnpunt:
+        type: string
+      prioriteit:
+        type: string
+      source_id:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      volgende_actie_datum:
+        type: string
+      volgende_stap:
+        type: string
+    type: object
+  model.LCLeadCreate:
+    properties:
+      bron:
+        type: string
+      company_name:
+        type: string
+      fit_score:
+        type: integer
+      pijnpunt:
+        type: string
+      prioriteit:
+        type: string
+      source_id:
+        type: string
+      titel:
+        type: string
+      volgende_actie_datum:
+        type: string
+      volgende_stap:
+        type: string
+      website:
+        type: string
+    type: object
+  model.LCLeadUpdate:
+    properties:
+      fit_score:
+        type: integer
+      pijnpunt:
+        type: string
+      prioriteit:
+        type: string
+      status:
+        type: string
+      volgende_actie_datum:
+        type: string
+      volgende_stap:
+        type: string
+    type: object
+  model.LCProject:
+    properties:
+      company_id:
+        type: string
+      created_at:
+        type: string
+      deadline:
+        type: string
+      fase:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      naam:
+        type: string
+      samenvatting:
+        type: string
+      start_datum:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      waarde_indicatie:
+        type: integer
+    type: object
+  model.LCProjectUpdate:
+    properties:
+      deadline:
+        type: string
+      fase:
+        type: string
+      samenvatting:
+        type: string
+      start_datum:
+        type: string
+      status:
+        type: string
+      waarde_indicatie:
+        type: integer
+    type: object
+  model.LCSeedResult:
+    properties:
+      inserted:
+        type: integer
+      total:
+        type: integer
+      updated:
+        type: integer
+    type: object
+  model.LCSlaIncident:
+    properties:
+      created_at:
+        type: string
+      gemeld_op:
+        type: string
+      id:
+        type: string
+      kanaal:
+        type: string
+      prioriteit:
+        type: string
+      project_id:
+        type: string
+      reactie_deadline:
+        type: string
+      samenvatting:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.Loonstrook:
+    properties:
+      amt_zeerintensief:
+        type: number
+      bruto_betaling:
+        type: number
+      bruto_inhouding:
+        type: number
+      componenten:
+        type: object
+      cumulatieven:
+        type: object
+      eju_bedrag:
+        type: number
+      extra_uren_bedrag:
+        type: number
+      geimporteerd_op:
+        type: string
+      id:
+        type: string
+      jaar:
+        type: integer
+      loonheffing:
+        type: number
+      netto:
+        type: number
+      ort_detail:
+        type: object
+      ort_totaal:
+        type: number
+      parttime_factor:
+        type: number
+      pensioenpremie:
+        type: number
+      periode:
+        type: integer
+      periode_label:
+        type: string
+      reiskosten:
+        type: number
+      salaris_basis:
+        type: number
+      schaalnummer:
+        type: string
+      toeslag_balansvlf:
+        type: number
+      trede:
+        type: string
+      type:
+        type: string
+      user_id:
+        type: string
+      uurloon:
+        type: number
+      vakantietoeslag:
+        type: number
+    type: object
+  model.Note:
+    properties:
+      aangemaakt:
+        type: string
+      deadline:
+        type: string
+      gewijzigd:
+        type: string
+      id:
+        type: string
+      inhoud:
+        type: string
+      is_archived:
+        type: boolean
+      is_pinned:
+        type: boolean
+      kleur:
+        type: string
+      linked_event_id:
+        type: string
+      prioriteit:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+      triage_flag:
+        type: boolean
+      user_id:
+        type: string
+    type: object
+  model.PersonalEvent:
+    properties:
+      beschrijving:
+        type: string
+      conflict_met_dienst:
+        type: string
+      eind_datum:
+        type: string
+      eind_tijd:
+        type: string
+      event_id:
+        type: string
+      heledag:
+        type: boolean
+      id:
+        type: string
+      kalender:
+        type: string
+      locatie:
+        type: string
+      start_datum:
+        type: string
+      start_tijd:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.PrivacySettings:
+    properties:
+      account:
+        type: boolean
+      email:
+        type: boolean
+      finance:
+        type: boolean
+      habits:
+        type: boolean
+      id:
+        type: string
+      notes:
+        type: boolean
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.Room:
+    properties:
+      created_at:
+        type: string
+      floor_number:
+        type: integer
+      icon:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  model.RoomCreate:
+    properties:
+      floor_number:
+        type: integer
+      icon:
+        type: string
+      name:
+        type: string
+    type: object
+  model.RoomUpdate:
+    properties:
+      floor_number:
+        type: integer
+      icon:
+        type: string
+      name:
+        type: string
+    type: object
+  model.Salary:
+    properties:
+      aantal_diensten:
+        type: integer
+      amt_zeerintensief:
+        type: number
+      basis_loon:
+        type: number
+      berekend_op:
+        type: string
+      bruto_betaling:
+        type: number
+      eenmalig_totaal:
+        type: number
+      extra_uren_bedrag:
+        type: number
+      id:
+        type: string
+      jaar:
+        type: integer
+      loonheffing_schat:
+        type: number
+      maand:
+        type: integer
+      netto_prognose:
+        type: number
+      ort_totaal:
+        type: number
+      pensioenpremie:
+        type: number
+      periode:
+        type: string
+      reiskosten:
+        type: number
+      toeslag_balansvlf:
+        type: number
+      toeslag_vakatie_uren:
+        type: number
+      user_id:
+        type: string
+      uurloon_ort:
+        type: number
+    type: object
+  model.Scene:
+    properties:
+      actions:
+        items:
+          $ref: '#/definitions/model.SceneAction'
+        type: array
+      color_hex:
+        type: string
+      created_at:
+        type: string
+      icon:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  model.SceneAction:
+    properties:
+      device_id:
+        type: string
+      execution_order:
+        type: integer
+      id:
+        type: string
+      scene_id:
+        type: string
+      target_state:
+        additionalProperties: {}
+        type: object
+      transition_ms:
+        type: integer
+    type: object
+  model.SceneActionCreate:
+    properties:
+      device_id:
+        type: string
+      execution_order:
+        type: integer
+      target_state:
+        additionalProperties: {}
+        type: object
+      transition_ms:
+        type: integer
+    type: object
+  model.SceneCreate:
+    properties:
+      actions:
+        items:
+          $ref: '#/definitions/model.SceneActionCreate'
+        type: array
+      color_hex:
+        type: string
+      icon:
+        type: string
+      name:
+        type: string
+    type: object
+  model.Schedule:
+    properties:
+      beschrijving:
+        type: string
+      dag:
+        type: string
+      duur:
+        type: number
+      eind_datum:
+        type: string
+      eind_tijd:
+        type: string
+      event_id:
+        type: string
+      heledag:
+        type: boolean
+      id:
+        type: string
+      locatie:
+        type: string
+      prioriteit:
+        type: integer
+      shift_type:
+        type: string
+      start_datum:
+        type: string
+      start_tijd:
+        type: string
+      status:
+        type: string
+      team:
+        type: string
+      titel:
+        type: string
+      user_id:
+        type: string
+      weeknr:
+        type: string
+      werktijd:
+        type: string
+    type: object
+  model.ScheduleMeta:
+    properties:
+      file_name:
+        type: string
+      id:
+        type: string
+      imported_at:
+        type: string
+      total_rows:
+        type: integer
+      user_id:
+        type: string
+    type: object
+  model.Transaction:
+    properties:
+      bedrag:
+        type: number
+      categorie:
+        type: string
+      code:
+        type: string
+      datum:
+        type: string
+      id:
+        type: string
+      is_interne_overboeking:
+        type: boolean
+      omschrijving:
+        type: string
+      oorsp_bedrag:
+        type: number
+      oorsp_munt:
+        type: string
+      reden_retour:
+        type: string
+      referentie:
+        type: string
+      rekening_iban:
+        type: string
+      saldo_na_trn:
+        type: number
+      tegenpartij_naam:
+        type: string
+      tegenrekening_iban:
+        type: string
+      user_id:
+        type: string
+      volgnr:
+        type: string
+    type: object
+  store.CategorieBreakdown:
+    properties:
+      bedrag:
+        type: number
+      categorie:
+        type: string
+      count:
+        type: integer
+      percentage:
+        type: number
+    required:
+    - bedrag
+    - categorie
+    - count
+    type: object
+  store.MaandInUit:
+    properties:
+      inkomsten:
+        type: number
+      maand:
+        type: string
+      netto:
+        type: number
+      uitgaven:
+        type: number
+    required:
+    - inkomsten
+    - maand
+    - netto
+    - uitgaven
+    type: object
+  store.MaandSaldo:
+    properties:
+      maand:
+        type: string
+      saldo:
+        type: number
+    required:
+    - maand
+    - saldo
+    type: object
+  store.TopMerchant:
+    properties:
+      bedrag:
+        type: number
+      count:
+        type: integer
+      naam:
+        type: string
+    required:
+    - bedrag
+    - count
+    - naam
+    type: object
+  store.TransactionStats:
+    properties:
+      aantalAlleTxs:
+        type: integer
+      aantalCategorieen:
+        type: integer
+      aantalTxs:
+        type: integer
+      gemiddeldIn:
+        type: number
+      gemiddeldUit:
+        type: number
+      huidigSaldo:
+        description: Echte bankbalans
+        type: number
+      huidigSaldoPerIban:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      ibannen:
+        items:
+          type: string
+        type: array
+      inPerCategorie:
+        items:
+          $ref: '#/definitions/store.CategorieBreakdown'
+        type: array
+      inUitPerMaand:
+        items:
+          $ref: '#/definitions/store.MaandInUit'
+        type: array
+      jaren:
+        items:
+          type: string
+        type: array
+      laatsteSaldoPeildatum:
+        type: string
+      maanden:
+        items:
+          type: string
+        type: array
+      nettoStroom:
+        type: number
+      saldoPeildatumPerIban:
+        additionalProperties:
+          type: string
+        type: object
+      saldoPerMaand:
+        description: Grafieken
+        items:
+          $ref: '#/definitions/store.MaandSaldo'
+        type: array
+      storneringen:
+        description: Overige
+        type: integer
+      topMerchants:
+        items:
+          $ref: '#/definitions/store.TopMerchant'
+        type: array
+      totaalIn:
+        description: Kasstromen
+        type: number
+      totaalUit:
+        type: number
+      uitPerCategorie:
+        description: Categorieën
+        items:
+          $ref: '#/definitions/store.CategorieBreakdown'
+        type: array
+    required:
+    - aantalAlleTxs
+    - aantalCategorieen
+    - aantalTxs
+    - gemiddeldIn
+    - gemiddeldUit
+    - huidigSaldo
+    - huidigSaldoPerIban
+    - ibannen
+    - inPerCategorie
+    - inUitPerMaand
+    - jaren
+    - maanden
+    - nettoStroom
+    - saldoPeildatumPerIban
+    - saldoPerMaand
+    - storneringen
+    - topMerchants
+    - totaalIn
+    - totaalUit
+    - uitPerCategorie
+    type: object
+host: localhost:8000
+info:
+  contact: {}
+  description: Backend REST API for Jeffries Homeapp.
+  title: Jeffries Homeapp API
+  version: "1.0"
+paths:
+  /automations:
+    get:
+      description: Returns all home automations for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.AutomationRow'
+            type: array
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List automations
+      tags:
+      - Automations
+    post:
+      consumes:
+      - application/json
+      description: Creates a new home automation rule
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Automation Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.AutomationRow'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.AutomationRow'
+        "400":
+          description: userId required or invalid JSON
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create automation
+      tags:
+      - Automations
+  /automations/{id}:
+    delete:
+      description: Deletes an automation by its ID
+      parameters:
+      - description: Automation ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete automation
+      tags:
+      - Automations
+  /automations/{id}/toggle:
+    post:
+      description: Enables or disables an automation
+      parameters:
+      - description: Automation ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status toggled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Toggle automation
+      tags:
+      - Automations
+  /automations/group:
+    delete:
+      description: Deletes all automations within a specific group
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Group name
+        in: query
+        name: group
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: userId and group required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete automations by group
+      tags:
+      - Automations
+  /devices:
+    get:
+      description: Returns a list of all devices in the homeapp
+      parameters:
+      - default: 0
+        description: Skip count
+        in: query
+        name: skip
+        type: integer
+      - default: 100
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.DeviceResponse'
+            type: array
+        "500":
+          description: Failed to fetch devices
+          schema:
+            type: string
+      summary: List all devices
+      tags:
+      - Devices
+  /devices/{deviceID}:
+    delete:
+      description: Deletes a device by its ID
+      parameters:
+      - description: Device ID (UUID)
+        in: path
+        name: deviceID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid device ID
+          schema:
+            type: string
+        "404":
+          description: Device not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Delete a device
+      tags:
+      - Devices
+    get:
+      description: Returns a single device by its ID
+      parameters:
+      - description: Device ID (UUID)
+        in: path
+        name: deviceID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.DeviceResponse'
+        "400":
+          description: Invalid device ID
+          schema:
+            type: string
+        "404":
+          description: Device not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get a device
+      tags:
+      - Devices
+    patch:
+      consumes:
+      - application/json
+      description: Modifies an existing device
+      parameters:
+      - description: Device ID (UUID)
+        in: path
+        name: deviceID
+        required: true
+        type: string
+      - description: Updated Device Details
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.DeviceResponse'
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Device not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+        "502":
+          description: WiZ lamp unreachable
+          schema:
+            type: string
+      summary: Update a device
+      tags:
+      - Devices
+  /devices/{deviceID}/command:
+    post:
+      consumes:
+      - application/json
+      description: Controls a WiZ bulb via UDP (on/off, brightness, color, scene)
+      parameters:
+      - description: Device ID (UUID)
+        in: path
+        name: deviceID
+        required: true
+        type: string
+      - description: Command Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.DeviceCommandRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Device not found
+          schema:
+            type: string
+        "422":
+          description: Device has no IP address
+          schema:
+            type: string
+        "502":
+          description: WiZ command failed
+          schema:
+            type: string
+      summary: Send command to WiZ device
+      tags:
+      - Devices
+  /devices/register:
+    post:
+      consumes:
+      - application/json
+      description: Registers a new WiZ bulb via local UDP verification
+      parameters:
+      - description: Device Registration Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.DeviceRegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.DeviceResponse'
+        "400":
+          description: Invalid request body or missing IP/name
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+        "502":
+          description: Cannot reach WiZ bulb
+          schema:
+            type: string
+      summary: Register a WiZ device
+      tags:
+      - Devices
+  /emails:
+    get:
+      description: Returns paginated emails for the user, optionally filtered by category
+      parameters:
+      - description: User ID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - default: 50
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Offset count
+        in: query
+        name: offset
+        type: integer
+      - description: Category filter
+        in: query
+        name: categorie
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Email'
+            type: array
+        "400":
+          description: user_id is required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List emails
+      tags:
+      - Emails
+  /emails/delete:
+    patch:
+      consumes:
+      - application/json
+      description: Soft-deletes a specific email
+      parameters:
+      - description: Delete Details (user_id, gmail_id)
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid request body
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete email
+      tags:
+      - Emails
+  /emails/read:
+    patch:
+      consumes:
+      - application/json
+      description: Updates the read status of a specific email
+      parameters:
+      - description: Read Status Details (user_id, gmail_id, read)
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid request body
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Mark email read status
+      tags:
+      - Emails
+  /emails/search:
+    get:
+      description: Performs a full-text search across user emails
+      parameters:
+      - description: User ID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - default: 50
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Email'
+            type: array
+        "400":
+          description: user_id and q are required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Search emails
+      tags:
+      - Emails
+  /emails/stats:
+    get:
+      description: Returns total and unread email counts for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "400":
+          description: user_id is required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get email stats
+      tags:
+      - Emails
+  /habits:
+    get:
+      description: Returns all active habits for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Habit'
+            type: array
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List habits
+      tags:
+      - Habits
+    post:
+      consumes:
+      - application/json
+      description: Creates a new habit for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Habit Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.Habit'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Habit'
+        "400":
+          description: invalid JSON or missing userId
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create a habit
+      tags:
+      - Habits
+  /habits/{id}:
+    delete:
+      description: Permanently deletes a habit
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a habit
+      tags:
+      - Habits
+    get:
+      description: Returns a single habit by its ID
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Habit'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "404":
+          description: habit not found
+          schema:
+            type: string
+      summary: Get a habit
+      tags:
+      - Habits
+    patch:
+      consumes:
+      - application/json
+      description: Updates the details of an existing habit
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated Habit Fields
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Habit'
+        "400":
+          description: invalid JSON or ID
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update a habit
+      tags:
+      - Habits
+  /habits/{id}/archive:
+    post:
+      description: Soft-deletes a habit so it no longer appears in active views
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status archived
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Archive a habit
+      tags:
+      - Habits
+  /habits/{id}/incident:
+    post:
+      consumes:
+      - application/json
+      description: Logs a negative incident for a habit
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Incident details (trigger, notitie)
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid JSON or id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Log habit incident
+      tags:
+      - Habits
+  /habits/{id}/pause:
+    post:
+      description: Pauses or unpauses an active habit
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status toggled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Toggle pause habit
+      tags:
+      - Habits
+  /habits/{id}/toggle:
+    post:
+      consumes:
+      - application/json
+      description: Creates or toggles a daily completion log for a habit
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Log details (datum, waarde, notitie)
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid JSON or id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Log habit completion
+      tags:
+      - Habits
+  /habits/badges:
+    get:
+      description: Returns earned achievements and badges
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.HabitBadge'
+            type: array
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get user badges
+      tags:
+      - Habits
+  /habits/for-date:
+    get:
+      description: Returns all active habits combined with their log status for a
+        specific date
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Date (YYYY-MM-DD)
+        in: query
+        name: datum
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get habits for date
+      tags:
+      - Habits
+  /habits/heatmap:
+    get:
+      description: Returns daily completion percentages for the last year
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - default: 365
+        description: Number of days
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get habit heatmap
+      tags:
+      - Habits
+  /habits/reorder:
+    post:
+      consumes:
+      - application/json
+      description: Bulk updates the sorting order of multiple habits
+      parameters:
+      - description: Reorder Items
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status reordered
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid JSON
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Reorder habits
+      tags:
+      - Habits
+  /habits/stats:
+    get:
+      description: Returns aggregated statistics across all habits
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get habit stats
+      tags:
+      - Habits
+  /health:
+    get:
+      description: Returns the health status of the API and database.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: status degraded
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health Check
+      tags:
+      - System
+  /laventecare/actions:
+    get:
+      description: Returns all open CRM action items
+      parameters:
+      - default: 8
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCActionItem'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Action Items
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a new CRM action item
+      parameters:
+      - description: Action Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCActionCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCActionItem'
+        "400":
+          description: Invalid request body or missing title
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Action Item
+      tags:
+      - LaventeCare
+  /laventecare/actions/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Changes the status of an action item
+      parameters:
+      - description: Action ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 'Status Details (e.g. {status: ''done''})'
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Action not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Action Status
+      tags:
+      - LaventeCare
+  /laventecare/cockpit:
+    get:
+      description: Returns the aggregated CRM dashboard data
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCCockpit'
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get LaventeCare Cockpit
+      tags:
+      - LaventeCare
+  /laventecare/documents:
+    get:
+      description: Returns all CRM documents in the catalog
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCDocument'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Documents
+      tags:
+      - LaventeCare
+  /laventecare/documents/seed:
+    post:
+      consumes:
+      - application/json
+      description: Bulk upserts knowledge documents into the catalog
+      parameters:
+      - description: Documents
+        in: body
+        name: request
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/model.LCDocument'
+          type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCSeedResult'
+        "400":
+          description: Invalid request body or empty
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Seed Documents
+      tags:
+      - LaventeCare
+  /laventecare/leads:
+    get:
+      description: Returns all active CRM leads
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCLead'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Leads
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a new CRM lead
+      parameters:
+      - description: Lead Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCLeadCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCLead'
+        "400":
+          description: Invalid request body or missing title
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Lead
+      tags:
+      - LaventeCare
+  /laventecare/leads/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: Modifies an existing CRM lead
+      parameters:
+      - description: Lead ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated Lead Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCLeadUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Lead not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Lead
+      tags:
+      - LaventeCare
+  /laventecare/leads/{id}/convert:
+    post:
+      consumes:
+      - application/json
+      description: Converts an existing CRM lead into a project
+      parameters:
+      - description: Lead ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Conversion Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCConvertLeadToProject'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCProject'
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Lead not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Convert Lead to Project
+      tags:
+      - LaventeCare
+  /laventecare/projects:
+    get:
+      description: Returns all CRM projects
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCProject'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Projects
+      tags:
+      - LaventeCare
+  /laventecare/projects/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: Modifies an existing CRM project
+      parameters:
+      - description: Project ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated Project Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCProjectUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Project not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Project
+      tags:
+      - LaventeCare
+  /laventecare/signals/convert-lead:
+    post:
+      consumes:
+      - application/json
+      description: Converts a business signal into a CRM lead
+      parameters:
+      - description: Signal Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCConvertSignalToLead'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Convert Signal to Lead
+      tags:
+      - LaventeCare
+  /loonstroken:
+    get:
+      description: Returns all payslips for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Loonstrook'
+            type: array
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List loonstroken
+      tags:
+      - Loonstroken
+  /loonstroken/import:
+    post:
+      consumes:
+      - application/json
+      description: Bulk upserts payslip data extracted from PDFs
+      parameters:
+      - description: Import payload containing UserID and Items
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.LoonstrokenImportRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.LoonstrokenImportResponse'
+        "400":
+          description: Ongeldige JSON of ontbrekende velden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Import loonstroken
+      tags:
+      - Loonstroken
+  /notes:
+    get:
+      description: Returns all notes for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Note'
+            type: array
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List notes
+      tags:
+      - Notes
+    post:
+      consumes:
+      - application/json
+      description: Creates a new note for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Note Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.noteCreateBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Note'
+        "400":
+          description: userId required or invalid JSON
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create a note
+      tags:
+      - Notes
+  /notes/{id}:
+    delete:
+      description: Permanently deletes a note by its ID
+      parameters:
+      - description: Note ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: status deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a note
+      tags:
+      - Notes
+    get:
+      description: Returns a single note by its ID
+      parameters:
+      - description: Note ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Note'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "404":
+          description: note not found
+          schema:
+            type: string
+      summary: Get a note
+      tags:
+      - Notes
+    patch:
+      consumes:
+      - application/json
+      description: Updates the details of an existing note
+      parameters:
+      - description: Note ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated Note Fields
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.noteUpdateBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Note'
+        "400":
+          description: invalid JSON or ID
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update a note
+      tags:
+      - Notes
+  /notes/{id}/backlinks:
+    get:
+      description: Returns notes that reference the given note
+      parameters:
+      - description: Note ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Note'
+            type: array
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get note backlinks
+      tags:
+      - Notes
+  /notes/search:
+    get:
+      description: Performs a full-text search across all notes for a user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - default: 20
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Note'
+            type: array
+        "400":
+          description: userId and q required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Search notes
+      tags:
+      - Notes
+  /notes/tags:
+    get:
+      description: Returns all unique tags used across a user's notes
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get all note tags
+      tags:
+      - Notes
+  /personal-events:
+    get:
+      description: Returns all personal calendar events for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.PersonalEvent'
+            type: array
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List personal events
+      tags:
+      - Personal Events
+    post:
+      consumes:
+      - application/json
+      description: Adds or updates a personal event from calendar sync
+      parameters:
+      - description: Event Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.PersonalEvent'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'ok: true'
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "400":
+          description: Ongeldige JSON of ontbrekende velden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Upsert personal event
+      tags:
+      - Personal Events
+  /personal-events/{eventID}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Updates the internal status of a personal event
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Event ID
+        in: path
+        name: eventID
+        required: true
+        type: string
+      - description: Status Details
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'ok: true'
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "400":
+          description: status verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update event status
+      tags:
+      - Personal Events
+  /personal-events/date/{date}:
+    get:
+      description: Returns personal events for a specific date
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Date (YYYY-MM-DD)
+        in: path
+        name: date
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.PersonalEvent'
+            type: array
+        "400":
+          description: userId en date verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List events by date
+      tags:
+      - Personal Events
+  /personal-events/upcoming:
+    get:
+      description: Returns the next 50 upcoming personal events
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.PersonalEvent'
+            type: array
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List upcoming events
+      tags:
+      - Personal Events
+  /privacy:
+    get:
+      description: Returns the privacy settings for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.PrivacySettings'
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get privacy settings
+      tags:
+      - Privacy
+    patch:
+      consumes:
+      - application/json
+      description: Updates the privacy settings for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Updated Privacy Settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.PrivacySettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid JSON or missing userId
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update privacy settings
+      tags:
+      - Privacy
+  /rooms:
+    get:
+      description: Returns a list of all rooms in the homeapp
+      parameters:
+      - default: 0
+        description: Skip count
+        in: query
+        name: skip
+        type: integer
+      - default: 100
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Room'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List all rooms
+      tags:
+      - Rooms
+    post:
+      consumes:
+      - application/json
+      description: Adds a new room to the homeapp
+      parameters:
+      - description: Room Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoomCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Room'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create a room
+      tags:
+      - Rooms
+  /rooms/{roomID}:
+    delete:
+      description: Deletes a room by its ID
+      parameters:
+      - description: Room ID (UUID)
+        in: path
+        name: roomID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid room ID
+          schema:
+            type: string
+        "404":
+          description: Room not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a room
+      tags:
+      - Rooms
+    get:
+      description: Returns a single room by its ID
+      parameters:
+      - description: Room ID (UUID)
+        in: path
+        name: roomID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Room'
+        "400":
+          description: Invalid room ID
+          schema:
+            type: string
+        "404":
+          description: Room not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get a room
+      tags:
+      - Rooms
+    patch:
+      consumes:
+      - application/json
+      description: Modifies an existing room
+      parameters:
+      - description: Room ID (UUID)
+        in: path
+        name: roomID
+        required: true
+        type: string
+      - description: Updated Room Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoomUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Room'
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Room not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update a room
+      tags:
+      - Rooms
+  /salary:
+    get:
+      description: Returns all salary periods for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Salary'
+            type: array
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List salary periods
+      tags:
+      - Salary
+    post:
+      consumes:
+      - application/json
+      description: Inserts or updates salary details for a specific period
+      parameters:
+      - description: Salary Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.Salary'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'ok: true'
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "400":
+          description: Ongeldige JSON of ontbrekende velden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Upsert salary period
+      tags:
+      - Salary
+  /salary/periode:
+    get:
+      description: Returns salary details for a specific period
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Period (YYYY-MM)
+        in: query
+        name: periode
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Salary'
+        "400":
+          description: userId en periode verplicht
+          schema:
+            type: string
+        "404":
+          description: Periode niet gevonden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get salary by period
+      tags:
+      - Salary
+  /scenes:
+    get:
+      description: Returns a list of all lighting scenes
+      parameters:
+      - default: 0
+        description: Skip count
+        in: query
+        name: skip
+        type: integer
+      - default: 100
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Scene'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List all scenes
+      tags:
+      - Scenes
+    post:
+      consumes:
+      - application/json
+      description: Adds a new lighting scene with preset device actions
+      parameters:
+      - description: Scene Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.SceneCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Scene'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create a scene
+      tags:
+      - Scenes
+  /scenes/{sceneID}:
+    delete:
+      description: Deletes a scene by its ID
+      parameters:
+      - description: Scene ID (UUID)
+        in: path
+        name: sceneID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid scene ID
+          schema:
+            type: string
+        "404":
+          description: Scene not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a scene
+      tags:
+      - Scenes
+    get:
+      description: Returns a single scene by its ID
+      parameters:
+      - description: Scene ID (UUID)
+        in: path
+        name: sceneID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Scene'
+        "400":
+          description: Invalid scene ID
+          schema:
+            type: string
+        "404":
+          description: Scene not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get a scene
+      tags:
+      - Scenes
+  /scenes/{sceneID}/activate:
+    post:
+      description: Triggers all lighting actions associated with the scene
+      parameters:
+      - description: Scene ID (UUID)
+        in: path
+        name: sceneID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid scene ID
+          schema:
+            type: string
+        "404":
+          description: Scene not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Activate a scene
+      tags:
+      - Scenes
+  /schedule:
+    get:
+      description: Returns all schedule events for the user
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Schedule'
+            type: array
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List all schedules
+      tags:
+      - Schedule
+  /schedule/date/{date}:
+    get:
+      description: Returns schedule events for the user on a specific date
+      parameters:
+      - description: Date (YYYY-MM-DD)
+        in: path
+        name: date
+        required: true
+        type: string
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Schedule'
+            type: array
+        "400":
+          description: userId en date verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List schedules by date
+      tags:
+      - Schedule
+  /schedule/import:
+    post:
+      consumes:
+      - application/json
+      description: Bulk upserts schedule items from an external source or frontend
+      parameters:
+      - description: Import payload containing UserID, FileName, and Rows
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Ongeldige JSON of ontbrekende velden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Import schedule data
+      tags:
+      - Schedule
+  /schedule/meta:
+    get:
+      description: Returns the latest sync metadata for the schedule
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ScheduleMeta'
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get schedule metadata
+      tags:
+      - Schedule
+  /settings/backup:
+    get:
+      description: Generates a JSON backup of all user data
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+      summary: Export user data
+      tags:
+      - Settings
+  /settings/overview:
+    get:
+      description: Returns aggregate data and statistics across all modules for the
+        settings dashboard
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get system overview
+      tags:
+      - Settings
+  /settings/telegram/status:
+    get:
+      description: Returns connection status and configuration info for the Telegram
+        bot
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Telegram client not configured
+          schema:
+            type: string
+      summary: Get Telegram bot status
+      tags:
+      - Settings
+  /sync/calendar:
+    post:
+      description: Triggers a manual sync of Google Calendar to fetch schedules and
+        personal events
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: ok, scheduleCount, personalCount, message
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Sync Calendar
+      tags:
+      - Sync
+  /sync/gmail:
+    post:
+      description: Triggers a manual sync of Gmail messages
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Sync Gmail
+      tags:
+      - Sync
+  /sync/status:
+    get:
+      description: Returns the status of calendar, personal, and gmail sync targets
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get Sync Status
+      tags:
+      - Sync
+  /transactions:
+    get:
+      description: Returns transactions for a user with extensive filtering options
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Exclude internal transactions
+        in: query
+        name: excludeIntern
+        type: boolean
+      - description: Only show reversed transactions
+        in: query
+        name: onlyStorneringen
+        type: boolean
+      - description: Transaction code
+        in: query
+        name: codeFilter
+        type: string
+      - description: IBAN filter
+        in: query
+        name: ibanFilter
+        type: string
+      - description: Category filter
+        in: query
+        name: categorieFilter
+        type: string
+      - description: Direction (in/uit)
+        in: query
+        name: richting
+        type: string
+      - description: Start date (YYYY-MM-DD)
+        in: query
+        name: datumVan
+        type: string
+      - description: End date (YYYY-MM-DD)
+        in: query
+        name: datumTot
+        type: string
+      - description: Search query
+        in: query
+        name: zoekterm
+        type: string
+      - description: Minimum amount
+        in: query
+        name: minBedrag
+        type: number
+      - description: Maximum amount
+        in: query
+        name: maxBedrag
+        type: number
+      - description: Year filter
+        in: query
+        name: jaarFilter
+        type: string
+      - default: 50
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Offset count
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.TransactionListResponse'
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List transactions
+      tags:
+      - Transactions
+  /transactions/{txID}:
+    patch:
+      consumes:
+      - application/json
+      description: Updates the category of a specific transaction
+      parameters:
+      - description: Transaction ID (UUID)
+        in: path
+        name: txID
+        required: true
+        type: string
+      - description: Category Details
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'ok: true'
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "400":
+          description: Ongeldige JSON of ID
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update transaction category
+      tags:
+      - Transactions
+  /transactions/import:
+    post:
+      consumes:
+      - application/json
+      description: Bulk imports parsed transactions from CSV
+      parameters:
+      - description: Import Details
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.TransactionImportResponse'
+        "400":
+          description: Ongeldige JSON of ontbrekende velden
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Import transactions
+      tags:
+      - Transactions
+  /transactions/stats:
+    get:
+      description: Returns aggregate statistics for the dashboard
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: IBAN filter
+        in: query
+        name: ibanFilter
+        type: string
+      - description: Year filter
+        in: query
+        name: jaarFilter
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/store.TransactionStats'
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get transaction statistics
+      tags:
+      - Transactions
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+swagger: "2.0"

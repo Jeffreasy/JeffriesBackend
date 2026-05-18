@@ -1,30 +1,13 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-.venv/
-venv/
-env/
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
 
-# Secrets — NEVER commit
+# Environment
 .env
-*.pem
-*.key
-*.crt
-secrets/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
 
 # IDE
 .vscode/
@@ -35,18 +18,10 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Docker
-*.log
+# Docker volumes
+matter-server/
 
-# Frontend (eigen repo)
-frontend/
-
-# Alembic
-backend/app/db/migrations/versions/__pycache__/
-
-# Matter Server data
-matter-server/data/
-
-# Node (GoogleScripts)
-node_modules/
+# Dependencies (not needed in Git — go mod download handles this)
+vendor/

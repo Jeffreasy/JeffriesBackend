@@ -1,0 +1,146 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
+	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+)
+
+type AutomationHandler struct{ store *store.AutomationStore }
+
+func NewAutomationHandler(s *store.AutomationStore) *AutomationHandler {
+	return &AutomationHandler{store: s}
+}
+
+// List returns all automations for a user.
+// @Summary List automations
+// @Description Returns all home automations for the user
+// @Tags Automations
+// @Produce json
+// @Param userId query string true "User ID"
+// @Success 200 {array} model.AutomationRow
+// @Failure 400 {string} string "userId required"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations [get]
+func (h *AutomationHandler) List(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	autos, err := h.store.List(r.Context(), userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, autos)
+}
+
+// Create adds a new automation.
+// @Summary Create automation
+// @Description Creates a new home automation rule
+// @Tags Automations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param userId query string true "User ID"
+// @Param request body model.AutomationRow true "Automation Details"
+// @Success 201 {object} model.AutomationRow
+// @Failure 400 {string} string "userId required or invalid JSON"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations [post]
+func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	var body model.AutomationRow
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		Error(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	body.UserID = userID
+	created, err := h.store.Create(r.Context(), body)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, created)
+}
+
+// Toggle flips the enabled flag.
+// @Summary Toggle automation
+// @Description Enables or disables an automation
+// @Tags Automations
+// @Security ApiKeyAuth
+// @Param id path string true "Automation ID (UUID)"
+// @Success 200 {object} map[string]string "status toggled"
+// @Failure 400 {string} string "invalid id"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations/{id}/toggle [post]
+func (h *AutomationHandler) Toggle(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.store.Toggle(r.Context(), id); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "toggled"})
+}
+
+// Delete removes an automation.
+// @Summary Delete automation
+// @Description Deletes an automation by its ID
+// @Tags Automations
+// @Security ApiKeyAuth
+// @Param id path string true "Automation ID (UUID)"
+// @Success 200 {object} map[string]string "status deleted"
+// @Failure 400 {string} string "invalid id"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations/{id} [delete]
+func (h *AutomationHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.store.Delete(r.Context(), id); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// DeleteByGroup removes all automations for a user's group.
+// @Summary Delete automations by group
+// @Description Deletes all automations within a specific group
+// @Tags Automations
+// @Security ApiKeyAuth
+// @Param userId query string true "User ID"
+// @Param group query string true "Group name"
+// @Success 200 {object} map[string]string "status deleted"
+// @Failure 400 {string} string "userId and group required"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /automations/group [delete]
+func (h *AutomationHandler) DeleteByGroup(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	group := r.URL.Query().Get("group")
+	if userID == "" || group == "" {
+		Error(w, http.StatusBadRequest, "userId and group required")
+		return
+	}
+	if err := h.store.DeleteByGroup(r.Context(), userID, group); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}

@@ -1,12 +1,11 @@
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Homeapp Docker Compose
+# Homeapp Docker Compose (Go Backend)
 #
 # Services:
-#   api              → FastAPI REST backend (Render-ready, geen engine)
+#   api              → Go REST backend (Render-ready, geen engine)
 #   automation-engine → WiZ automation scheduler (LOCAL ONLY, nooit Render)
 #   postgres         → PostgreSQL database
-#   redis            → Redis pub/sub & caching
 #   matter-server    → Matter/Thread controller (optioneel)
 #
 # Windows Docker Desktop note:
@@ -57,22 +56,7 @@ services:
     networks:
       - homeapp-net
 
-  # ─── Redis (pub/sub & caching) ────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: homeapp-redis
-    restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    networks:
-      - homeapp-net
-
-  # ─── FastAPI Backend ──────────────────────────────────────────
-  # Render-ready: AUTOMATION_ENGINE_ENABLED=false zodat de engine
-  # NOOIT start op Render (WiZ is daar onbereikbaar).
+  # ─── Go API Backend ────────────────────────────────────────────
   api:
     build:
       context: ./backend
@@ -82,19 +66,13 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-homeapp}:${DB_PASSWORD:-change-me}@postgres:5432/${DB_NAME:-homeapp}
-      - MATTER_SERVER_URL=ws://matter-server:5580/ws
-      - REDIS_URL=redis://redis:6379/0
-      - AUTOMATION_ENGINE_ENABLED=false   # Engine draait als aparte service
+      - DATABASE_URL=postgres://${DB_USER:-homeapp}:${DB_PASSWORD:-change-me}@postgres:5432/${DB_NAME:-homeapp}?sslmode=disable
+      - AUTOMATION_ENGINE_ENABLED=false
     ports:
       - "${APP_PORT:-8000}:8000"
-    volumes:
-      - ./backend:/app
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -103,26 +81,25 @@ services:
   # ─── Automation Engine (LOCAL ONLY) ───────────────────────────
   # ⚠️  NOOIT deployen naar Render/cloud.
   # Draait 24/7 op Docker Desktop → bestuurt WiZ lampen via UDP.
-  # Haalt automations + rooster op van Convex (internet).
-  # restart: always → start automatisch bij Docker Desktop opstart.
+  # Haalt alle data van PostgreSQL (geen Convex meer).
   automation-engine:
     build:
       context: ./backend
       dockerfile: ../infra/docker/automation-engine/Dockerfile
     container_name: homeapp-automation-engine
-    restart: always                        # Start automatisch bij Windows boot
+    restart: always
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-homeapp}:${DB_PASSWORD:-change-me}@postgres:5432/${DB_NAME:-homeapp}
-      - AUTOMATION_ENGINE_ENABLED=true     # Expliciet aan voor lokale Docker
-      - APP_DEBUG=false                    # Geen SQL echo in engine logs
-      - TZ=Europe/Amsterdam               # Tijdzone fix: containers draaien UTC
-      - CONVEX_SITE_URL=${CONVEX_SITE_URL:-https://adorable-mink-458.eu-west-1.convex.site}
-      - HOMEAPP_GAS_SECRET=${HOMEAPP_GAS_SECRET:-homeapp-gas-sync-2026-secure}
+      - DATABASE_URL=postgres://${DB_USER:-homeapp}:${DB_PASSWORD:-change-me}@postgres:5432/${DB_NAME:-homeapp}?sslmode=disable
+      - AUTOMATION_ENGINE_ENABLED=true
+      - APP_DEBUG=false
+      - TZ=Europe/Amsterdam
       - HOMEAPP_USER_ID=${HOMEAPP_USER_ID:-user_3Ax561ZvuSkGtWpKFooeY65HNtY}
-    volumes:
-      - ./backend:/app                     # hot reload in development
+      - GROK_API_KEY=${GROK_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,7 +109,6 @@ services:
 volumes:
   matter_data:
   pg_data:
-  redis_data:
 
 networks:
   homeapp-net:

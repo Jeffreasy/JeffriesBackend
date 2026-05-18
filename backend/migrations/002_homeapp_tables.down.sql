@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS brain_preferences;
+DROP TABLE IF EXISTS privacy_settings;
+DROP TABLE IF EXISTS sync_status;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS personal_events;
+DROP TABLE IF EXISTS loonstroken;
+DROP TABLE IF EXISTS transactions;
+DROP TABLE IF EXISTS salary;
+DROP TABLE IF EXISTS schedule_meta;
+DROP TABLE IF EXISTS schedule;

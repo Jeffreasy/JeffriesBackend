@@ -1,0 +1,83 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+)
+
+type LoonstrookHandler struct{ store *store.LoonstrookStore }
+
+func NewLoonstrookHandler(s *store.LoonstrookStore) *LoonstrookHandler {
+	return &LoonstrookHandler{store: s}
+}
+
+// List returns all loonstroken.
+// @Summary List loonstroken
+// @Description Returns all payslips for the user
+// @Tags Loonstroken
+// @Produce json
+// @Param userId query string true "User ID"
+// @Success 200 {array} model.Loonstrook
+// @Failure 400 {string} string "userId verplicht"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /loonstroken [get]
+func (h *LoonstrookHandler) List(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId verplicht")
+		return
+	}
+	list, err := h.store.List(r.Context(), userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, list)
+}
+
+// LoonstrokenImportResponse represents the import result
+type LoonstrokenImportResponse struct {
+	OK       bool `json:"ok"`
+	Inserted int  `json:"inserted"`
+	Total    int  `json:"total"`
+}
+
+// LoonstrokenImportRequest represents the import payload
+type LoonstrokenImportRequest struct {
+	UserID string           `json:"userId"`
+	Items  []map[string]any `json:"items"`
+}
+
+// Import bulk upserts loonstroken.
+// @Summary Import loonstroken
+// @Description Bulk upserts payslip data extracted from PDFs
+// @Tags Loonstroken
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body LoonstrokenImportRequest true "Import payload containing UserID and Items"
+// @Success 200 {object} LoonstrokenImportResponse
+// @Failure 400 {string} string "Ongeldige JSON of ontbrekende velden"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /loonstroken/import [post]
+func (h *LoonstrookHandler) Import(w http.ResponseWriter, r *http.Request) {
+	var body LoonstrokenImportRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&body); err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		return
+	}
+	if body.UserID == "" || len(body.Items) == 0 {
+		Error(w, http.StatusBadRequest, "userId en items verplicht")
+		return
+	}
+	inserted, err := h.store.ImportBatch(r.Context(), body.UserID, body.Items)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"ok": true, "inserted": inserted, "total": len(body.Items)})
+}

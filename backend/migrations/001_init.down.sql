@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS device_events;
+DROP TABLE IF EXISTS scene_actions;
+DROP TABLE IF EXISTS scenes;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS rooms;
+DROP TABLE IF EXISTS automations;

@@ -1,25 +1,24 @@
-# ─── Automation Engine — Lightweight standalone container ─────────────────────
-# Runs 24/7 lokaal op Docker Desktop.
-# Verbindt met Convex (internet) voor automation config.
-# Bestuurt WiZ lampen via unicast UDP over het lokale netwerk.
-# NOOIT deployen naar Render/cloud — WiZ is alleen via LAN bereikbaar.
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Automation Engine — Multi-stage Go build ─────────────────────────────────
+# Runs 24/7 locally on Docker Desktop.
+# Connects to Convex (internet) for automation config.
+# Controls WiZ bulbs via unicast UDP over the local network.
+# NEVER deploy to Render/cloud — WiZ is only reachable via LAN.
 
-FROM python:3.12-slim
+FROM golang:alpine AS builder
 
-WORKDIR /app
+WORKDIR /src
 
-# Minimale systeem-dependencies (alleen libpq voor asyncpg)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Installeer Python dependencies (zelfde requirements als de API)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Kopieer applicatie source
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /engine ./cmd/engine
 
-# Start de standalone engine (GEEN uvicorn, GEEN REST API)
-CMD ["python", "-m", "automation_engine_main"]
+# ─── Runtime ──────────────────────────────────────────────────────────────────
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=builder /engine /engine
+
+CMD ["/engine"]

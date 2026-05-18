@@ -1,17 +1,17 @@
 # Homeapp 🏠
 
-> **Lokale Matter smart home backend** voor WiZ GU10 GU10 en andere Matter-apparaten.
-> Draait volledig lokaal — geen cloud vereist.
+> **Lokale smart home backend** voor WiZ GU10 lampen.
+> Draait volledig lokaal — geen cloud vereist voor lamp control.
 
 ## Stack
 
 | Laag | Technologie |
 |---|---|
-| Matter Controller | `python-matter-server` (Docker) |
-| Backend API | Python 3.12 + FastAPI |
-| Database | PostgreSQL 16 + SQLAlchemy 2 async |
-| Scheduler | APScheduler (automatiseringen) |
-| Cache / Pub-Sub | Redis 7 |
+| Backend API | Go 1.25 + chi router |
+| Database | PostgreSQL 16 + pgx v5 |
+| Automation Engine | Go goroutines (server-side) |
+| WiZ Control | UDP (direct LAN) |
+| Convex | Cloud sync (automations, devices, telegram) |
 | Container | Docker Compose |
 
 ## Snel starten
@@ -24,38 +24,44 @@ cp .env.example .env
 docker compose up -d
 
 # 3. API docs
-open http://localhost:8000/docs
+open http://localhost:8000/api/v1/health
+```
+
+## Lokaal ontwikkelen (zonder Docker)
+
+```bash
+cd backend
+
+# API server
+go run ./cmd/api
+
+# Automation engine (apart process)
+go run ./cmd/engine
 ```
 
 ## Project structuur
 
 ```
-Homeapp/
-├── backend/                  # FastAPI applicatie
-│   ├── app/
-│   │   ├── main.py           # App factory + lifespan
-│   │   ├── api/v1/           # REST endpoints
-│   │   │   └── endpoints/    # devices, rooms, scenes, automations
-│   │   ├── core/             # config, logging, security
-│   │   ├── db/               # session, repositories, migrations
-│   │   ├── models/           # SQLAlchemy ORM models
-│   │   ├── schemas/          # Pydantic request/response schemas
-│   │   ├── services/
-│   │   │   ├── matter/       # Matter WebSocket client
-│   │   │   ├── scenes/       # Scene activation logic
-│   │   │   └── automation/   # APScheduler engine
-│   │   ├── events/           # Matter event handlers → DB/WebSocket
-│   │   └── utils/            # Helpers
-│   ├── tests/
-│   └── requirements.txt
+JeffriesBackend/
+├── backend/                    # Go module
+│   ├── cmd/
+│   │   ├── api/main.go         # REST API entrypoint
+│   │   └── engine/main.go      # Automation Engine entrypoint
+│   ├── internal/
+│   │   ├── config/             # Environment configuration
+│   │   ├── server/             # HTTP server + routes + middleware
+│   │   ├── handler/            # REST endpoint handlers
+│   │   ├── model/              # Domain structs
+│   │   ├── store/              # PostgreSQL queries (pgx)
+│   │   ├── wiz/                # WiZ UDP client
+│   │   ├── convex/             # Convex HTTP API client
+│   │   └── engine/             # Automation engine + telegram poller
+│   ├── migrations/             # SQL migration files
+│   ├── go.mod
+│   └── Makefile
 ├── infra/
-│   ├── docker/               # Dockerfiles & Postgres init
-│   └── nginx/                # Reverse proxy (productie)
-├── matter-server/data/       # Persistente Matter fabric data
-├── frontend/                 # Toekomstige frontend (React/Next.js)
-├── docs/
-│   ├── adr/                  # Architecture Decision Records
-│   └── diagrams/
+│   └── docker/                 # Dockerfiles & Postgres init
+├── GoogleScripts/              # Google Apps Script (salary sim)
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -65,17 +71,30 @@ Homeapp/
 | Methode | Route | Beschrijving |
 |---|---|---|
 | GET | `/api/v1/health` | Health check |
-| GET/POST | `/api/v1/rooms` | Kamers beheren |
-| GET | `/api/v1/devices` | Alle apparaten |
-| POST | `/api/v1/devices/commission` | Nieuw apparaat toevoegen via Matter code |
-| POST | `/api/v1/devices/{id}/command` | Apparaat besturen (dimmen, kleur, etc.) |
-| GET/POST | `/api/v1/scenes` | Lichtscènes |
+| GET/POST | `/api/v1/rooms` | Kamers beheren (PostgreSQL) |
+| GET | `/api/v1/devices` | Alle apparaten (Convex) |
+| POST | `/api/v1/devices/register` | WiZ lamp registreren |
+| POST | `/api/v1/devices/{id}/command` | Lamp besturen (UDP) |
+| GET/POST | `/api/v1/scenes` | Lichtscènes (PostgreSQL) |
 | POST | `/api/v1/scenes/{id}/activate` | Scène activeren |
-| GET/POST | `/api/v1/automations` | Automatiseringsregels |
+| * | `/api/v1/automations` | 410 Gone (via Convex) |
 
-## WiZ GU10 Matter codes
+## Build
 
-Bewaar deze codes veilig — nodig voor commissioning:
+```bash
+cd backend
+
+# Build binaries
+make build
+
+# Run tests
+make test
+
+# Static analysis
+make vet
+```
+
+## WiZ GU10 Pairing Codes
 
 | Lamp | Code |
 |---|---|
