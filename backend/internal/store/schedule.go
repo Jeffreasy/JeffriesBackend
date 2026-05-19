@@ -64,6 +64,22 @@ func (s *ScheduleStore) ListUpcoming(ctx context.Context, userID string, limit i
 	return pgx.CollectRows(rows, scanSchedule)
 }
 
+// ListRange returns diensten between startIso and eindIso.
+func (s *ScheduleStore) ListRange(ctx context.Context, userID, startIso, eindIso string) ([]model.Schedule, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, event_id, titel, start_datum::text, start_tijd,
+		        eind_datum::text, eind_tijd, werktijd, locatie, team, shift_type,
+		        prioriteit, duur, weeknr, dag, status, beschrijving, heledag
+		   FROM schedule
+		  WHERE user_id = $1 AND start_datum >= $2 AND start_datum <= $3
+		  ORDER BY start_datum, start_tijd`, userID, startIso, eindIso)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanSchedule)
+}
+
 // BulkUpsert inserts or updates diensten using ON CONFLICT.
 func (s *ScheduleStore) BulkUpsert(ctx context.Context, userID string, items []model.ScheduleImport) (int, error) {
 	tx, err := s.db.Pool.Begin(ctx)

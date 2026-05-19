@@ -158,6 +158,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	// ── ROOSTER ──────────────────────────────────────────────────────
 	case "dienstenOpvragen":
+		var args struct {
+			StartIso string `json:"startIso"`
+			EindIso  string `json:"eindIso"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err == nil && args.StartIso != "" && args.EindIso != "" {
+			events, err := e.scheduleStore.ListRange(ctx, e.userID, args.StartIso, args.EindIso)
+			return e.jsonResponse(events, err)
+		}
+		// Fallback if no date range is provided
 		events, err := e.scheduleStore.ListUpcoming(ctx, e.userID, 15)
 		return e.jsonResponse(events, err)
 
