@@ -127,6 +127,7 @@ func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
 }
 
 func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON string) string {
+	fmt.Printf("[EXECUTOR] Tool: %s, Args: %s\n", toolName, argsJSON)
 	switch toolName {
 
 	// ── EMAIL ────────────────────────────────────────────────────────
@@ -162,13 +163,31 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			StartIso string `json:"startIso"`
 			EindIso  string `json:"eindIso"`
 		}
-		if err := e.parseArgs(argsJSON, &args); err == nil && args.StartIso != "" && args.EindIso != "" {
-			events, err := e.scheduleStore.ListRange(ctx, e.userID, args.StartIso, args.EindIso)
-			return e.jsonResponse(events, err)
+		var events []model.Schedule
+		var err error
+		
+		if errParse := e.parseArgs(argsJSON, &args); errParse == nil && args.StartIso != "" && args.EindIso != "" {
+			events, err = e.scheduleStore.ListRange(ctx, e.userID, args.StartIso, args.EindIso)
+		} else {
+			// Fallback if no date range is provided
+			events, err = e.scheduleStore.ListUpcoming(ctx, e.userID, 15)
 		}
-		// Fallback if no date range is provided
-		events, err := e.scheduleStore.ListUpcoming(ctx, e.userID, 15)
-		return e.jsonResponse(events, err)
+
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		var total float64
+		for _, ev := range events {
+			if ev.Status != "VERWIJDERD" {
+				total += ev.Duur
+			}
+		}
+
+		return e.jsonResponse(map[string]any{
+			"diensten":  events,
+			"totaalUur": total,
+		}, nil)
 
 	case "contractAnalyseOpvragen":
 		return e.executeContractAnalyse(ctx)
