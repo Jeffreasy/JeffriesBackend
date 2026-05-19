@@ -69,6 +69,18 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "contractAnalyseOpvragen",
+			Description: "Haalt een slimme contractanalyse op (16 uur basis), berekent wekelijkse uren en het opgebouwde plus/min saldo.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "salarisOpvragen",
 			Description: "Haalt een samenvatting of details van de loonstroken op.",
 			Parameters: json.RawMessage(`{

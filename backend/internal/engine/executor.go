@@ -75,6 +75,49 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		b, _ := json.Marshal(events)
 		return string(b)
 
+	case "contractAnalyseOpvragen":
+		s := store.NewScheduleStore(&store.DB{Pool: e.pool})
+		events, err := s.List(ctx, e.userID)
+		if err != nil {
+			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+		}
+		
+		// Logic ported from frontend analyzeContract
+		type WeekStats struct {
+			Weeknr      string  `json:"weeknr"`
+			ActualHours float64 `json:"actualHours"`
+			Delta       float64 `json:"delta"`
+		}
+		
+		weekMap := make(map[string]float64)
+		for _, ev := range events {
+			if ev.Weeknr != "" && ev.Status != "VERWIJDERD" {
+				// Very basic weeknr parsing (in frontend we have a complex normalizer, here we just use raw or prefix)
+				weekMap[ev.Weeknr] += ev.Duur
+			}
+		}
+
+		var totalDelta float64
+		var weekly []WeekStats
+		for w, d := range weekMap {
+			delta := d - 16.0 // Hardcoded 16 hours contract
+			totalDelta += delta
+			weekly = append(weekly, WeekStats{
+				Weeknr:      w,
+				ActualHours: d,
+				Delta:       delta,
+			})
+		}
+		
+		res := map[string]interface{}{
+			"contractUren": 16,
+			"totalDelta":   totalDelta,
+			"weekly":       weekly,
+			"message":      "Analyse is berekend over alle beschikbare weken in het systeem.",
+		}
+		b, _ := json.Marshal(res)
+		return string(b)
+
 	// ── FINANCE ──────────────────────────────────────────────────────
 	case "saldoOpvragen":
 		tStore := store.NewTransactionStore(&store.DB{Pool: e.pool})

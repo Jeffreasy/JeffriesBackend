@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Jeffreasy/JeffriesBackend/backend/internal/store"
+	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
 // StartCleaner starts a background task that periodically cleans up old database logs and temp files.

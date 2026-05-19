@@ -59,6 +59,7 @@ var Policies = map[string]ToolPolicy{
 	"lampBedien":         {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: false},
 	// Schedule reads
 	"dienstenOpvragen":   {Agents: []string{"rooster", "finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"contractAnalyseOpvragen": {Agents: []string{"rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"salarisOpvragen":    {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Finance reads
 	"saldoOpvragen":      {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
