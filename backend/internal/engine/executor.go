@@ -12,15 +12,118 @@ import (
 
 // HomeBotExecutor executes AI tool calls against the PostgreSQL database.
 type HomeBotExecutor struct {
-	pool   *pgxpool.Pool
-	userID string
+	pool             *pgxpool.Pool
+	userID           string
+	emailStore       *store.EmailStore
+	scheduleStore    *store.ScheduleStore
+	transactionStore *store.TransactionStore
+	salaryStore      *store.SalaryStore
+	noteStore        *store.NoteStore
+	personalEvStore  *store.PersonalEventStore
+	habitStore       *store.HabitStore
+	laventeCareStore *store.LaventeCareStore
 }
 
 func NewHomeBotExecutor(pool *pgxpool.Pool, userID string) *HomeBotExecutor {
+	db := &store.DB{Pool: pool}
 	return &HomeBotExecutor{
-		pool:   pool,
-		userID: userID,
+		pool:             pool,
+		userID:           userID,
+		emailStore:       store.NewEmailStore(db),
+		scheduleStore:    store.NewScheduleStore(db),
+		transactionStore: store.NewTransactionStore(db),
+		salaryStore:      store.NewSalaryStore(db),
+		noteStore:        store.NewNoteStore(db),
+		personalEvStore:  store.NewPersonalEventStore(db),
+		habitStore:       store.NewHabitStore(db),
+		laventeCareStore: store.NewLaventeCareStore(db),
 	}
+}
+
+// Helpers
+func (e *HomeBotExecutor) parseArgs(argsJSON string, v any) error {
+	if err := json.Unmarshal([]byte(argsJSON), v); err != nil {
+		return fmt.Errorf("invalid arguments: %v", err)
+	}
+	return nil
+}
+
+func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+	}
+	if data == nil {
+		return `{"error": "Niet gevonden"}`
+	}
+	b, _ := json.Marshal(data)
+	return string(b)
+}
+
+func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
+	events, err := e.scheduleStore.List(ctx, e.userID)
+	if err != nil {
+		return e.jsonResponse(nil, err)
+	}
+	
+	type WeekStats struct {
+		Weeknr      string  `json:"weeknr"`
+		ActualHours float64 `json:"actualHours"`
+		Delta       float64 `json:"delta"`
+	}
+	
+	type MonthData struct {
+		Hours  float64
+		Shifts int
+	}
+	
+	weekMap := make(map[string]float64)
+	monthMap := make(map[string]*MonthData)
+
+	for _, ev := range events {
+		if ev.Status != "VERWIJDERD" {
+			if ev.Weeknr != "" {
+				weekMap[ev.Weeknr] += ev.Duur
+			}
+			if len(ev.StartDatum) >= 7 {
+				month := ev.StartDatum[:7]
+				if _, ok := monthMap[month]; !ok {
+					monthMap[month] = &MonthData{}
+				}
+				monthMap[month].Hours += ev.Duur
+				monthMap[month].Shifts++
+			}
+		}
+	}
+
+	var totalDelta float64
+	var weekly []WeekStats
+	for w, d := range weekMap {
+		delta := d - 16.0 // Hardcoded 16 hours contract
+		totalDelta += delta
+		weekly = append(weekly, WeekStats{
+			Weeknr:      w,
+			ActualHours: d,
+			Delta:       delta,
+		})
+	}
+	
+	var monthly []map[string]interface{}
+	for m, data := range monthMap {
+		monthly = append(monthly, map[string]interface{}{
+			"month":  m,
+			"hours":  data.Hours,
+			"shifts": data.Shifts,
+		})
+	}
+	
+	res := map[string]interface{}{
+		"contractUren": 16,
+		"totalDelta":   totalDelta,
+		"weekly":       weekly,
+		"monthly":      monthly,
+		"message":      "Analyse bevat wekelijkse plus/min (contract=16u) EN ruwe maandtotalen (omdat maanden geen vaste 16u-grens per week hebben). Gebruik de maand-statistieken als de gebruiker naar een maand vraagt.",
+	}
+	return e.jsonResponse(res, nil)
 }
 
 func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON string) string {
@@ -31,175 +134,72 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		var args struct {
 			EmailID string `json:"emailId"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
-		
-		emailStore := store.NewEmailStore(&store.DB{Pool: e.pool})
-		email, err := emailStore.GetByGmailID(ctx, e.userID, args.EmailID)
-		if err != nil || email == nil {
-			return `{"error": "Email niet gevonden"}`
-		}
-		emailBytes, _ := json.Marshal(email)
-		return string(emailBytes)
+		email, err := e.emailStore.GetByGmailID(ctx, e.userID, args.EmailID)
+		return e.jsonResponse(email, err)
 
 	case "zoekEmails":
 		var args struct {
 			Query string `json:"query"`
 			Limit int    `json:"limit"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
 		if args.Limit <= 0 {
 			args.Limit = 5
-		}
-		if args.Limit > 10 {
+		} else if args.Limit > 10 {
 			args.Limit = 10
 		}
-		emailStore := store.NewEmailStore(&store.DB{Pool: e.pool})
-		emails, err := emailStore.Search(ctx, e.userID, args.Query, args.Limit)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(emails)
-		return string(b)
+		emails, err := e.emailStore.Search(ctx, e.userID, args.Query, args.Limit)
+		return e.jsonResponse(emails, err)
 
 	// ── ROOSTER ──────────────────────────────────────────────────────
 	case "dienstenOpvragen":
-		s := store.NewScheduleStore(&store.DB{Pool: e.pool})
-		events, err := s.ListUpcoming(ctx, e.userID, 15)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(events)
-		return string(b)
+		events, err := e.scheduleStore.ListUpcoming(ctx, e.userID, 15)
+		return e.jsonResponse(events, err)
 
 	case "contractAnalyseOpvragen":
-		s := store.NewScheduleStore(&store.DB{Pool: e.pool})
-		events, err := s.List(ctx, e.userID)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		
-		type WeekStats struct {
-			Weeknr      string  `json:"weeknr"`
-			ActualHours float64 `json:"actualHours"`
-			Delta       float64 `json:"delta"`
-		}
-		
-		type MonthData struct {
-			Hours  float64
-			Shifts int
-		}
-		
-		weekMap := make(map[string]float64)
-		monthMap := make(map[string]*MonthData)
-
-		for _, ev := range events {
-			if ev.Status != "VERWIJDERD" {
-				if ev.Weeknr != "" {
-					weekMap[ev.Weeknr] += ev.Duur
-				}
-				if len(ev.StartDatum) >= 7 {
-					month := ev.StartDatum[:7]
-					if _, ok := monthMap[month]; !ok {
-						monthMap[month] = &MonthData{}
-					}
-					monthMap[month].Hours += ev.Duur
-					monthMap[month].Shifts++
-				}
-			}
-		}
-
-		var totalDelta float64
-		var weekly []WeekStats
-		for w, d := range weekMap {
-			delta := d - 16.0 // Hardcoded 16 hours contract
-			totalDelta += delta
-			weekly = append(weekly, WeekStats{
-				Weeknr:      w,
-				ActualHours: d,
-				Delta:       delta,
-			})
-		}
-		
-		var monthly []map[string]interface{}
-		for m, data := range monthMap {
-			monthly = append(monthly, map[string]interface{}{
-				"month":  m,
-				"hours":  data.Hours,
-				"shifts": data.Shifts,
-			})
-		}
-		
-		res := map[string]interface{}{
-			"contractUren": 16,
-			"totalDelta":   totalDelta,
-			"weekly":       weekly,
-			"monthly":      monthly,
-			"message":      "Analyse bevat wekelijkse plus/min (contract=16u) EN ruwe maandtotalen (omdat maanden geen vaste 16u-grens per week hebben). Gebruik de maand-statistieken als de gebruiker naar een maand vraagt.",
-		}
-		b, _ := json.Marshal(res)
-		return string(b)
+		return e.executeContractAnalyse(ctx)
 
 	// ── FINANCE ──────────────────────────────────────────────────────
 	case "saldoOpvragen":
-		tStore := store.NewTransactionStore(&store.DB{Pool: e.pool})
-		stats, err := tStore.GetStats(ctx, e.userID)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(stats)
-		return string(b)
+		stats, err := e.transactionStore.GetStats(ctx, e.userID)
+		return e.jsonResponse(stats, err)
 
 	case "salarisOpvragen":
-		s := store.NewSalaryStore(&store.DB{Pool: e.pool})
-		salaries, err := s.List(ctx, e.userID)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(salaries)
-		return string(b)
+		salaries, err := e.salaryStore.List(ctx, e.userID)
+		return e.jsonResponse(salaries, err)
 
 	case "transactiesZoeken":
 		var args struct {
 			Query string `json:"query"`
 			Limit int    `json:"limit"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
 		if args.Limit <= 0 {
 			args.Limit = 10
-		}
-		if args.Limit > 20 {
+		} else if args.Limit > 20 {
 			args.Limit = 20
 		}
-		tStore := store.NewTransactionStore(&store.DB{Pool: e.pool})
 		filter := store.TransactionFilter{Zoekterm: args.Query, Limit: args.Limit}
-		txs, _, err := tStore.ListFiltered(ctx, e.userID, filter)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(txs)
-		return string(b)
+		txs, _, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
+		return e.jsonResponse(txs, err)
 
 	// ── NOTITIES ─────────────────────────────────────────────────────
 	case "notitiesZoeken":
 		var args struct {
 			Query string `json:"query"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
-		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
-		notes, err := nStore.Search(ctx, e.userID, args.Query, 5) // Hard cap op 5
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(notes)
-		return string(b)
+		notes, err := e.noteStore.Search(ctx, e.userID, args.Query, 5) // Hard cap op 5
+		return e.jsonResponse(notes, err)
 
 	case "notitieAanmaken":
 		var args struct {
@@ -207,64 +207,43 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Inhoud string   `json:"inhoud"`
 			Tags   []string `json:"tags"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
-		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
-		n, err := nStore.Create(ctx, e.userID, model.Note{
+		n, err := e.noteStore.Create(ctx, e.userID, model.Note{
 			Titel:  &args.Titel,
 			Inhoud: args.Inhoud,
 			Tags:   args.Tags,
 		})
 		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+			return e.jsonResponse(nil, err)
 		}
 		return fmt.Sprintf(`{"success": true, "note_id": "%s"}`, n.ID)
 
 	// ── AGENDA ───────────────────────────────────────────────────────
 	case "afsprakenOpvragen":
-		pStore := store.NewPersonalEventStore(&store.DB{Pool: e.pool})
-		events, err := pStore.ListUpcoming(ctx, e.userID, 10) // MVP limit
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(events)
-		return string(b)
+		events, err := e.personalEvStore.ListUpcoming(ctx, e.userID, 10) // MVP limit
+		return e.jsonResponse(events, err)
 
 	// ── HABITS ───────────────────────────────────────────────────────
 	case "habitsOverzicht":
-		hStore := store.NewHabitStore(&store.DB{Pool: e.pool})
-		habits, err := hStore.List(ctx, e.userID)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(habits)
-		return string(b)
+		habits, err := e.habitStore.List(ctx, e.userID)
+		return e.jsonResponse(habits, err)
 
 	// ── LAVENTECARE ──────────────────────────────────────────────────
 	case "laventecareCockpit":
-		lcStore := store.NewLaventeCareStore(&store.DB{Pool: e.pool})
-		cockpit, err := lcStore.GetCockpit(ctx, e.userID)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(cockpit)
-		return string(b)
+		cockpit, err := e.laventeCareStore.GetCockpit(ctx, e.userID)
+		return e.jsonResponse(cockpit, err)
 
 	case "laventecareKennisZoeken":
 		var args struct {
 			Query string `json:"query"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Invalid arguments: %v"}`, err)
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
 		}
-		lcStore := store.NewLaventeCareStore(&store.DB{Pool: e.pool})
-		docs, err := lcStore.SearchDocuments(ctx, e.userID, args.Query, 5)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
-		}
-		b, _ := json.Marshal(docs)
-		return string(b)
+		docs, err := e.laventeCareStore.SearchDocuments(ctx, e.userID, args.Query, 5)
+		return e.jsonResponse(docs, err)
 
 	// ── SMART HOME ───────────────────────────────────────────────────
 	case "lampBedien":
