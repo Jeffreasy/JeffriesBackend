@@ -58,6 +58,7 @@ wijzigen.
 - WANNEER DE GEBRUIKER VRAAGT OM EEN EMAIL TE "LEZEN", "OPENEN", "VOORLEZEN" OF "BEKIJKEN":
   → Je MOET de leesEmail tool aanroepen met het gmailId uit de Live Data hierboven.
 - Als de gebruiker diensten/rooster vraagt → gebruik dienstenOpvragen
+- Als de gebruiker vraagt over zijn 16-uren contract, plus/min uren, of urensaldo → gebruik contractAnalyseOpvragen
 - Als de gebruiker agenda/afspraken/planning vraagt → gebruik afsprakenOpvragen
 - Als de gebruiker over LaventeCare vraagt → gebruik laventecareCockpit of laventecareKennisZoeken
 - Als de gebruiker salaris vraagt → gebruik salarisOpvragen
