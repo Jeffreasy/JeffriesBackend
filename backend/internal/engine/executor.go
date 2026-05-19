@@ -82,18 +82,33 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
 		}
 		
-		// Logic ported from frontend analyzeContract
 		type WeekStats struct {
 			Weeknr      string  `json:"weeknr"`
 			ActualHours float64 `json:"actualHours"`
 			Delta       float64 `json:"delta"`
 		}
 		
+		type MonthData struct {
+			Hours  float64
+			Shifts int
+		}
+		
 		weekMap := make(map[string]float64)
+		monthMap := make(map[string]*MonthData)
+
 		for _, ev := range events {
-			if ev.Weeknr != "" && ev.Status != "VERWIJDERD" {
-				// Very basic weeknr parsing (in frontend we have a complex normalizer, here we just use raw or prefix)
-				weekMap[ev.Weeknr] += ev.Duur
+			if ev.Status != "VERWIJDERD" {
+				if ev.Weeknr != "" {
+					weekMap[ev.Weeknr] += ev.Duur
+				}
+				if len(ev.StartDatum) >= 7 {
+					month := ev.StartDatum[:7]
+					if _, ok := monthMap[month]; !ok {
+						monthMap[month] = &MonthData{}
+					}
+					monthMap[month].Hours += ev.Duur
+					monthMap[month].Shifts++
+				}
 			}
 		}
 
@@ -109,11 +124,21 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			})
 		}
 		
+		var monthly []map[string]interface{}
+		for m, data := range monthMap {
+			monthly = append(monthly, map[string]interface{}{
+				"month":  m,
+				"hours":  data.Hours,
+				"shifts": data.Shifts,
+			})
+		}
+		
 		res := map[string]interface{}{
 			"contractUren": 16,
 			"totalDelta":   totalDelta,
 			"weekly":       weekly,
-			"message":      "Analyse is berekend over alle beschikbare weken in het systeem.",
+			"monthly":      monthly,
+			"message":      "Analyse bevat wekelijkse plus/min (contract=16u) EN ruwe maandtotalen (omdat maanden geen vaste 16u-grens per week hebben). Gebruik de maand-statistieken als de gebruiker naar een maand vraagt.",
 		}
 		b, _ := json.Marshal(res)
 		return string(b)
