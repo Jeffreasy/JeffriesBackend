@@ -76,7 +76,7 @@ func (e *Engine) Run(ctx context.Context) {
 	)
 
 	RegisterHomeappCrons(e.cron, e.db, CronConfig{
-		TelegramBotToken:      e.cfg.TelegramBridgeSecret,
+		TelegramBotToken:      e.cfg.TelegramBotToken,
 		TelegramChatID:        e.cfg.TelegramChatID,
 		GmailEnabled:          e.cfg.GmailEnabled,
 		GoogleCalendarEnabled: e.cfg.GoogleCalendarEnabled,

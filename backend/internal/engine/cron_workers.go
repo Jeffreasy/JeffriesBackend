@@ -14,6 +14,12 @@ import (
 
 // RegisterHomeappCrons adds all migrated Convex cron jobs to the scheduler.
 func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
+
+	s.Register(CronJob{
+		Name: "schedule-weekly-check",
+		Interval: 1 * time.Hour, // Evaluates hourly, but logic only executes on Sunday 19:00
+		RunFunc: cronScheduleWeeklyCheck(db, cfg),
+	})
 	// ── Simple DB-only crons ─────────────────────────────────────────────────
 
 	s.Register(CronJob{
