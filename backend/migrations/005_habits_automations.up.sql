@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS habit_badges (
 CREATE INDEX IF NOT EXISTS idx_habit_badges_user ON habit_badges(user_id);
 
 -- ─── Automations ─────────────────────────────────────────────────────────────
+DROP TABLE IF EXISTS automations CASCADE;
 CREATE TABLE IF NOT EXISTS automations (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id        TEXT NOT NULL,
