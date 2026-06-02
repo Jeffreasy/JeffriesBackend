@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	tg "github.com/Jeffreasy/JeffriesBackend/internal/telegram"
 	"github.com/google/uuid"
@@ -200,8 +201,20 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	case text == "/notities":
 		e.handleNotitiesDashboard(ctx, client, chatID)
 		return
+	case text == "/vandaag":
+		e.handleVandaagNotities(ctx, client, chatID)
+		return
+	case text == "/week":
+		e.handleWeekNotities(ctx, client, chatID)
+		return
+	case strings.HasPrefix(text, "/noteer "):
+		e.handleQuickNote(ctx, client, chatID, strings.TrimPrefix(text, "/noteer "))
+		return
 	case strings.HasPrefix(text, "note_read_"):
 		e.handleNoteRead(ctx, client, chatID, strings.TrimPrefix(text, "note_read_"))
+		return
+	case strings.HasPrefix(text, "note_pin_"):
+		e.handleNotePin(ctx, client, chatID, strings.TrimPrefix(text, "note_pin_"))
 		return
 	case strings.HasPrefix(text, "note_archive_"):
 		e.handleNoteArchive(ctx, client, chatID, strings.TrimPrefix(text, "note_archive_"))
@@ -457,10 +470,14 @@ func (e *Engine) handleNotitiesDashboard(ctx context.Context, client *tg.Client,
 		}
 		
 		text += fmt.Sprintf("%d. %s%s\n", i+1, pinStr, titel)
+		if len(n.Tags) > 0 {
+			text += fmt.Sprintf("   🏷️ %s\n", strings.Join(n.Tags, ", "))
+		}
 
 		row := []tg.InlineKeyboardButton{
-			{Text: fmt.Sprintf("👁️ Lees %d", i+1), CallbackData: "note_read_" + n.ID.String()},
-			{Text: fmt.Sprintf("📥 Arch. %d", i+1), CallbackData: "note_archive_" + n.ID.String()},
+			{Text: fmt.Sprintf("👁️ %d", i+1), CallbackData: "note_read_" + n.ID.String()},
+			{Text: "📌", CallbackData: "note_pin_" + n.ID.String()},
+			{Text: "📥", CallbackData: "note_archive_" + n.ID.String()},
 		}
 		keyboard = append(keyboard, row)
 	}
@@ -533,7 +550,7 @@ func buildWelcomeText() string {
 }
 
 func buildHelpText() string {
-	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain.\n\n/status — systeem health\n/brain — centrale assistent\n/lampen — lamp status\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notities\n/habits — habits\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'dim'\n🎙️ Spraakberichten worden automatisch herkend."
+	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain.\n\n/status — systeem health\n/brain — centrale assistent\n/lampen — lamp status\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notities\n/vandaag — notities van vandaag\n/week — weekoverzicht notities\n/noteer [tekst] — snelle notitie\n/habits — habits\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'dim'\n🎙️ Spraakberichten worden automatisch herkend."
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {
@@ -552,8 +569,8 @@ func buildMainMenu() tg.InlineKeyboardMarkup {
 				{Text: "📧 Inbox", CallbackData: "/email"},
 			},
 			{
-				{Text: "✅ Habits", CallbackData: "/habits"},
 				{Text: "📝 Notities", CallbackData: "/notities"},
+				{Text: "📋 Vandaag", CallbackData: "/vandaag"},
 			},
 			{
 				{Text: "💡 Lampen Uit", CallbackData: "lampen uit"},
@@ -562,6 +579,223 @@ func buildMainMenu() tg.InlineKeyboardMarkup {
 			},
 		},
 	}
+}
+
+func (e *Engine) handleVandaagNotities(ctx context.Context, client *tg.Client, chatID int64) {
+	nStore := store.NewNoteStore(e.db)
+	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		return
+	}
+
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	now := time.Now().In(loc)
+	todayStr := now.Format("2006-01-02")
+	dagNaam := dutchDayName(now.Weekday())
+	datumStr := fmt.Sprintf("%d %s", now.Day(), dutchMonthName(now.Month()))
+
+	var todayNotes []model.Note
+	for _, n := range notes {
+		if n.Aangemaakt.In(loc).Format("2006-01-02") == todayStr && !n.IsArchived {
+			todayNotes = append(todayNotes, n)
+		}
+	}
+
+	text := fmt.Sprintf("📝 Vandaag — %s %s\n\n", dagNaam, datumStr)
+
+	if len(todayNotes) == 0 {
+		text += "Nog geen notities vandaag.\nGebruik /noteer [tekst] of stuur een spraakbericht.\n"
+	} else {
+		for i, n := range todayNotes {
+			titel := "Naamloze notitie"
+			if n.Titel != nil && *n.Titel != "" {
+				titel = *n.Titel
+			}
+			pinStr := ""
+			if n.IsPinned {
+				pinStr = "📌 "
+			}
+			tijdStr := n.Aangemaakt.In(loc).Format("15:04")
+			text += fmt.Sprintf("%d. %s%s  (%s)\n", i+1, pinStr, titel, tijdStr)
+
+			// Preview first line
+			preview := strings.SplitN(n.Inhoud, "\n", 2)[0]
+			if len(preview) > 60 {
+				preview = preview[:57] + "..."
+			}
+			if preview != "" && preview != titel {
+				text += fmt.Sprintf("   %s\n", preview)
+			}
+
+			if len(n.Tags) > 0 {
+				text += fmt.Sprintf("   🏷️ %s\n", strings.Join(n.Tags, ", "))
+			}
+			text += "\n"
+		}
+	}
+
+	text += "━━━━━━━━━━━━━━━━━━━━━"
+
+	keyboard := tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "📋 Alle notities", CallbackData: "/notities"},
+				{Text: "📅 Week overzicht", CallbackData: "/week"},
+			},
+		},
+	}
+	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+}
+
+func (e *Engine) handleWeekNotities(ctx context.Context, client *tg.Client, chatID int64) {
+	nStore := store.NewNoteStore(e.db)
+	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		return
+	}
+
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	now := time.Now().In(loc)
+
+	// Find Monday of current week
+	weekday := now.Weekday()
+	if weekday == time.Sunday {
+		weekday = 7
+	}
+	monday := now.AddDate(0, 0, -int(weekday-time.Monday))
+	monday = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, loc)
+
+	_, weekNr := monday.ISOWeek()
+	sundayDate := monday.AddDate(0, 0, 6)
+
+	text := fmt.Sprintf("📅 Week %d — %d %s – %d %s\n\n",
+		weekNr,
+		monday.Day(), dutchMonthName(monday.Month()),
+		sundayDate.Day(), dutchMonthName(sundayDate.Month()))
+
+	totalWeek := 0
+	for i := 0; i < 7; i++ {
+		day := monday.AddDate(0, 0, i)
+		dayStr := day.Format("2006-01-02")
+		dagNaam := dutchDayShort(day.Weekday())
+		datumStr := fmt.Sprintf("%d %s", day.Day(), dutchMonthName(day.Month()))
+
+		count := 0
+		for _, n := range notes {
+			if !n.IsArchived && n.Aangemaakt.In(loc).Format("2006-01-02") == dayStr {
+				count++
+			}
+		}
+		totalWeek += count
+
+		indicator := "📋"
+		if dayStr == now.Format("2006-01-02") {
+			indicator = "📍"
+		}
+		countStr := fmt.Sprintf("%d notitie", count)
+		if count != 1 {
+			countStr += "s"
+		}
+		text += fmt.Sprintf("%s %s %s — %s\n", indicator, dagNaam, datumStr, countStr)
+	}
+
+	text += fmt.Sprintf("\nTotaal: %d notities deze week\n", totalWeek)
+	text += "━━━━━━━━━━━━━━━━━━━━━"
+
+	keyboard := tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "📝 Vandaag", CallbackData: "/vandaag"},
+				{Text: "📋 Alle notities", CallbackData: "/notities"},
+			},
+		},
+	}
+	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+}
+
+func (e *Engine) handleQuickNote(ctx context.Context, client *tg.Client, chatID int64, text string) {
+	if strings.TrimSpace(text) == "" {
+		_ = client.SendMessage(chatID, "Gebruik: /noteer [jouw notitie tekst]")
+		return
+	}
+
+	nStore := store.NewNoteStore(e.db)
+	titel := text
+	if len(titel) > 80 {
+		titel = titel[:77] + "..."
+	}
+	n, err := nStore.Create(ctx, e.cfg.HomeappUserID, model.Note{
+		Titel:  &titel,
+		Inhoud: text,
+	})
+	if err != nil {
+		_ = client.SendMessage(chatID, fmt.Sprintf("Fout: %s", err.Error()))
+		return
+	}
+
+	reply := fmt.Sprintf("✅ Notitie opgeslagen!\n📝 \"%s\"", titel)
+	
+	chatStore := store.NewChatStore(e.db.Pool)
+	agentID := "notes"
+	_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+	
+	keyboard := tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "👁️ Lees", CallbackData: "note_read_" + n.ID.String()},
+				{Text: "📌 Pin", CallbackData: "note_pin_" + n.ID.String()},
+				{Text: "📥 Archiveer", CallbackData: "note_archive_" + n.ID.String()},
+			},
+		},
+	}
+	_ = client.SendMessageWithKeyboard(chatID, reply, keyboard)
+}
+
+func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+	id, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		return
+	}
+	nStore := store.NewNoteStore(e.db)
+	
+	note, err := nStore.Get(ctx, id)
+	if err != nil {
+		_ = client.SendMessage(chatID, "Notitie niet gevonden.")
+		return
+	}
+	
+	newPinned := !note.IsPinned
+	_, err = nStore.Update(ctx, id, map[string]any{"is_pinned": newPinned})
+	if err != nil {
+		_ = client.SendMessage(chatID, "Fout bij pinnen.")
+		return
+	}
+	
+	if newPinned {
+		_ = client.SendMessage(chatID, "📌 Notitie vastgezet.")
+	} else {
+		_ = client.SendMessage(chatID, "📌 Pin verwijderd.")
+	}
+	// Refresh dashboard
+	e.handleNotitiesDashboard(ctx, client, chatID)
+}
+
+func dutchDayName(d time.Weekday) string {
+	names := [...]string{"zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"}
+	return names[d]
+}
+
+func dutchDayShort(d time.Weekday) string {
+	names := [...]string{"Zo", "Ma", "Di", "Wo", "Do", "Vr", "Za"}
+	return names[d]
+}
+
+func dutchMonthName(m time.Month) string {
+	names := [...]string{"", "jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"}
+	return names[m]
 }
 
 // noopExecutor is a placeholder until tool execution is wired.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
@@ -247,6 +248,23 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		return fmt.Sprintf(`{"success": true, "note_id": "%s"}`, n.ID)
+
+	case "notitiesVandaag":
+		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
+		notes, err := nStore.List(ctx, e.userID)
+		if err != nil {
+			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+		}
+		loc, _ := time.LoadLocation("Europe/Amsterdam")
+		todayStr := time.Now().In(loc).Format("2006-01-02")
+		var todayNotes []model.Note
+		for _, n := range notes {
+			if !n.IsArchived && n.Aangemaakt.In(loc).Format("2006-01-02") == todayStr {
+				todayNotes = append(todayNotes, n)
+			}
+		}
+		b, _ := json.Marshal(todayNotes)
+		return string(b)
 
 	// ── AGENDA ───────────────────────────────────────────────────────
 	case "afsprakenOpvragen":

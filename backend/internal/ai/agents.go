@@ -26,7 +26,7 @@ var Registry = []Agent{
 	{ID: "finance", Naam: "Finance", Emoji: "💰", Beschrijving: "Salaris, transacties, uitgaven en budget analyse.", Capabilities: []string{"Saldo opvragen", "Transacties zoeken", "Uitgaven overzicht", "Categoriseren"}},
 	{ID: "automations", Naam: "Automations", Emoji: "⚙️", Beschrijving: "Systeem status en automations overzicht.", Capabilities: []string{"Sync health", "Automation status"}},
 	{ID: "email", Naam: "Email", Emoji: "📧", Beschrijving: "Gmail inbox beheren — lezen, zoeken, verwijderen, versturen.", Capabilities: []string{"Email lezen", "Email zoeken", "Email versturen", "Inbox opruimen"}},
-	{ID: "notes", Naam: "Notities", Emoji: "📝", Beschrijving: "Notities aanmaken, zoeken, pinnen en archiveren.", Capabilities: []string{"Notitie maken", "Notities zoeken", "Pinnen", "Archiveren"}},
+	{ID: "notes", Naam: "Notities", Emoji: "📝", Beschrijving: "Dagelijks journal en knowledge base — notities aanmaken, zoeken, pinnen en archiveren.", Capabilities: []string{"Dagnotities", "Notitie maken", "Notities zoeken", "Weekoverzicht", "Pinnen", "Archiveren"}},
 	{ID: "habits", Naam: "Habits", Emoji: "🎯", Beschrijving: "Habits volgen, streaks, badges en rapportage.", Capabilities: []string{"Habit voltooien", "Streaks bekijken", "Badges", "Rapport"}},
 	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren"}},
 }
@@ -83,6 +83,7 @@ var Policies = map[string]ToolPolicy{
 	"notitieBewerken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitieArchiveren":     {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitiesOverzicht":     {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"notitiesVandaag":       {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
 	"habitAanmaken":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},

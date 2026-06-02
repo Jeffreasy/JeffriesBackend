@@ -203,6 +203,18 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "notitiesVandaag",
+			Description: "Haalt alle notities op die vandaag zijn aangemaakt of gewijzigd.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "habitsOverzicht",
 			Description: "Haalt een overzicht van actieve habits op.",
 			Parameters: json.RawMessage(`{
