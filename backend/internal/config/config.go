@@ -62,7 +62,7 @@ func Load() *Config {
 		AppEnv:       envOr("APP_ENV", "development"),
 		AppSecretKey: envOr("APP_SECRET_KEY", "change-me"),
 		AppHost:      envOr("APP_HOST", "0.0.0.0"),
-		AppPort:      envIntOr("APP_PORT", 8000),
+		AppPort:      envIntOr("APP_PORT", envIntOr("PORT", 8000)),
 		AppDebug:     envBoolOr("APP_DEBUG", true),
 
 		DatabaseURL: envOr("DATABASE_URL", "postgres://homeapp:change-me@localhost:5432/homeapp?sslmode=disable"),
