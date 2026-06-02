@@ -27,6 +27,8 @@ type Config struct {
 	TelegramBotToken        string
 	TelegramChatID          string
 	AutomationEngineEnabled bool
+	StartBackgroundEngine   bool
+	TelegramBotEnabled      bool
 	WizDeviceIPs            string
 
 	// AI APIs
@@ -74,6 +76,8 @@ func Load() *Config {
 		TelegramBotToken:        envOr("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:          envOr("TELEGRAM_CHAT_ID", ""),
 		AutomationEngineEnabled: envBoolOr("AUTOMATION_ENGINE_ENABLED", false),
+		StartBackgroundEngine:   envBoolOr("START_BACKGROUND_ENGINE", false),
+		TelegramBotEnabled:      envBoolOr("TELEGRAM_BOT_ENABLED", true),
 
 		GrokAPIKey: envOr("GROK_API_KEY", ""),
 		GroqAPIKey: envOr("GROQ_API_KEY", ""),

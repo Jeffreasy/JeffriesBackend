@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
+	"github.com/Jeffreasy/JeffriesBackend/internal/engine"
 	"github.com/Jeffreasy/JeffriesBackend/internal/server"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
@@ -34,6 +35,17 @@ func main() {
 	if err != nil {
 		slog.Error("database connection failed", "error", err)
 		os.Exit(1)
+	}
+
+	// Start background automation engine if enabled (e.g. on Render)
+	if cfg.StartBackgroundEngine {
+		slog.Info("starting background automation engine (Telegram bot + Crons)")
+		eng := engine.New(cfg, db)
+		
+		engineCtx, cancelEngine := context.WithCancel(context.Background())
+		defer cancelEngine()
+		
+		go eng.Run(engineCtx)
 	}
 
 	// Start HTTP server (blocks until shutdown)

@@ -111,7 +111,7 @@ func (e *Engine) Run(ctx context.Context) {
 		e.loopDeviceCommands(ctx)
 	}()
 
-	if e.cfg.TelegramBotToken != "" {
+	if e.cfg.TelegramBotToken != "" && e.cfg.TelegramBotEnabled {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
