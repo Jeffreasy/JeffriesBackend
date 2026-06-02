@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -98,11 +99,19 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	
+	deadline, err := parseDeadline(body.Deadline)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
+		return
+	}
+
 	n := model.Note{
 		Titel:         body.Titel,
 		Inhoud:        body.Inhoud,
 		Tags:          body.Tags,
 		Kleur:         body.Kleur,
+		Deadline:      deadline,
 		LinkedEventID: body.LinkedEventID,
 		Prioriteit:    body.Prioriteit,
 	}
@@ -172,6 +181,19 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Prioriteit != nil {
 		fields["prioriteit"] = *body.Prioriteit
+	}
+	
+	if body.Deadline != nil {
+		if *body.Deadline == "" {
+			fields["deadline"] = nil
+		} else {
+			deadline, err := parseDeadline(body.Deadline)
+			if err != nil {
+				Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
+				return
+			}
+			fields["deadline"] = deadline
+		}
 	}
 
 	if len(fields) == 0 {
@@ -289,4 +311,27 @@ func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, links)
+}
+
+func parseDeadline(deadlineStr *string) (*time.Time, error) {
+	if deadlineStr == nil || *deadlineStr == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, *deadlineStr)
+	if err == nil {
+		return &t, nil
+	}
+	t, err = time.Parse("2006-01-02T15:04:05", *deadlineStr)
+	if err == nil {
+		return &t, nil
+	}
+	t, err = time.Parse("2006-01-02T15:04", *deadlineStr)
+	if err == nil {
+		return &t, nil
+	}
+	t, err = time.Parse("2006-01-02", *deadlineStr)
+	if err == nil {
+		return &t, nil
+	}
+	return nil, err
 }
