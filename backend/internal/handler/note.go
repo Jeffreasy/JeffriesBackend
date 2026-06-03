@@ -99,7 +99,7 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	
+
 	deadline, err := parseDeadline(body.Deadline)
 	if err != nil {
 		Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
@@ -182,7 +182,14 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if body.Prioriteit != nil {
 		fields["prioriteit"] = *body.Prioriteit
 	}
-	
+	if body.LinkedEventID != nil {
+		if *body.LinkedEventID == "" {
+			fields["linked_event_id"] = nil
+		} else {
+			fields["linked_event_id"] = *body.LinkedEventID
+		}
+	}
+
 	if body.Deadline != nil {
 		if *body.Deadline == "" {
 			fields["deadline"] = nil

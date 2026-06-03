@@ -3,11 +3,14 @@ package google
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
 
 // ─── Calendar API types ──────────────────────────────────────────────────────
@@ -27,8 +30,17 @@ type calendarEvent struct {
 }
 
 type calendarDateTime struct {
-	Date     string `json:"date"`
-	DateTime string `json:"dateTime"`
+	Date     string `json:"date,omitempty"`
+	DateTime string `json:"dateTime,omitempty"`
+	TimeZone string `json:"timeZone,omitempty"`
+}
+
+type calendarEventWrite struct {
+	Summary     string           `json:"summary"`
+	Description string           `json:"description,omitempty"`
+	Location    string           `json:"location,omitempty"`
+	Start       calendarDateTime `json:"start"`
+	End         calendarDateTime `json:"end"`
 }
 
 // ScheduleDienst represents a parsed work shift ready for PostgreSQL.
@@ -216,10 +228,151 @@ func fetchCalendarEvents(ctx context.Context, client *OAuthClient, calendarID st
 	return allEvents, nil
 }
 
+// CreatePersonalEvent creates a Google Calendar event and returns the Google event id.
+func CreatePersonalEvent(ctx context.Context, client *OAuthClient, calendarID string, event model.PersonalEvent) (string, error) {
+	payload, err := personalEventPayload(event)
+	if err != nil {
+		return "", err
+	}
+
+	u := fmt.Sprintf("%s/calendars/%s/events", calendarBase, url.PathEscape(calendarID))
+	var created calendarEvent
+	if err := client.SendJSON(ctx, "POST", u, payload, &created); err != nil {
+		return "", err
+	}
+	if created.ID == "" {
+		return "", fmt.Errorf("google calendar returned empty event id")
+	}
+	return created.ID, nil
+}
+
+// UpdatePersonalEvent patches a Google Calendar event in place.
+func UpdatePersonalEvent(ctx context.Context, client *OAuthClient, calendarID, eventID string, event model.PersonalEvent) error {
+	if eventID == "" {
+		return fmt.Errorf("google event id required")
+	}
+	payload, err := personalEventPayload(event)
+	if err != nil {
+		return err
+	}
+
+	u := fmt.Sprintf("%s/calendars/%s/events/%s", calendarBase, url.PathEscape(calendarID), url.PathEscape(eventID))
+	return client.SendJSON(ctx, "PATCH", u, payload, nil)
+}
+
+// DeletePersonalEvent removes a Google Calendar event. Missing remote events are treated as already deleted.
+func DeletePersonalEvent(ctx context.Context, client *OAuthClient, calendarID, eventID string) error {
+	if eventID == "" {
+		return nil
+	}
+
+	u := fmt.Sprintf("%s/calendars/%s/events/%s", calendarBase, url.PathEscape(calendarID), url.PathEscape(eventID))
+	resp, err := client.Do(ctx, "DELETE", u, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 || resp.StatusCode == 410 {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("DELETE %s: HTTP %d — %s", u, resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 // ─── Parsing helpers ─────────────────────────────────────────────────────────
 
+func personalEventPayload(event model.PersonalEvent) (calendarEventWrite, error) {
+	payload := calendarEventWrite{
+		Summary:     event.Titel,
+		Location:    ptrValue(event.Locatie),
+		Description: ptrValue(event.Beschrijving),
+	}
+
+	if event.Heledag {
+		start := event.StartDatum
+		end := event.EindDatum
+		if end == "" || end < start {
+			end = start
+		}
+		exclusiveEnd, err := addDaysISO(end, 1)
+		if err != nil {
+			return payload, err
+		}
+		payload.Start = calendarDateTime{Date: start}
+		payload.End = calendarDateTime{Date: exclusiveEnd}
+		return payload, nil
+	}
+
+	startTime := ptrValue(event.StartTijd)
+	endTime := ptrValue(event.EindTijd)
+	if startTime == "" {
+		startTime = "09:00"
+	}
+	if endTime == "" {
+		endTime = startTime
+	}
+
+	start, err := localRFC3339(event.StartDatum, startTime)
+	if err != nil {
+		return payload, err
+	}
+	endDate := event.EindDatum
+	if endDate == "" {
+		endDate = event.StartDatum
+	}
+	end, err := localRFC3339(endDate, endTime)
+	if err != nil {
+		return payload, err
+	}
+	payload.Start = calendarDateTime{DateTime: start, TimeZone: "Europe/Amsterdam"}
+	payload.End = calendarDateTime{DateTime: end, TimeZone: "Europe/Amsterdam"}
+	return payload, nil
+}
+
+func ptrValue(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func localRFC3339(date, clock string) (string, error) {
+	t, err := time.ParseInLocation("2006-01-02 15:04", date+" "+clock, amsterdam)
+	if err != nil {
+		return "", fmt.Errorf("parse calendar time %s %s: %w", date, clock, err)
+	}
+	return t.Format(time.RFC3339), nil
+}
+
+func addDaysISO(date string, days int) (string, error) {
+	t, err := time.ParseInLocation("2006-01-02", date, amsterdam)
+	if err != nil {
+		return "", fmt.Errorf("parse calendar date %s: %w", date, err)
+	}
+	return t.AddDate(0, 0, days).Format("2006-01-02"), nil
+}
+
+func inclusiveAllDayEnd(startDt, googleEndDt time.Time) time.Time {
+	endDt := googleEndDt.AddDate(0, 0, -1)
+	if endDt.Before(startDt) {
+		return startDt
+	}
+	return endDt
+}
+
+func calendarEventEndInstant(endDt time.Time, isAllDay bool) time.Time {
+	if isAllDay {
+		return endDt.AddDate(0, 0, 1)
+	}
+	return endDt
+}
+
 func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *ScheduleDienst {
-	if ev.Start == nil {
+	if ev.Start == nil || ev.End == nil {
 		return nil
 	}
 
@@ -228,7 +381,8 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 
 	if isAllDay {
 		startDt, _ = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
-		eindDt, _ = time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		googleEndDt, _ := time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
 	} else {
 		startDt, _ = time.Parse(time.RFC3339, ev.Start.DateTime)
 		eindDt, _ = time.Parse(time.RFC3339, ev.End.DateTime)
@@ -249,9 +403,10 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 	}
 
 	status := "Opkomend"
-	if eindDt.Before(now) {
+	eventEnd := calendarEventEndInstant(eindDt, isAllDay)
+	if eventEnd.Before(now) {
 		status = "Gedraaid"
-	} else if startDt.Before(now) && eindDt.After(now) {
+	} else if startDt.Before(now) && eventEnd.After(now) {
 		status = "Bezig"
 	}
 
@@ -292,7 +447,7 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 }
 
 func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary bool, now time.Time) *PersonalEventSync {
-	if ev.Start == nil {
+	if ev.Start == nil || ev.End == nil {
 		return nil
 	}
 
@@ -301,7 +456,8 @@ func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary
 
 	if isAllDay {
 		startDt, _ = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
-		eindDt, _ = time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		googleEndDt, _ := time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
 	} else {
 		startDt, _ = time.Parse(time.RFC3339, ev.Start.DateTime)
 		eindDt, _ = time.Parse(time.RFC3339, ev.End.DateTime)
@@ -318,7 +474,7 @@ func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary
 	}
 
 	status := "Aankomend"
-	if eindDt.Before(now) {
+	if calendarEventEndInstant(eindDt, isAllDay).Before(now) {
 		status = "Voorbij"
 	}
 

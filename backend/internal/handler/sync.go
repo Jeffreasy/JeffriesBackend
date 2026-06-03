@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
@@ -40,11 +42,16 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
-	
+
 	// Start sync asynchronously to prevent timeout, or synchronously if it's fast enough.
 	// We'll do it synchronously for simplicity so frontend gets immediate response.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	pendingProcessed, pendingErr := processPendingCalendar(ctx, client, store.NewPersonalEventStore(h.db), userID)
+	if pendingErr != nil {
+		slog.Warn("pending calendar sync failed; continuing with calendar pull", "error", pendingErr)
+	}
 
 	diensten, err := google.SyncSchedule(ctx, client, userID, h.cfg.SDBCalendarID)
 	if err != nil {
@@ -85,12 +92,17 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	personalEvents, err := google.SyncPersonalEvents(ctx, client, userID, []string{"primary"}, h.cfg.SDBCalendarID)
+	calendarIDs := []string{"primary"}
+	if h.cfg.PersonalCalendarIDs != "" {
+		calendarIDs = splitCalendarIDs(h.cfg.PersonalCalendarIDs)
+	}
+
+	personalEvents, err := google.SyncPersonalEvents(ctx, client, userID, calendarIDs, h.cfg.SDBCalendarID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Personal event sync failed: "+err.Error())
 		return
 	}
-	
+
 	// Update personal events in db
 	peStore := store.NewPersonalEventStore(h.db)
 	for _, pe := range personalEvents {
@@ -99,7 +111,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		if startTijd != "" {
 			pStartTijd = &startTijd
 		}
-		
+
 		eindTijd := pe.EindTijd
 		var pEindTijd *string
 		if eindTijd != "" {
@@ -118,7 +130,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 			pBeschrijving = &beschrijving
 		}
 
-		err = peStore.Upsert(ctx, model.PersonalEvent{
+		err = peStore.UpsertSynced(ctx, model.PersonalEvent{
 			UserID:       userID,
 			EventID:      pe.EventID,
 			Titel:        pe.Titel,
@@ -137,12 +149,139 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		"scheduleCount": len(diensten),
-		"personalCount": len(personalEvents),
-		"message": "Kalender sync voltooid",
-	})
+	result := map[string]any{
+		"ok":               true,
+		"scheduleCount":    len(diensten),
+		"personalCount":    len(personalEvents),
+		"pendingProcessed": pendingProcessed,
+		"message":          "Kalender sync voltooid",
+	}
+	if pendingErr != nil {
+		result["pendingError"] = pendingErr.Error()
+	}
+	JSON(w, http.StatusOK, result)
+}
+
+func processPendingCalendar(ctx context.Context, client *google.OAuthClient, peStore *store.PersonalEventStore, userID string) (int, error) {
+	pending, err := peStore.ListPendingCalendar(ctx, userID, 50)
+	if err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	failed := 0
+	failures := []string{}
+	for _, event := range pending {
+		if !isPendingCalendarStatus(event.Status) {
+			continue
+		}
+		if err := processPendingCalendarEvent(ctx, client, peStore, event); err != nil {
+			failed++
+			failures = append(failures, fmt.Sprintf("%s: %v", event.EventID, err))
+			slog.Warn("manual pending calendar operation failed", "eventId", event.EventID, "status", event.Status, "error", err)
+			continue
+		}
+		processed++
+	}
+	if failed > 0 && processed == 0 {
+		return processed, fmt.Errorf("%d pending calendar operation(s) failed: %s", failed, strings.Join(failures, "; "))
+	}
+	return processed, nil
+}
+
+func processPendingCalendarEvent(ctx context.Context, client *google.OAuthClient, peStore *store.PersonalEventStore, event model.PersonalEvent) error {
+	calendarID, googleEventID := calendarTarget(event)
+	nextStatus := resolvedPersonalEventStatus(event)
+
+	switch event.Status {
+	case store.PersonalEventStatusPendingCreate:
+		createdID, err := google.CreatePersonalEvent(ctx, client, calendarID, event)
+		if err != nil {
+			return err
+		}
+		return peStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedCalendarEventID(calendarID, createdID), nextStatus)
+	case store.PersonalEventStatusPendingUpdate:
+		if err := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); err != nil {
+			return err
+		}
+		return peStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus)
+	case store.PersonalEventStatusPendingDelete:
+		if err := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); err != nil {
+			return err
+		}
+		return peStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted)
+	default:
+		return nil
+	}
+}
+
+func isPendingCalendarStatus(status string) bool {
+	switch status {
+	case store.PersonalEventStatusPendingCreate, store.PersonalEventStatusPendingUpdate, store.PersonalEventStatusPendingDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func calendarTarget(event model.PersonalEvent) (calendarID, googleEventID string) {
+	calendarID = strings.TrimSpace(event.Kalender)
+	if calendarID == "" || strings.EqualFold(calendarID, "Main") {
+		calendarID = "primary"
+	}
+
+	googleEventID = event.EventID
+	if calendarID != "primary" {
+		googleEventID = strings.TrimPrefix(googleEventID, calendarID+":")
+	}
+	return calendarID, googleEventID
+}
+
+func storedCalendarEventID(calendarID, googleEventID string) string {
+	if calendarID == "" || calendarID == "primary" {
+		return googleEventID
+	}
+	return calendarID + ":" + googleEventID
+}
+
+func splitCalendarIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	calendarIDs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			calendarIDs = append(calendarIDs, part)
+		}
+	}
+	if len(calendarIDs) == 0 {
+		return []string{"primary"}
+	}
+	return calendarIDs
+}
+
+func resolvedPersonalEventStatus(event model.PersonalEvent) string {
+	endDate := event.EindDatum
+	if endDate == "" {
+		endDate = event.StartDatum
+	}
+
+	endClock := "23:59"
+	if !event.Heledag && event.EindTijd != nil && *event.EindTijd != "" {
+		endClock = *event.EindTijd
+	}
+
+	loc, locErr := time.LoadLocation("Europe/Amsterdam")
+	if locErr != nil {
+		loc = time.UTC
+	}
+	end, err := time.ParseInLocation("2006-01-02 15:04", endDate+" "+endClock, loc)
+	if err != nil {
+		return store.PersonalEventStatusUpcoming
+	}
+	if end.Before(time.Now().In(loc)) {
+		return store.PersonalEventStatusPast
+	}
+	return store.PersonalEventStatusUpcoming
 }
 
 // SyncGmail triggers a manual sync of Gmail messages.
@@ -165,7 +304,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 	// Not fully implemented, placeholder response.
 	// In reality we'd do google.SyncGmail(client) and upsert to emails table.
 	JSON(w, http.StatusOK, map[string]any{
-		"ok": true,
+		"ok":      true,
 		"message": "Gmail sync functionaliteit wordt later overgezet naar Go.",
 	})
 }
@@ -181,15 +320,15 @@ func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Format(time.RFC3339)
 	JSON(w, http.StatusOK, map[string]any{
 		"schedule": map[string]any{
-			"status": "success",
+			"status":        "success",
 			"lastSuccessAt": now,
 		},
 		"personal": map[string]any{
-			"status": "success",
+			"status":        "success",
 			"lastSuccessAt": now,
 		},
 		"gmail": map[string]any{
-			"status": "pending",
+			"status":        "pending",
 			"lastSuccessAt": nil,
 		},
 	})

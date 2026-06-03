@@ -16,9 +16,9 @@ import (
 func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 
 	s.Register(CronJob{
-		Name: "schedule-weekly-check",
+		Name:     "schedule-weekly-check",
 		Interval: 1 * time.Hour, // Evaluates hourly, but logic only executes on Sunday 19:00
-		RunFunc: cronScheduleWeeklyCheck(db, cfg),
+		RunFunc:  cronScheduleWeeklyCheck(db, cfg),
 	})
 	// ── Simple DB-only crons ─────────────────────────────────────────────────
 
@@ -102,11 +102,8 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 
 		s.Register(CronJob{
 			Name:     "process-pending-calendar",
-			Interval: 1 * time.Hour,
-			RunFunc: func(ctx context.Context) error {
-				slog.Info("📅 process-pending-calendar: running (stub)")
-				return nil
-			},
+			Interval: 5 * time.Minute,
+			RunFunc:  cronPendingCalendar(oauthClient, db, cfg),
 		})
 	}
 
@@ -122,20 +119,20 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 
 // CronConfig holds external API flags and keys for cron registration.
 type CronConfig struct {
-	TelegramBotToken  string
-	TelegramChatID    string
-	GmailEnabled      bool
+	TelegramBotToken      string
+	TelegramChatID        string
+	GmailEnabled          bool
 	GoogleCalendarEnabled bool
-	TodoistEnabled    bool
-	UserID            string
+	TodoistEnabled        bool
+	UserID                string
 
-	GoogleClientID     string
-	GoogleClientSecret string
-	GoogleRefreshToken string
-	SDBCalendarID      string
+	GoogleClientID      string
+	GoogleClientSecret  string
+	GoogleRefreshToken  string
+	SDBCalendarID       string
 	PersonalCalendarIDs string
-	TodoistAPIToken    string
-	TodoistProjectID   string
+	TodoistAPIToken     string
+	TodoistProjectID    string
 }
 
 // ── Gmail sync ───────────────────────────────────────────────────────────────
@@ -291,7 +288,7 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 
 		calendarIDs := []string{"primary"}
 		if cfg.PersonalCalendarIDs != "" {
-			calendarIDs = strings.Split(cfg.PersonalCalendarIDs, ",")
+			calendarIDs = splitCalendarIDs(cfg.PersonalCalendarIDs)
 		}
 
 		events, err := google.SyncPersonalEvents(ctx, client, cfg.UserID, calendarIDs, cfg.SDBCalendarID)
@@ -321,7 +318,7 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 				Status:       e.Status,
 				Kalender:     e.Kalender,
 			}
-			err := evStore.Upsert(ctx, pe)
+			err := evStore.UpsertSynced(ctx, pe)
 			if err != nil {
 				slog.Warn("personal event upsert failed", "eventId", e.EventID, "error", err)
 				continue
@@ -330,6 +327,63 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 		}
 
 		slog.Info("📅 sync-personal-events: done", "parsed", len(events), "upserted", upserted)
+		return nil
+	}
+}
+
+func cronPendingCalendar(client *google.OAuthClient, db *store.DB, cfg CronConfig) func(ctx context.Context) error {
+	evStore := store.NewPersonalEventStore(db)
+
+	return func(ctx context.Context) error {
+		slog.Info("📅 process-pending-calendar: starting")
+
+		events, err := evStore.ListPendingCalendar(ctx, cfg.UserID, 50)
+		if err != nil {
+			return err
+		}
+
+		processed := 0
+		for _, event := range events {
+			calendarID, googleEventID := calendarTarget(event)
+			nextStatus := resolvedPersonalEventStatus(event)
+
+			switch event.Status {
+			case store.PersonalEventStatusPendingCreate:
+				createdID, err := google.CreatePersonalEvent(ctx, client, calendarID, event)
+				if err != nil {
+					slog.Warn("pending calendar create failed", "eventId", event.EventID, "error", err)
+					continue
+				}
+				storedID := storedCalendarEventID(calendarID, createdID)
+				if err := evStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedID, nextStatus); err != nil {
+					slog.Warn("pending calendar create status update failed", "eventId", event.EventID, "googleEventId", storedID, "error", err)
+					continue
+				}
+			case store.PersonalEventStatusPendingUpdate:
+				if err := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); err != nil {
+					slog.Warn("pending calendar update failed", "eventId", event.EventID, "error", err)
+					continue
+				}
+				if err := evStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus); err != nil {
+					slog.Warn("pending calendar update status failed", "eventId", event.EventID, "error", err)
+					continue
+				}
+			case store.PersonalEventStatusPendingDelete:
+				if err := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); err != nil {
+					slog.Warn("pending calendar delete failed", "eventId", event.EventID, "error", err)
+					continue
+				}
+				if err := evStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted); err != nil {
+					slog.Warn("pending calendar delete status failed", "eventId", event.EventID, "error", err)
+					continue
+				}
+			default:
+				continue
+			}
+			processed++
+		}
+
+		slog.Info("📅 process-pending-calendar: done", "pending", len(events), "processed", processed)
 		return nil
 	}
 }
@@ -409,4 +463,61 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+func calendarTarget(event model.PersonalEvent) (calendarID, googleEventID string) {
+	calendarID = strings.TrimSpace(event.Kalender)
+	if calendarID == "" || strings.EqualFold(calendarID, "Main") {
+		calendarID = "primary"
+	}
+
+	googleEventID = event.EventID
+	if calendarID != "primary" {
+		prefix := calendarID + ":"
+		googleEventID = strings.TrimPrefix(googleEventID, prefix)
+	}
+	return calendarID, googleEventID
+}
+
+func storedCalendarEventID(calendarID, googleEventID string) string {
+	if calendarID == "" || calendarID == "primary" {
+		return googleEventID
+	}
+	return calendarID + ":" + googleEventID
+}
+
+func splitCalendarIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	calendarIDs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			calendarIDs = append(calendarIDs, part)
+		}
+	}
+	if len(calendarIDs) == 0 {
+		return []string{"primary"}
+	}
+	return calendarIDs
+}
+
+func resolvedPersonalEventStatus(event model.PersonalEvent) string {
+	endDate := event.EindDatum
+	if endDate == "" {
+		endDate = event.StartDatum
+	}
+
+	endClock := "23:59"
+	if !event.Heledag && event.EindTijd != nil && *event.EindTijd != "" {
+		endClock = *event.EindTijd
+	}
+
+	end, err := time.ParseInLocation("2006-01-02 15:04", endDate+" "+endClock, amsterdam)
+	if err != nil {
+		return store.PersonalEventStatusUpcoming
+	}
+	if end.Before(time.Now().In(amsterdam)) {
+		return store.PersonalEventStatusPast
+	}
+	return store.PersonalEventStatusUpcoming
 }

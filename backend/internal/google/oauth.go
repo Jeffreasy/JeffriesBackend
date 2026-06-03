@@ -1,6 +1,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -116,4 +117,31 @@ func (c *OAuthClient) GetJSON(ctx context.Context, url string, result any) error
 	}
 
 	return json.Unmarshal(body, result)
+}
+
+// SendJSON performs an authenticated JSON request and decodes an optional JSON response.
+func (c *OAuthClient) SendJSON(ctx context.Context, method, url string, payload any, result any) error {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode request body: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+
+	resp, err := c.Do(ctx, method, url, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s %s: HTTP %d — %s", method, url, resp.StatusCode, string(respBody))
+	}
+	if result == nil || len(respBody) == 0 {
+		return nil
+	}
+	return json.Unmarshal(respBody, result)
 }

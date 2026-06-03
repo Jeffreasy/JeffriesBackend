@@ -1,19 +1,26 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/config"
+	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type PersonalEventHandler struct{ store *store.PersonalEventStore }
+type PersonalEventHandler struct {
+	store *store.PersonalEventStore
+	cfg   *config.Config
+}
 
-func NewPersonalEventHandler(s *store.PersonalEventStore) *PersonalEventHandler {
-	return &PersonalEventHandler{store: s}
+func NewPersonalEventHandler(s *store.PersonalEventStore, cfg *config.Config) *PersonalEventHandler {
+	return &PersonalEventHandler{store: s, cfg: cfg}
 }
 
 // List returns all personal events.
@@ -116,7 +123,13 @@ func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	JSON(w, http.StatusOK, map[string]bool{"ok": true})
+	result := map[string]any{"ok": true}
+	if isPendingCalendarStatus(e.Status) {
+		for key, value := range h.tryProcessPendingCalendarEventNow(r.Context(), e.UserID, e.EventID) {
+			result[key] = value
+		}
+	}
+	JSON(w, http.StatusOK, result)
 }
 
 // UpdateStatus updates the event status.
@@ -139,6 +152,10 @@ func (h *PersonalEventHandler) UpdateStatus(w http.ResponseWriter, r *http.Reque
 	var body struct {
 		Status string `json:"status"`
 	}
+	if userID == "" || eventID == "" {
+		Error(w, http.StatusBadRequest, "userId en eventID verplicht")
+		return
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Status == "" {
 		Error(w, http.StatusBadRequest, "status verplicht")
 		return
@@ -147,5 +164,47 @@ func (h *PersonalEventHandler) UpdateStatus(w http.ResponseWriter, r *http.Reque
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	JSON(w, http.StatusOK, map[string]bool{"ok": true})
+	result := map[string]any{"ok": true}
+	if isPendingCalendarStatus(body.Status) {
+		for key, value := range h.tryProcessPendingCalendarEventNow(r.Context(), userID, eventID) {
+			result[key] = value
+		}
+	}
+	JSON(w, http.StatusOK, result)
+}
+
+func (h *PersonalEventHandler) tryProcessPendingCalendarEventNow(parent context.Context, userID, eventID string) map[string]any {
+	result := map[string]any{
+		"instantSync": false,
+		"pending":     true,
+	}
+	if h.cfg == nil || h.cfg.GoogleClientID == "" || h.cfg.GoogleClientSecret == "" || h.cfg.GoogleRefreshToken == "" {
+		result["syncMessage"] = "Google Calendar sync is niet geconfigureerd; actie blijft in wachtrij."
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+
+	event, err := h.store.GetByUserEventID(ctx, userID, eventID)
+	if err != nil {
+		result["syncError"] = err.Error()
+		return result
+	}
+	if !isPendingCalendarStatus(event.Status) {
+		result["pending"] = false
+		result["syncMessage"] = "Geen pending Google Calendar actie gevonden."
+		return result
+	}
+
+	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	if err := processPendingCalendarEvent(ctx, client, h.store, event); err != nil {
+		result["syncError"] = err.Error()
+		return result
+	}
+
+	result["pendingProcessed"] = 1
+	result["instantSync"] = true
+	result["pending"] = false
+	return result
 }

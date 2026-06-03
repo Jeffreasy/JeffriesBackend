@@ -54,7 +54,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	transactionH := handler.NewTransactionHandler(store.NewTransactionStore(db))
 	salaryH := handler.NewSalaryHandler(store.NewSalaryStore(db))
 	loonstrookH := handler.NewLoonstrookHandler(store.NewLoonstrookStore(db))
-	personalEventH := handler.NewPersonalEventHandler(store.NewPersonalEventStore(db))
+	personalEventH := handler.NewPersonalEventHandler(store.NewPersonalEventStore(db), cfg)
 	emailH := handler.NewEmailHandler(store.NewEmailStore(db))
 	privacyH := handler.NewPrivacyHandler(store.NewPrivacyStore(db))
 	noteH := handler.NewNoteHandler(store.NewNoteStore(db))
