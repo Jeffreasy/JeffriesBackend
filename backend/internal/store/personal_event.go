@@ -171,18 +171,40 @@ func (s *PersonalEventStore) UpdateStatus(ctx context.Context, userID, eventID, 
 }
 
 func (s *PersonalEventStore) ReplaceEventIDAndStatus(ctx context.Context, userID, oldEventID, newEventID, status string) error {
-	tag, err := s.db.Pool.Exec(ctx,
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE personal_events
 		    SET event_id=$3, status=$4
 		  WHERE user_id=$1 AND event_id=$2`,
 		userID, oldEventID, newEventID, status)
 	if isUniqueViolation(err) {
+		_ = tx.Rollback(ctx)
 		return s.mergePendingIntoExistingEvent(ctx, userID, oldEventID, newEventID, status)
 	}
 	if err == nil && tag.RowsAffected() == 0 {
 		return fmt.Errorf("personal event not found: %s", oldEventID)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	if oldEventID != newEventID {
+		_, err = tx.Exec(ctx,
+			`UPDATE notes
+			    SET linked_event_id=$3, gewijzigd=now()
+			  WHERE user_id=$1 AND linked_event_id=$2`,
+			userID, oldEventID, newEventID)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *PersonalEventStore) mergePendingIntoExistingEvent(ctx context.Context, userID, pendingEventID, existingEventID, status string) error {
