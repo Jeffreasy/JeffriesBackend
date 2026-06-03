@@ -102,6 +102,13 @@ Important queue fields:
 
 The bridge claims work through `POST /bridge/commands/claim`. The backend still uses `FOR UPDATE SKIP LOCKED` and requeues stale `processing` commands older than two minutes.
 
+## Integration Status
+
+- `GET /settings/overview` reports integration flags from runtime config instead of assuming every integration is active.
+- `GET /settings/telegram/status` checks Telegram `getMe` and `getWebhookInfo`; Render uses long polling when no webhook URL is configured.
+- `GET /sync/status` reports real schedule meta, personal event counts/pending operations, and Gmail sync meta.
+- `POST /sync/gmail?userId=...` performs a real Gmail API sync and stores messages in PostgreSQL.
+
 ## Regenerate Swagger
 
 Run this after changing handlers or route annotations:

@@ -46,6 +46,9 @@ ENGINE_CRONS_ENABLED=true
 ENGINE_AUTOMATIONS_ENABLED=true
 ENGINE_COMMAND_POLLER_ENABLED=false
 TELEGRAM_BOT_ENABLED=true
+TELEGRAM_BOT_TOKEN=<Telegram bot token>
+TELEGRAM_CHAT_ID=<jouw Telegram chat id>
+TELEGRAM_WEBAPP_URL=https://jeffrieshomeapp.com
 DATABASE_URL=<Render internal Postgres URL>
 ```
 
@@ -88,6 +91,18 @@ node scripts/gen-gmail-token.mjs
 ```
 
 Zet de getoonde redirect URI in Google Cloud Console bij de OAuth client. Het refresh token daarna alleen in `.env` en Render env vars zetten, nooit committen.
+
+## Integratie-status
+
+De frontend kan de echte runtime-status uitlezen via:
+
+| Endpoint | Doel |
+|---|---|
+| `GET /api/v1/settings/overview` | Integratievlaggen, queue-status, modules en tellingen |
+| `GET /api/v1/settings/telegram/status` | Telegram bot/token/owner/webhook/long-polling status |
+| `GET /api/v1/sync/status` | Rooster, persoonlijke agenda en Gmail sync metadata |
+| `POST /api/v1/sync/calendar?userId=...` | Handmatige Google Calendar sync + pending afspraak push |
+| `POST /api/v1/sync/gmail?userId=...` | Handmatige Gmail sync met echte Gmail API upsert |
 
 ## Project structuur
 

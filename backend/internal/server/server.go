@@ -62,8 +62,11 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	habitH := handler.NewHabitHandler(store.NewHabitStore(db))
 	lcH := handler.NewLaventeCareHandler(store.NewLaventeCareStore(db), cfg.HomeappUserID)
 
-	telegramClient := telegram.NewClient(cfg.TelegramBotToken)
-	settingsH := handler.NewSettingsHandler(db, telegramClient)
+	var telegramClient *telegram.Client
+	if cfg.TelegramBotToken != "" {
+		telegramClient = telegram.NewClient(cfg.TelegramBotToken)
+	}
+	settingsH := handler.NewSettingsHandler(db, telegramClient, cfg)
 	syncH := handler.NewSyncHandler(db, cfg)
 
 	registerRoutes(r, cfg, healthH, roomH, deviceH, bridgeH, sceneH, autoH,

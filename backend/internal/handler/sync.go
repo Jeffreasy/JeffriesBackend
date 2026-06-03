@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -308,11 +309,68 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Not fully implemented, placeholder response.
-	// In reality we'd do google.SyncGmail(client) and upsert to emails table.
+	if !googleOAuthConfigured(h.cfg) {
+		Error(w, http.StatusServiceUnavailable, "Google OAuth credentials missing")
+		return
+	}
+
+	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	emailStore := store.NewEmailStore(h.db)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	meta, err := emailStore.GetSyncMeta(ctx, userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail sync meta failed: "+err.Error())
+		return
+	}
+
+	historyID := ""
+	if meta != nil {
+		historyID = meta.HistoryID
+	}
+
+	result, parsedEmails, newHistoryID, err := google.SyncGmail(ctx, client, userID, historyID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail sync failed: "+err.Error())
+		return
+	}
+
+	upserted, err := storeParsedEmails(ctx, emailStore, parsedEmails)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail store failed: "+err.Error())
+		return
+	}
+
+	if newHistoryID == "" && meta != nil {
+		newHistoryID = meta.HistoryID
+	}
+
+	totalSynced := len(parsedEmails)
+	var lastFullSync *time.Time
+	if meta != nil {
+		totalSynced += meta.TotalSynced
+		lastFullSync = meta.LastFullSync
+	}
+	if result.Mode == "full" {
+		now := time.Now().UTC()
+		lastFullSync = &now
+	}
+
+	if err := emailStore.UpsertSyncMeta(ctx, userID, newHistoryID, lastFullSync, totalSynced); err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail sync meta update failed: "+err.Error())
+		return
+	}
+
 	JSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": "Gmail sync functionaliteit wordt later overgezet naar Go.",
+		"ok":          true,
+		"mode":        result.Mode,
+		"synced":      result.Synced,
+		"upserted":    upserted,
+		"historyId":   newHistoryID,
+		"totalSynced": totalSynced,
+		"message":     "Gmail sync voltooid",
 	})
 }
 
@@ -324,19 +382,150 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Router /sync/status [get]
 func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
-	now := time.Now().Format(time.RFC3339)
+	ctx := r.Context()
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		userID = h.cfg.HomeappUserID
+	}
+
+	googleConfigured := googleOAuthConfigured(h.cfg)
+	scheduleMeta, _ := store.NewScheduleStore(h.db).GetMeta(ctx, userID)
+	emailMeta, _ := store.NewEmailStore(h.db).GetSyncMeta(ctx, userID)
+
+	var personalTotal, pendingPersonal int
+	var personalUpdated sql.NullTime
+	_ = h.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*),
+		        COUNT(*) FILTER (WHERE status IN ($2, $3, $4)),
+		        MAX(created_at)
+		   FROM personal_events
+		  WHERE user_id = $1`,
+		userID,
+		store.PersonalEventStatusPendingCreate,
+		store.PersonalEventStatusPendingUpdate,
+		store.PersonalEventStatusPendingDelete,
+	).Scan(&personalTotal, &pendingPersonal, &personalUpdated)
+
+	var scheduleLastSuccess any
+	var scheduleRows int
+	if scheduleMeta != nil {
+		scheduleLastSuccess = scheduleMeta.ImportedAt.Format(time.RFC3339)
+		scheduleRows = scheduleMeta.TotalRows
+	}
+
+	var gmailLastSuccess any
+	var gmailLastFull any
+	var gmailTotal int
+	var gmailHistoryID string
+	if emailMeta != nil {
+		gmailLastSuccess = emailMeta.UpdatedAt.Format(time.RFC3339)
+		if emailMeta.LastFullSync != nil {
+			gmailLastFull = emailMeta.LastFullSync.Format(time.RFC3339)
+		}
+		gmailTotal = emailMeta.TotalSynced
+		gmailHistoryID = emailMeta.HistoryID
+	}
+
+	personalLastSuccess := sqlTimeRFC3339(personalUpdated)
+
 	JSON(w, http.StatusOK, map[string]any{
+		"userId": userID,
 		"schedule": map[string]any{
-			"status":        "success",
-			"lastSuccessAt": now,
+			"status":        syncSourceStatus(h.cfg.GoogleCalendarEnabled, googleConfigured, scheduleLastSuccess),
+			"enabled":       h.cfg.GoogleCalendarEnabled,
+			"configured":    googleConfigured,
+			"lastSuccessAt": scheduleLastSuccess,
+			"totalRows":     scheduleRows,
 		},
 		"personal": map[string]any{
-			"status":        "success",
-			"lastSuccessAt": now,
+			"status":        syncSourceStatus(h.cfg.GoogleCalendarEnabled, googleConfigured, personalLastSuccess),
+			"enabled":       h.cfg.GoogleCalendarEnabled,
+			"configured":    googleConfigured,
+			"lastSuccessAt": personalLastSuccess,
+			"total":         personalTotal,
+			"pending":       pendingPersonal,
 		},
 		"gmail": map[string]any{
-			"status":        "pending",
-			"lastSuccessAt": nil,
+			"status":          syncSourceStatus(true, googleConfigured, gmailLastSuccess),
+			"enabled":         h.cfg.GmailEnabled,
+			"autoEnabled":     h.cfg.GmailEnabled,
+			"manualAvailable": googleConfigured,
+			"configured":      googleConfigured,
+			"lastSuccessAt":   gmailLastSuccess,
+			"lastFullSync":    gmailLastFull,
+			"totalSynced":     gmailTotal,
+			"historyId":       gmailHistoryID,
 		},
 	})
+}
+
+func storeParsedEmails(ctx context.Context, emailStore *store.EmailStore, parsed []google.ParsedEmail) (int, error) {
+	if len(parsed) == 0 {
+		return 0, nil
+	}
+
+	modelEmails := make([]model.Email, len(parsed))
+	for i, pe := range parsed {
+		var cc, bcc, categorie *string
+		if pe.CC != "" {
+			cc = &pe.CC
+		}
+		if pe.BCC != "" {
+			bcc = &pe.BCC
+		}
+		if pe.Categorie != "" {
+			categorie = &pe.Categorie
+		}
+
+		syncedAt, _ := time.Parse(time.RFC3339, pe.SyncedAt)
+		if syncedAt.IsZero() {
+			syncedAt = time.Now().UTC()
+		}
+
+		modelEmails[i] = model.Email{
+			UserID:        pe.UserID,
+			GmailID:       pe.GmailID,
+			ThreadID:      pe.ThreadID,
+			FromAddr:      pe.From,
+			ToAddr:        pe.To,
+			CC:            cc,
+			BCC:           bcc,
+			Subject:       pe.Subject,
+			Snippet:       pe.Snippet,
+			Datum:         pe.Datum,
+			Ontvangen:     pe.Ontvangen,
+			IsGelezen:     pe.IsGelezen,
+			IsSter:        pe.IsSter,
+			IsVerwijderd:  pe.IsVerwijderd,
+			IsDraft:       pe.IsDraft,
+			LabelIDs:      pe.LabelIDs,
+			Categorie:     categorie,
+			HeeftBijlagen: pe.HeeftBijlagen,
+			BijlagenCount: pe.BijlagenCount,
+			SearchText:    pe.SearchText,
+			SyncedAt:      syncedAt,
+		}
+	}
+
+	return emailStore.BulkUpsert(ctx, modelEmails)
+}
+
+func syncSourceStatus(enabled, configured bool, lastSuccess any) string {
+	if !enabled {
+		return "disabled"
+	}
+	if !configured {
+		return "missing_config"
+	}
+	if lastSuccess == nil {
+		return "pending"
+	}
+	return "success"
+}
+
+func sqlTimeRFC3339(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time.Format(time.RFC3339)
 }

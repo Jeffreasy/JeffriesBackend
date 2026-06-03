@@ -3,8 +3,10 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/telegram"
 )
@@ -12,11 +14,11 @@ import (
 type SettingsHandler struct {
 	db       *store.DB
 	telegram *telegram.Client
-	cfg      interface{} // We can just check existence of secrets via query if needed
+	cfg      *config.Config
 }
 
-func NewSettingsHandler(db *store.DB, telegram *telegram.Client) *SettingsHandler {
-	return &SettingsHandler{db: db, telegram: telegram}
+func NewSettingsHandler(db *store.DB, telegram *telegram.Client, cfg *config.Config) *SettingsHandler {
+	return &SettingsHandler{db: db, telegram: telegram, cfg: cfg}
 }
 
 // Overview returns a summary of the entire system state for the Settings page.
@@ -108,15 +110,32 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 			"activeHabits": activeHabits,
 		},
 		"integrations": map[string]any{
-			"backend":               true,
-			"legacyHttpSecret":      true,
-			"localBridge":           true,
-			"telegramBot":           h.telegram != nil,
-			"telegramOwner":         true,
-			"telegramWebhookSecret": true,
-			"grok":                  true,
-			"googleOAuth":           true,
-			"todoist":               true,
+			"backend":                  true,
+			"legacyHttpSecret":         configuredSecret(h.cfg.HomeappGASSecret),
+			"localBridge":              h.cfg.QueueLightCommands() && configuredSecret(h.cfg.BridgeAPIKey),
+			"telegramBot":              h.cfg.TelegramBotEnabled && h.telegram != nil,
+			"telegramOwner":            configuredValue(h.cfg.TelegramChatID),
+			"telegramWebhookSecret":    configuredSecret(h.cfg.TelegramBridgeSecret),
+			"telegramMode":             "long_polling",
+			"telegramWebApp":           configuredValue(h.cfg.TelegramWebAppURL),
+			"grok":                     configuredValue(h.cfg.GrokAPIKey),
+			"groq":                     configuredValue(h.cfg.GroqAPIKey),
+			"googleOAuth":              googleOAuthConfigured(h.cfg),
+			"googleCalendar":           googleOAuthConfigured(h.cfg),
+			"googleCalendarAutoSync":   h.cfg.GoogleCalendarEnabled && googleOAuthConfigured(h.cfg),
+			"gmail":                    googleOAuthConfigured(h.cfg),
+			"gmailAutoSync":            h.cfg.GmailEnabled && googleOAuthConfigured(h.cfg),
+			"todoist":                  h.cfg.TodoistEnabled && configuredValue(h.cfg.TodoistAPIToken),
+			"queueLightCommands":       h.cfg.QueueLightCommands(),
+			"startBackgroundEngine":    h.cfg.StartBackgroundEngine,
+			"engineCrons":              h.cfg.EngineCronsEnabled,
+			"engineAutomations":        h.cfg.EngineAutomationsEnabled,
+			"engineCommandPoller":      h.cfg.EngineCommandPollerEnabled,
+			"engineStatusPoll":         h.cfg.EngineStatusPollEnabled,
+			"bridgeStatusPoll":         h.cfg.BridgeStatusPollEnabled,
+			"googlePersonalCalendars":  configuredValue(h.cfg.PersonalCalendarIDs),
+			"sdbCalendar":              configuredValue(h.cfg.SDBCalendarID),
+			"todoistProjectConfigured": configuredValue(h.cfg.TodoistProjectID),
 		},
 		"sync": map[string]any{},
 		"bridge": map[string]any{
@@ -173,34 +192,135 @@ func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Telegram client not configured"
 // @Router /settings/telegram/status [get]
 func (h *SettingsHandler) TelegramStatus(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"ok":                       false,
+		"enabled":                  h.cfg.TelegramBotEnabled,
+		"mode":                     "long_polling",
+		"tokenConfigured":          configuredValue(h.cfg.TelegramBotToken),
+		"ownerConfigured":          configuredValue(h.cfg.TelegramChatID),
+		"ownerChatSuffix":          maskedSuffix(h.cfg.TelegramChatID, 4),
+		"webhookSecretConfigured":  configuredSecret(h.cfg.TelegramBridgeSecret),
+		"webAppUrlConfigured":      configuredValue(h.cfg.TelegramWebAppURL),
+		"webAppUrl":                h.cfg.TelegramWebAppURL,
+		"backgroundEngineEnabled":  h.cfg.StartBackgroundEngine,
+		"telegramPollerConfigured": h.cfg.StartBackgroundEngine && h.cfg.TelegramBotEnabled && configuredValue(h.cfg.TelegramBotToken),
+		"voiceConfigured":          configuredValue(h.cfg.GroqAPIKey),
+	}
+
+	if !h.cfg.TelegramBotEnabled {
+		resp["reason"] = "TELEGRAM_BOT_ENABLED=false"
+		JSON(w, http.StatusOK, resp)
+		return
+	}
+
 	if h.telegram == nil {
-		Error(w, http.StatusInternalServerError, "Telegram client not configured")
+		resp["reason"] = "TELEGRAM_BOT_TOKEN ontbreekt"
+		JSON(w, http.StatusOK, resp)
 		return
 	}
 
 	info, err := h.telegram.GetMe()
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Failed to get bot info: "+err.Error())
+		resp["reason"] = "Telegram API niet bereikbaar of token ongeldig"
+		resp["error"] = err.Error()
+		JSON(w, http.StatusOK, resp)
 		return
 	}
 
-	JSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		"bot": map[string]any{
-			"username":   info.Username,
-			"first_name": info.FirstName,
-			"id":         info.ID,
-		},
-		"ownerConfigured":         true,
-		"ownerChatSuffix":         "**345",
-		"webhookSecretConfigured": true,
-		"webhook": map[string]any{
-			"configured":         true,
-			"urlHost":            "jeffrieshomeapp.com",
-			"pendingUpdateCount": 0,
-			"lastErrorDate":      nil,
-			"lastErrorMessage":   nil,
-			"maxConnections":     40,
-		},
-	})
+	resp["ok"] = true
+	resp["bot"] = map[string]any{
+		"username":   info.Username,
+		"first_name": info.FirstName,
+		"id":         info.ID,
+	}
+
+	webhook, err := h.telegram.GetWebhookInfo()
+	if err != nil {
+		resp["webhook"] = map[string]any{
+			"configured": false,
+			"error":      err.Error(),
+		}
+		JSON(w, http.StatusOK, resp)
+		return
+	}
+
+	resp["webhook"] = map[string]any{
+		"configured":              webhook.URL != "",
+		"urlHost":                 hostFromURL(webhook.URL),
+		"pendingUpdateCount":      webhook.PendingUpdates,
+		"lastErrorDate":           telegramUnixTime(webhook.LastErrorDate),
+		"lastErrorMessage":        emptyToNil(webhook.LastErrorMessage),
+		"maxConnections":          webhook.MaxConnections,
+		"allowedUpdates":          webhook.AllowedUpdates,
+		"hasCustomCertificate":    webhook.HasCustomCert,
+		"lastSyncErrorDate":       telegramUnixTime(webhook.LastSyncErrorDate),
+		"longPollingWillBeActive": webhook.URL == "",
+	}
+
+	JSON(w, http.StatusOK, resp)
+}
+
+func configuredValue(value string) bool {
+	return strings.TrimSpace(value) != ""
+}
+
+func configuredSecret(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if strings.Contains(lower, "change-me") || strings.Contains(lower, "change_me") {
+		return false
+	}
+	switch lower {
+	case "homeapp-gas-sync-2026-secure", "homeapp-local-dev-2026-change-in-prod":
+		return false
+	default:
+		return true
+	}
+}
+
+func googleOAuthConfigured(cfg *config.Config) bool {
+	return configuredValue(cfg.GoogleClientID) &&
+		configuredValue(cfg.GoogleClientSecret) &&
+		configuredValue(cfg.GoogleRefreshToken)
+}
+
+func maskedSuffix(value string, keep int) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if keep <= 0 || len(value) <= keep {
+		return "***"
+	}
+	return "***" + value[len(value)-keep:]
+}
+
+func emptyToNil(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func telegramUnixTime(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return time.Unix(value, 0).UTC().Format(time.RFC3339)
+}
+
+func hostFromURL(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "https://") {
+		value = strings.TrimPrefix(value, "https://")
+	} else if strings.HasPrefix(value, "http://") {
+		value = strings.TrimPrefix(value, "http://")
+	}
+	return strings.Split(value, "/")[0]
 }

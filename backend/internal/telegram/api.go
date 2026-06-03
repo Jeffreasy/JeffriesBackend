@@ -181,13 +181,28 @@ func (c *Client) GetUpdates(offset int64, timeout int) ([]Update, error) {
 	raw, _ := io.ReadAll(resp.Body)
 
 	var result struct {
-		OK     bool     `json:"ok"`
-		Result []Update `json:"result"`
+		OK          bool     `json:"ok"`
+		Result      []Update `json:"result"`
+		ErrorCode   int      `json:"error_code,omitempty"`
+		Description string   `json:"description,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
+	if !result.OK {
+		return nil, fmt.Errorf("telegram getUpdates: %s", string(raw))
+	}
 	return result.Result, nil
+}
+
+// GetWebhookInfo returns current webhook/polling state from Telegram.
+func (c *Client) GetWebhookInfo() (WebhookInfo, error) {
+	raw, err := c.post("getWebhookInfo", map[string]any{})
+	if err != nil {
+		return WebhookInfo{}, err
+	}
+	var info WebhookInfo
+	return info, json.Unmarshal(raw, &info)
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -196,6 +211,18 @@ type BotInfo struct {
 	ID        int64  `json:"id"`
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
+}
+
+type WebhookInfo struct {
+	URL               string   `json:"url"`
+	HasCustomCert     bool     `json:"has_custom_certificate"`
+	PendingUpdates    int      `json:"pending_update_count"`
+	LastErrorDate     int64    `json:"last_error_date,omitempty"`
+	LastErrorMessage  string   `json:"last_error_message,omitempty"`
+	MaxConnections    int      `json:"max_connections,omitempty"`
+	AllowedUpdates    []string `json:"allowed_updates,omitempty"`
+	IPAddress         string   `json:"ip_address,omitempty"`
+	LastSyncErrorDate int64    `json:"last_synchronization_error_date,omitempty"`
 }
 
 type Update struct {
