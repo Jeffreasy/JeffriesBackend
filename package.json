@@ -1,5 +1,8 @@
 {
-  "dependencies": {
-    "pg": "^8.20.0"
+  "name": "jeffries-backend-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen:gmail-token": "node scripts/gen-gmail-token.mjs"
   }
 }

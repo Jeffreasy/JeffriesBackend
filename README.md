@@ -80,6 +80,16 @@ go run ./cmd/api
 go run ./cmd/engine
 ```
 
+## Google OAuth refresh token
+
+Voor Gmail/Calendar sync heeft de backend `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` en `GOOGLE_REFRESH_TOKEN` nodig. Genereer een nieuw refresh token vanuit de repo-root:
+
+```bash
+node scripts/gen-gmail-token.mjs
+```
+
+Zet de getoonde redirect URI in Google Cloud Console bij de OAuth client. Het refresh token daarna alleen in `.env` en Render env vars zetten, nooit committen.
+
 ## Project structuur
 
 ```
