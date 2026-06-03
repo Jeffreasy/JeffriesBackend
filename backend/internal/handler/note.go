@@ -79,6 +79,7 @@ type noteCreateBody struct {
 	Deadline      *string  `json:"deadline"`
 	LinkedEventID *string  `json:"linkedEventId"`
 	Prioriteit    *string  `json:"prioriteit"`
+	Symbol        *string  `json:"symbol"`
 }
 
 // Create adds a new note.
@@ -120,6 +121,7 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Deadline:      deadline,
 		LinkedEventID: body.LinkedEventID,
 		Prioriteit:    body.Prioriteit,
+		Symbol:        body.Symbol,
 	}
 	created, err := h.store.Create(r.Context(), userID, n)
 	if err != nil {
@@ -139,6 +141,7 @@ type noteUpdateBody struct {
 	Deadline      *string  `json:"deadline"`
 	LinkedEventID *string  `json:"linkedEventId"`
 	Prioriteit    *string  `json:"prioriteit"`
+	Symbol        *string  `json:"symbol"`
 }
 
 // Update patches a note.
@@ -192,6 +195,13 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Prioriteit != nil {
 		fields["prioriteit"] = *body.Prioriteit
+	}
+	if body.Symbol != nil {
+		if *body.Symbol == "" {
+			fields["symbol"] = nil
+		} else {
+			fields["symbol"] = *body.Symbol
+		}
 	}
 	if body.LinkedEventID != nil {
 		if *body.LinkedEventID == "" {

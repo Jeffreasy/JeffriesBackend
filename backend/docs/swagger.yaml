@@ -53,6 +53,8 @@ definitions:
         type: string
       prioriteit:
         type: string
+      symbol:
+        type: string
       tags:
         items:
           type: string
@@ -75,6 +77,8 @@ definitions:
       linkedEventId:
         type: string
       prioriteit:
+        type: string
+      symbol:
         type: string
       tags:
         items:
@@ -127,11 +131,18 @@ definitions:
     type: object
   model.DeviceRegisterRequest:
     properties:
+      current_state:
+        additionalProperties: {}
+        type: object
       ip_address:
         type: string
       name:
         type: string
       room_id:
+        type: string
+      skip_probe:
+        type: boolean
+      status:
         type: string
     type: object
   model.DeviceResponse:
@@ -805,6 +816,8 @@ definitions:
         type: string
       prioriteit:
         type: string
+      symbol:
+        type: string
       tags:
         items:
           type: string
@@ -841,6 +854,8 @@ definitions:
       start_tijd:
         type: string
       status:
+        type: string
+      symbol:
         type: string
       titel:
         type: string

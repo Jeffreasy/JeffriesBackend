@@ -10,25 +10,25 @@ import (
 // ─── Schedule (Werkdiensten) ─────────────────────────────────────────────────
 
 type Schedule struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	UserID      string    `json:"user_id" db:"user_id"`
-	EventID     string    `json:"event_id" db:"event_id"`
-	Titel       string    `json:"titel" db:"titel"`
-	StartDatum  string    `json:"start_datum" db:"start_datum"`
-	StartTijd   string    `json:"start_tijd" db:"start_tijd"`
-	EindDatum   string    `json:"eind_datum" db:"eind_datum"`
-	EindTijd    string    `json:"eind_tijd" db:"eind_tijd"`
-	Werktijd    string    `json:"werktijd" db:"werktijd"`
-	Locatie     string    `json:"locatie" db:"locatie"`
-	Team        string    `json:"team" db:"team"`
-	ShiftType   string    `json:"shift_type" db:"shift_type"`
-	Prioriteit  int       `json:"prioriteit" db:"prioriteit"`
-	Duur        float64   `json:"duur" db:"duur"`
-	Weeknr      string    `json:"weeknr" db:"weeknr"`
-	Dag         string    `json:"dag" db:"dag"`
-	Status      string    `json:"status" db:"status"`
-	Beschrijving string   `json:"beschrijving" db:"beschrijving"`
-	Heledag     bool      `json:"heledag" db:"heledag"`
+	ID           uuid.UUID `json:"id" db:"id"`
+	UserID       string    `json:"user_id" db:"user_id"`
+	EventID      string    `json:"event_id" db:"event_id"`
+	Titel        string    `json:"titel" db:"titel"`
+	StartDatum   string    `json:"start_datum" db:"start_datum"`
+	StartTijd    string    `json:"start_tijd" db:"start_tijd"`
+	EindDatum    string    `json:"eind_datum" db:"eind_datum"`
+	EindTijd     string    `json:"eind_tijd" db:"eind_tijd"`
+	Werktijd     string    `json:"werktijd" db:"werktijd"`
+	Locatie      string    `json:"locatie" db:"locatie"`
+	Team         string    `json:"team" db:"team"`
+	ShiftType    string    `json:"shift_type" db:"shift_type"`
+	Prioriteit   int       `json:"prioriteit" db:"prioriteit"`
+	Duur         float64   `json:"duur" db:"duur"`
+	Weeknr       string    `json:"weeknr" db:"weeknr"`
+	Dag          string    `json:"dag" db:"dag"`
+	Status       string    `json:"status" db:"status"`
+	Beschrijving string    `json:"beschrijving" db:"beschrijving"`
+	Heledag      bool      `json:"heledag" db:"heledag"`
 }
 
 type ScheduleMeta struct {
@@ -62,132 +62,133 @@ type ScheduleImport struct {
 // ─── Loonstrook ──────────────────────────────────────────────────────────────
 
 type Loonstrook struct {
-	ID                string          `json:"id" db:"id"`
-	UserID            string          `json:"user_id" db:"user_id"`
-	Jaar              int             `json:"jaar" db:"jaar"`
-	Periode           int             `json:"periode" db:"periode"`
-	PeriodeLabel      string          `json:"periode_label" db:"periode_label"`
-	Type              string          `json:"type" db:"type"`
-	Netto             float64         `json:"netto" db:"netto"`
-	BrutoBetaling     float64         `json:"bruto_betaling" db:"bruto_betaling"`
-	BrutoInhouding    float64         `json:"bruto_inhouding" db:"bruto_inhouding"`
-	SalarisBasis      float64         `json:"salaris_basis" db:"salaris_basis"`
-	OrtTotaal         float64         `json:"ort_totaal" db:"ort_totaal"`
-	OrtDetail         json.RawMessage `json:"ort_detail" db:"ort_detail" swaggertype:"object"`
-	AmtZeerintensief  *float64        `json:"amt_zeerintensief" db:"amt_zeerintensief"`
-	Pensioenpremie    *float64        `json:"pensioenpremie" db:"pensioenpremie"`
-	Loonheffing       *float64        `json:"loonheffing" db:"loonheffing"`
-	Reiskosten        *float64        `json:"reiskosten" db:"reiskosten"`
-	Vakantietoeslag   *float64        `json:"vakantietoeslag" db:"vakantietoeslag"`
-	EjuBedrag         *float64        `json:"eju_bedrag" db:"eju_bedrag"`
-	ToeslagBalansvlf  *float64        `json:"toeslag_balansvlf" db:"toeslag_balansvlf"`
-	ExtraUrenBedrag   *float64        `json:"extra_uren_bedrag" db:"extra_uren_bedrag"`
-	Schaalnummer      string          `json:"schaalnummer" db:"schaalnummer"`
-	Trede             string          `json:"trede" db:"trede"`
-	ParttimeFactor    float64         `json:"parttime_factor" db:"parttime_factor"`
-	Uurloon           *float64        `json:"uurloon" db:"uurloon"`
-	Componenten       json.RawMessage `json:"componenten" db:"componenten" swaggertype:"object"`
-	Cumulatieven      json.RawMessage `json:"cumulatieven" db:"cumulatieven" swaggertype:"object"`
-	GeimporteerdOp    string          `json:"geimporteerd_op" db:"geimporteerd_op"`
+	ID               string          `json:"id" db:"id"`
+	UserID           string          `json:"user_id" db:"user_id"`
+	Jaar             int             `json:"jaar" db:"jaar"`
+	Periode          int             `json:"periode" db:"periode"`
+	PeriodeLabel     string          `json:"periode_label" db:"periode_label"`
+	Type             string          `json:"type" db:"type"`
+	Netto            float64         `json:"netto" db:"netto"`
+	BrutoBetaling    float64         `json:"bruto_betaling" db:"bruto_betaling"`
+	BrutoInhouding   float64         `json:"bruto_inhouding" db:"bruto_inhouding"`
+	SalarisBasis     float64         `json:"salaris_basis" db:"salaris_basis"`
+	OrtTotaal        float64         `json:"ort_totaal" db:"ort_totaal"`
+	OrtDetail        json.RawMessage `json:"ort_detail" db:"ort_detail" swaggertype:"object"`
+	AmtZeerintensief *float64        `json:"amt_zeerintensief" db:"amt_zeerintensief"`
+	Pensioenpremie   *float64        `json:"pensioenpremie" db:"pensioenpremie"`
+	Loonheffing      *float64        `json:"loonheffing" db:"loonheffing"`
+	Reiskosten       *float64        `json:"reiskosten" db:"reiskosten"`
+	Vakantietoeslag  *float64        `json:"vakantietoeslag" db:"vakantietoeslag"`
+	EjuBedrag        *float64        `json:"eju_bedrag" db:"eju_bedrag"`
+	ToeslagBalansvlf *float64        `json:"toeslag_balansvlf" db:"toeslag_balansvlf"`
+	ExtraUrenBedrag  *float64        `json:"extra_uren_bedrag" db:"extra_uren_bedrag"`
+	Schaalnummer     string          `json:"schaalnummer" db:"schaalnummer"`
+	Trede            string          `json:"trede" db:"trede"`
+	ParttimeFactor   float64         `json:"parttime_factor" db:"parttime_factor"`
+	Uurloon          *float64        `json:"uurloon" db:"uurloon"`
+	Componenten      json.RawMessage `json:"componenten" db:"componenten" swaggertype:"object"`
+	Cumulatieven     json.RawMessage `json:"cumulatieven" db:"cumulatieven" swaggertype:"object"`
+	GeimporteerdOp   string          `json:"geimporteerd_op" db:"geimporteerd_op"`
 }
 
 // ─── Salary ──────────────────────────────────────────────────────────────────
 
 type Salary struct {
-	ID                uuid.UUID `json:"id" db:"id"`
-	UserID            string    `json:"user_id" db:"user_id"`
-	Periode           string    `json:"periode" db:"periode"`
-	Jaar              int       `json:"jaar" db:"jaar"`
-	Maand             int       `json:"maand" db:"maand"`
-	AantalDiensten    int       `json:"aantal_diensten" db:"aantal_diensten"`
-	UurloonORT        float64   `json:"uurloon_ort" db:"uurloon_ort"`
-	BasisLoon         float64   `json:"basis_loon" db:"basis_loon"`
-	AmtZeerintensief  float64   `json:"amt_zeerintensief" db:"amt_zeerintensief"`
-	ToeslagBalansvlf  float64   `json:"toeslag_balansvlf" db:"toeslag_balansvlf"`
-	OrtTotaal         float64   `json:"ort_totaal" db:"ort_totaal"`
-	ExtraUrenBedrag   float64   `json:"extra_uren_bedrag" db:"extra_uren_bedrag"`
-	ToeslagVakatieUren float64  `json:"toeslag_vakatie_uren" db:"toeslag_vakatie_uren"`
-	Reiskosten        float64   `json:"reiskosten" db:"reiskosten"`
-	EenmaligTotaal    float64   `json:"eenmalig_totaal" db:"eenmalig_totaal"`
-	BrutoBetaling     float64   `json:"bruto_betaling" db:"bruto_betaling"`
-	Pensioenpremie    float64   `json:"pensioenpremie" db:"pensioenpremie"`
-	LoonheffingSchat  float64   `json:"loonheffing_schat" db:"loonheffing_schat"`
-	NettoPrognose     float64   `json:"netto_prognose" db:"netto_prognose"`
-	BerekendOp        time.Time `json:"berekend_op" db:"berekend_op"`
+	ID                 uuid.UUID `json:"id" db:"id"`
+	UserID             string    `json:"user_id" db:"user_id"`
+	Periode            string    `json:"periode" db:"periode"`
+	Jaar               int       `json:"jaar" db:"jaar"`
+	Maand              int       `json:"maand" db:"maand"`
+	AantalDiensten     int       `json:"aantal_diensten" db:"aantal_diensten"`
+	UurloonORT         float64   `json:"uurloon_ort" db:"uurloon_ort"`
+	BasisLoon          float64   `json:"basis_loon" db:"basis_loon"`
+	AmtZeerintensief   float64   `json:"amt_zeerintensief" db:"amt_zeerintensief"`
+	ToeslagBalansvlf   float64   `json:"toeslag_balansvlf" db:"toeslag_balansvlf"`
+	OrtTotaal          float64   `json:"ort_totaal" db:"ort_totaal"`
+	ExtraUrenBedrag    float64   `json:"extra_uren_bedrag" db:"extra_uren_bedrag"`
+	ToeslagVakatieUren float64   `json:"toeslag_vakatie_uren" db:"toeslag_vakatie_uren"`
+	Reiskosten         float64   `json:"reiskosten" db:"reiskosten"`
+	EenmaligTotaal     float64   `json:"eenmalig_totaal" db:"eenmalig_totaal"`
+	BrutoBetaling      float64   `json:"bruto_betaling" db:"bruto_betaling"`
+	Pensioenpremie     float64   `json:"pensioenpremie" db:"pensioenpremie"`
+	LoonheffingSchat   float64   `json:"loonheffing_schat" db:"loonheffing_schat"`
+	NettoPrognose      float64   `json:"netto_prognose" db:"netto_prognose"`
+	BerekendOp         time.Time `json:"berekend_op" db:"berekend_op"`
 }
 
 // ─── Transaction ─────────────────────────────────────────────────────────────
 
 type Transaction struct {
-	ID                  uuid.UUID `json:"id" db:"id"`
-	UserID              string    `json:"user_id" db:"user_id"`
-	RekeningIban        string    `json:"rekening_iban" db:"rekening_iban"`
-	Volgnr              string    `json:"volgnr" db:"volgnr"`
-	Datum               string    `json:"datum" db:"datum"`
-	Bedrag              float64   `json:"bedrag" db:"bedrag"`
-	SaldoNaTrn          float64   `json:"saldo_na_trn" db:"saldo_na_trn"`
-	Code                string    `json:"code" db:"code"`
-	TegenrekeningIban   *string   `json:"tegenrekening_iban" db:"tegenrekening_iban"`
-	TegenpartijNaam     *string   `json:"tegenpartij_naam" db:"tegenpartij_naam"`
-	Omschrijving        string    `json:"omschrijving" db:"omschrijving"`
-	Referentie          *string   `json:"referentie" db:"referentie"`
-	RedenRetour         *string   `json:"reden_retour" db:"reden_retour"`
-	OorspBedrag         *float64  `json:"oorsp_bedrag" db:"oorsp_bedrag"`
-	OorspMunt           *string   `json:"oorsp_munt" db:"oorsp_munt"`
-	IsInterneOverboeking bool     `json:"is_interne_overboeking" db:"is_interne_overboeking"`
-	Categorie           *string   `json:"categorie" db:"categorie"`
+	ID                   uuid.UUID `json:"id" db:"id"`
+	UserID               string    `json:"user_id" db:"user_id"`
+	RekeningIban         string    `json:"rekening_iban" db:"rekening_iban"`
+	Volgnr               string    `json:"volgnr" db:"volgnr"`
+	Datum                string    `json:"datum" db:"datum"`
+	Bedrag               float64   `json:"bedrag" db:"bedrag"`
+	SaldoNaTrn           float64   `json:"saldo_na_trn" db:"saldo_na_trn"`
+	Code                 string    `json:"code" db:"code"`
+	TegenrekeningIban    *string   `json:"tegenrekening_iban" db:"tegenrekening_iban"`
+	TegenpartijNaam      *string   `json:"tegenpartij_naam" db:"tegenpartij_naam"`
+	Omschrijving         string    `json:"omschrijving" db:"omschrijving"`
+	Referentie           *string   `json:"referentie" db:"referentie"`
+	RedenRetour          *string   `json:"reden_retour" db:"reden_retour"`
+	OorspBedrag          *float64  `json:"oorsp_bedrag" db:"oorsp_bedrag"`
+	OorspMunt            *string   `json:"oorsp_munt" db:"oorsp_munt"`
+	IsInterneOverboeking bool      `json:"is_interne_overboeking" db:"is_interne_overboeking"`
+	Categorie            *string   `json:"categorie" db:"categorie"`
 }
 
 type TransactionImport struct {
-	RekeningIban        string   `json:"rekeningIban"`
-	Volgnr              string   `json:"volgnr"`
-	Datum               string   `json:"datum"`
-	Bedrag              float64  `json:"bedrag"`
-	SaldoNaTrn          float64  `json:"saldoNaTrn"`
-	Code                string   `json:"code"`
-	TegenrekeningIban   *string  `json:"tegenrekeningIban"`
-	TegenpartijNaam     *string  `json:"tegenpartijNaam"`
-	Omschrijving        string   `json:"omschrijving"`
-	Referentie          *string  `json:"referentie"`
-	RedenRetour         *string  `json:"redenRetour"`
-	OorspBedrag         *float64 `json:"oorspBedrag"`
-	OorspMunt           *string  `json:"oorspMunt"`
-	IsInterneOverboeking bool    `json:"isInterneOverboeking"`
-	Categorie           *string  `json:"categorie"`
+	RekeningIban         string   `json:"rekeningIban"`
+	Volgnr               string   `json:"volgnr"`
+	Datum                string   `json:"datum"`
+	Bedrag               float64  `json:"bedrag"`
+	SaldoNaTrn           float64  `json:"saldoNaTrn"`
+	Code                 string   `json:"code"`
+	TegenrekeningIban    *string  `json:"tegenrekeningIban"`
+	TegenpartijNaam      *string  `json:"tegenpartijNaam"`
+	Omschrijving         string   `json:"omschrijving"`
+	Referentie           *string  `json:"referentie"`
+	RedenRetour          *string  `json:"redenRetour"`
+	OorspBedrag          *float64 `json:"oorspBedrag"`
+	OorspMunt            *string  `json:"oorspMunt"`
+	IsInterneOverboeking bool     `json:"isInterneOverboeking"`
+	Categorie            *string  `json:"categorie"`
 }
 
 // ─── PersonalEvent ───────────────────────────────────────────────────────────
 
 type PersonalEvent struct {
-	ID               uuid.UUID `json:"id" db:"id"`
-	UserID           string    `json:"user_id" db:"user_id"`
-	EventID          string    `json:"event_id" db:"event_id"`
-	Titel            string    `json:"titel" db:"titel"`
-	StartDatum       string    `json:"start_datum" db:"start_datum"`
-	StartTijd        *string   `json:"start_tijd" db:"start_tijd"`
-	EindDatum        string    `json:"eind_datum" db:"eind_datum"`
-	EindTijd         *string   `json:"eind_tijd" db:"eind_tijd"`
-	Heledag          bool      `json:"heledag" db:"heledag"`
-	Locatie          *string   `json:"locatie" db:"locatie"`
-	Beschrijving     *string   `json:"beschrijving" db:"beschrijving"`
-	ConflictMetDienst *string  `json:"conflict_met_dienst" db:"conflict_met_dienst"`
-	Status           string    `json:"status" db:"status"`
-	Kalender         string    `json:"kalender" db:"kalender"`
+	ID                uuid.UUID `json:"id" db:"id"`
+	UserID            string    `json:"user_id" db:"user_id"`
+	EventID           string    `json:"event_id" db:"event_id"`
+	Titel             string    `json:"titel" db:"titel"`
+	StartDatum        string    `json:"start_datum" db:"start_datum"`
+	StartTijd         *string   `json:"start_tijd" db:"start_tijd"`
+	EindDatum         string    `json:"eind_datum" db:"eind_datum"`
+	EindTijd          *string   `json:"eind_tijd" db:"eind_tijd"`
+	Heledag           bool      `json:"heledag" db:"heledag"`
+	Locatie           *string   `json:"locatie" db:"locatie"`
+	Beschrijving      *string   `json:"beschrijving" db:"beschrijving"`
+	ConflictMetDienst *string   `json:"conflict_met_dienst" db:"conflict_met_dienst"`
+	Symbol            *string   `json:"symbol" db:"symbol"`
+	Status            string    `json:"status" db:"status"`
+	Kalender          string    `json:"kalender" db:"kalender"`
 }
 
 // ─── AuditLog ────────────────────────────────────────────────────────────────
 
 type AuditLog struct {
-	ID        uuid.UUID  `json:"id" db:"id"`
-	UserID    *string    `json:"user_id" db:"user_id"`
-	Actor     string     `json:"actor" db:"actor"`
-	Source    string     `json:"source" db:"source"`
-	Action    string     `json:"action" db:"action"`
-	Entity    string     `json:"entity" db:"entity"`
-	EntityID  *string    `json:"entity_id" db:"entity_id"`
-	Status    string     `json:"status" db:"status"`
-	Summary   string     `json:"summary" db:"summary"`
-	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	UserID    *string   `json:"user_id" db:"user_id"`
+	Actor     string    `json:"actor" db:"actor"`
+	Source    string    `json:"source" db:"source"`
+	Action    string    `json:"action" db:"action"`
+	Entity    string    `json:"entity" db:"entity"`
+	EntityID  *string   `json:"entity_id" db:"entity_id"`
+	Status    string    `json:"status" db:"status"`
+	Summary   string    `json:"summary" db:"summary"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
 // ─── Email (Gmail sync) ─────────────────────────────────────────────────────
@@ -255,6 +256,7 @@ type Note struct {
 	Deadline      *time.Time `json:"deadline" db:"deadline"`
 	LinkedEventID *string    `json:"linked_event_id" db:"linked_event_id"`
 	Prioriteit    *string    `json:"prioriteit" db:"prioriteit"`
+	Symbol        *string    `json:"symbol" db:"symbol"`
 	TriageFlag    *bool      `json:"triage_flag" db:"triage_flag"`
 	Aangemaakt    time.Time  `json:"aangemaakt" db:"aangemaakt"`
 	Gewijzigd     time.Time  `json:"gewijzigd" db:"gewijzigd"`
@@ -302,18 +304,18 @@ type Habit struct {
 }
 
 type HabitLog struct {
-	ID         uuid.UUID  `json:"id" db:"id"`
-	UserID     string     `json:"user_id" db:"user_id"`
-	HabitID    uuid.UUID  `json:"habit_id" db:"habit_id"`
-	Datum      string     `json:"datum" db:"datum"`
-	Voltooid   bool       `json:"voltooid" db:"voltooid"`
-	Waarde     *float64   `json:"waarde" db:"waarde"`
-	IsIncident bool       `json:"is_incident" db:"is_incident"`
-	TriggerCat *string    `json:"trigger_cat" db:"trigger_cat"`
-	Notitie    *string    `json:"notitie" db:"notitie"`
-	Bron       string     `json:"bron" db:"bron"`
-	XPVerdiend int        `json:"xp_verdiend" db:"xp_verdiend"`
-	Aangemaakt time.Time  `json:"aangemaakt" db:"aangemaakt"`
+	ID         uuid.UUID `json:"id" db:"id"`
+	UserID     string    `json:"user_id" db:"user_id"`
+	HabitID    uuid.UUID `json:"habit_id" db:"habit_id"`
+	Datum      string    `json:"datum" db:"datum"`
+	Voltooid   bool      `json:"voltooid" db:"voltooid"`
+	Waarde     *float64  `json:"waarde" db:"waarde"`
+	IsIncident bool      `json:"is_incident" db:"is_incident"`
+	TriggerCat *string   `json:"trigger_cat" db:"trigger_cat"`
+	Notitie    *string   `json:"notitie" db:"notitie"`
+	Bron       string    `json:"bron" db:"bron"`
+	XPVerdiend int       `json:"xp_verdiend" db:"xp_verdiend"`
+	Aangemaakt time.Time `json:"aangemaakt" db:"aangemaakt"`
 }
 
 type HabitBadge struct {

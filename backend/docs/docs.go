@@ -4560,6 +4560,9 @@ const docTemplate = `{
                 "prioriteit": {
                     "type": "string"
                 },
+                "symbol": {
+                    "type": "string"
+                },
                 "tags": {
                     "type": "array",
                     "items": {
@@ -4593,6 +4596,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "prioriteit": {
+                    "type": "string"
+                },
+                "symbol": {
                     "type": "string"
                 },
                 "tags": {
@@ -4673,6 +4679,10 @@ const docTemplate = `{
         "model.DeviceRegisterRequest": {
             "type": "object",
             "properties": {
+                "current_state": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
                 "ip_address": {
                     "type": "string"
                 },
@@ -4680,6 +4690,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "room_id": {
+                    "type": "string"
+                },
+                "skip_probe": {
+                    "type": "boolean"
+                },
+                "status": {
                     "type": "string"
                 }
             }
@@ -5702,6 +5718,9 @@ const docTemplate = `{
                 "prioriteit": {
                     "type": "string"
                 },
+                "symbol": {
+                    "type": "string"
+                },
                 "tags": {
                     "type": "array",
                     "items": {
@@ -5756,6 +5775,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "symbol": {
                     "type": "string"
                 },
                 "titel": {

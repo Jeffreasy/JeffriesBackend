@@ -11,7 +11,26 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureDeviceCommandSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure device command schema: %w", err)
 	}
+	if err := ensureSymbolSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure symbol schema: %w", err)
+	}
 	return nil
+}
+
+func ensureSymbolSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS symbol TEXT;
+ALTER TABLE personal_events ADD COLUMN IF NOT EXISTS symbol TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_notes_user_symbol
+    ON notes(user_id, symbol)
+    WHERE symbol IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_pe_user_symbol
+    ON personal_events(user_id, symbol)
+    WHERE symbol IS NOT NULL;
+`)
+	return err
 }
 
 func ensureDeviceCommandSchema(ctx context.Context, db *DB) error {

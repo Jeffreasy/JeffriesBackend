@@ -130,6 +130,12 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 			pBeschrijving = &beschrijving
 		}
 
+		symbol := pe.Symbol
+		var pSymbol *string
+		if symbol != "" {
+			pSymbol = &symbol
+		}
+
 		err = peStore.UpsertSynced(ctx, model.PersonalEvent{
 			UserID:       userID,
 			EventID:      pe.EventID,
@@ -141,6 +147,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 			Heledag:      pe.Heledag,
 			Locatie:      pLocatie,
 			Beschrijving: pBeschrijving,
+			Symbol:       pSymbol,
 			Status:       pe.Status,
 			Kalender:     pe.Kalender,
 		})

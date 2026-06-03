@@ -22,6 +22,7 @@ This backend exposes a Go/chi REST API for the Homeapp frontend. The API runs on
 | Generated Swagger YAML | `backend/docs/swagger.yaml` |
 | Runtime schema patches | `backend/internal/store/runtime_schema.go` |
 | Device command queue migration | `backend/migrations/009_device_command_claiming.up.sql` |
+| Note/event symbols migration | `backend/migrations/010_symbols.up.sql` |
 
 When route behavior and Swagger disagree, fix the handler annotation or route mount and regenerate Swagger. Do not treat generated docs as the only source of truth.
 
@@ -64,6 +65,12 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 - Notes and email search use `q`.
 - Date routes use `YYYY-MM-DD`.
 - Finance filters live on `/transactions` and `/transactions/stats`.
+
+## Shared Symbol Fields
+
+- `model.Note.symbol` and `model.PersonalEvent.symbol` store an app icon key from the frontend symbol registry.
+- Personal events also mirror the icon in Google Calendar descriptions as `[symbol:<key>]`, so calendar sync can preserve the choice.
+- Existing event category metadata still uses `[categorie:<id>]`; category and symbol are intentionally separate.
 
 ## Render And WiZ Command Flow
 

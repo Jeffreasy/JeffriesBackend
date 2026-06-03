@@ -4554,6 +4554,9 @@
                 "prioriteit": {
                     "type": "string"
                 },
+                "symbol": {
+                    "type": "string"
+                },
                 "tags": {
                     "type": "array",
                     "items": {
@@ -4587,6 +4590,9 @@
                     "type": "string"
                 },
                 "prioriteit": {
+                    "type": "string"
+                },
+                "symbol": {
                     "type": "string"
                 },
                 "tags": {
@@ -4667,6 +4673,10 @@
         "model.DeviceRegisterRequest": {
             "type": "object",
             "properties": {
+                "current_state": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
                 "ip_address": {
                     "type": "string"
                 },
@@ -4674,6 +4684,12 @@
                     "type": "string"
                 },
                 "room_id": {
+                    "type": "string"
+                },
+                "skip_probe": {
+                    "type": "boolean"
+                },
+                "status": {
                     "type": "string"
                 }
             }
@@ -5696,6 +5712,9 @@
                 "prioriteit": {
                     "type": "string"
                 },
+                "symbol": {
+                    "type": "string"
+                },
                 "tags": {
                     "type": "array",
                     "items": {
@@ -5750,6 +5769,9 @@
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "symbol": {
                     "type": "string"
                 },
                 "titel": {

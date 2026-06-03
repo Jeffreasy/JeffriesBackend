@@ -303,6 +303,7 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 			eindTijd := strPtr(e.EindTijd)
 			locatie := strPtr(e.Locatie)
 			beschrijving := strPtr(e.Beschrijving)
+			symbol := strPtr(e.Symbol)
 
 			pe := model.PersonalEvent{
 				UserID:       e.UserID,
@@ -315,6 +316,7 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 				Heledag:      e.Heledag,
 				Locatie:      locatie,
 				Beschrijving: beschrijving,
+				Symbol:       symbol,
 				Status:       e.Status,
 				Kalender:     e.Kalender,
 			}

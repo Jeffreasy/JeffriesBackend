@@ -23,13 +23,13 @@ var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 var ErrNoteNotFound = pgx.ErrNoRows
 
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived,
-	deadline, linked_event_id, prioriteit, triage_flag, aangemaakt, gewijzigd`
+	deadline, linked_event_id, prioriteit, symbol, triage_flag, aangemaakt, gewijzigd`
 
 func scanNote(row pgx.Row) (model.Note, error) {
 	var n model.Note
 	err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 		&n.IsPinned, &n.IsArchived, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-		&n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+		&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -50,7 +50,7 @@ func (s *NoteStore) List(ctx context.Context, userID string) ([]model.Note, erro
 		var n model.Note
 		err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 			&n.IsPinned, &n.IsArchived, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-			&n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+			&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
 		if n.Tags == nil {
 			n.Tags = []string{}
 		}
@@ -85,13 +85,13 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 
 	created, err := scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO notes (id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived,
-			deadline, linked_event_id, prioriteit, triage_flag, aangemaakt, gewijzigd)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			deadline, linked_event_id, prioriteit, symbol, triage_flag, aangemaakt, gewijzigd)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		RETURNING %s
 	`, noteCols),
 		n.ID, n.UserID, n.Titel, n.Inhoud, n.Tags, n.Kleur,
 		n.IsPinned, n.IsArchived, n.Deadline, n.LinkedEventID, n.Prioriteit,
-		n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
+		n.Symbol, n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
 	))
 	if err != nil {
 		return created, err
@@ -186,7 +186,7 @@ func (s *NoteStore) Search(ctx context.Context, userID, query string, limit int)
 		var n model.Note
 		err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 			&n.IsPinned, &n.IsArchived, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-			&n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+			&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
 		if n.Tags == nil {
 			n.Tags = []string{}
 		}

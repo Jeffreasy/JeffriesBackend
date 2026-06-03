@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -77,6 +78,7 @@ type PersonalEventSync struct {
 	Heledag      bool   `json:"heledag"`
 	Locatie      string `json:"locatie"`
 	Beschrijving string `json:"beschrijving"`
+	Symbol       string `json:"symbol"`
 	Status       string `json:"status"`
 	Kalender     string `json:"kalender"`
 }
@@ -90,10 +92,11 @@ const (
 )
 
 var (
-	amsterdam    *time.Location
-	nlDays       = []string{"Zondag", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag"}
-	keywordsIncl = []string{"dienst", "sdb", "shift"}
-	keywordsExcl = []string{"vrij", "vakantie"}
+	amsterdam             *time.Location
+	nlDays                = []string{"Zondag", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag"}
+	keywordsIncl          = []string{"dienst", "sdb", "shift"}
+	keywordsExcl          = []string{"vrij", "vakantie"}
+	symbolMetadataPattern = regexp.MustCompile(`(?i)\[symbol:([a-z0-9_-]+)\]`)
 )
 
 func init() {
@@ -289,7 +292,7 @@ func personalEventPayload(event model.PersonalEvent) (calendarEventWrite, error)
 	payload := calendarEventWrite{
 		Summary:     event.Titel,
 		Location:    ptrValue(event.Locatie),
-		Description: ptrValue(event.Beschrijving),
+		Description: descriptionWithSymbol(ptrValue(event.Beschrijving), event.Symbol),
 	}
 
 	if event.Heledag {
@@ -338,6 +341,35 @@ func ptrValue(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+func descriptionWithSymbol(description string, symbol *string) string {
+	if symbol == nil {
+		return description
+	}
+
+	value := strings.TrimSpace(*symbol)
+	if value == "" {
+		return strings.TrimSpace(symbolMetadataPattern.ReplaceAllString(description, ""))
+	}
+
+	token := "[symbol:" + value + "]"
+	if symbolMetadataPattern.MatchString(description) {
+		return symbolMetadataPattern.ReplaceAllString(description, token)
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return token
+	}
+	return description + " " + token
+}
+
+func symbolFromDescription(description string) string {
+	match := symbolMetadataPattern.FindStringSubmatch(description)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
 }
 
 func localRFC3339(date, clock string) (string, error) {
@@ -501,6 +533,7 @@ func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary
 		Heledag:      isAllDay,
 		Locatie:      ev.Location,
 		Beschrijving: ev.Description,
+		Symbol:       symbolFromDescription(ev.Description),
 		Status:       status,
 		Kalender:     kalenderName,
 	}

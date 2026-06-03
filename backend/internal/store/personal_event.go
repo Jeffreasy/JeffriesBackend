@@ -28,7 +28,7 @@ const (
 
 const peColumns = `id, user_id, event_id, titel, start_datum::text, start_tijd,
 	eind_datum::text, eind_tijd, heledag, locatie, beschrijving,
-	conflict_met_dienst, status, kalender`
+	conflict_met_dienst, symbol, status, kalender`
 
 func (s *PersonalEventStore) List(ctx context.Context, userID string) ([]model.PersonalEvent, error) {
 	rows, err := s.db.Pool.Query(ctx,
@@ -92,7 +92,7 @@ func (s *PersonalEventStore) GetByUserEventID(ctx context.Context, userID, event
 		userID, eventID,
 	).Scan(&event.ID, &event.UserID, &event.EventID, &event.Titel, &event.StartDatum, &event.StartTijd,
 		&event.EindDatum, &event.EindTijd, &event.Heledag, &event.Locatie, &event.Beschrijving,
-		&event.ConflictMetDienst, &event.Status, &event.Kalender)
+		&event.ConflictMetDienst, &event.Symbol, &event.Status, &event.Kalender)
 	if err != nil {
 		return model.PersonalEvent{}, err
 	}
@@ -124,17 +124,17 @@ func (s *PersonalEventStore) Upsert(ctx context.Context, e model.PersonalEvent) 
 		e.ID = uuid.New()
 	}
 	_, err := s.db.Pool.Exec(ctx,
-		`INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,status,kalender)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		`INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,symbol,status,kalender)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		 ON CONFLICT (user_id, event_id) DO UPDATE SET
 		    titel=EXCLUDED.titel, start_datum=EXCLUDED.start_datum, start_tijd=EXCLUDED.start_tijd,
 		    eind_datum=EXCLUDED.eind_datum, eind_tijd=EXCLUDED.eind_tijd, heledag=EXCLUDED.heledag,
 		    locatie=EXCLUDED.locatie, beschrijving=EXCLUDED.beschrijving,
-		    conflict_met_dienst=EXCLUDED.conflict_met_dienst, status=EXCLUDED.status,
+		    conflict_met_dienst=EXCLUDED.conflict_met_dienst, symbol=EXCLUDED.symbol, status=EXCLUDED.status,
 		    kalender=EXCLUDED.kalender`,
 		e.ID, e.UserID, e.EventID, e.Titel, e.StartDatum, e.StartTijd,
 		e.EindDatum, e.EindTijd, e.Heledag, e.Locatie, e.Beschrijving,
-		e.ConflictMetDienst, e.Status, e.Kalender)
+		e.ConflictMetDienst, e.Symbol, e.Status, e.Kalender)
 	return err
 }
 
@@ -143,18 +143,20 @@ func (s *PersonalEventStore) UpsertSynced(ctx context.Context, e model.PersonalE
 		e.ID = uuid.New()
 	}
 	_, err := s.db.Pool.Exec(ctx,
-		`INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,status,kalender)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		`INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,symbol,status,kalender)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		 ON CONFLICT (user_id, event_id) DO UPDATE SET
 		    titel=EXCLUDED.titel, start_datum=EXCLUDED.start_datum, start_tijd=EXCLUDED.start_tijd,
 		    eind_datum=EXCLUDED.eind_datum, eind_tijd=EXCLUDED.eind_tijd, heledag=EXCLUDED.heledag,
 		    locatie=EXCLUDED.locatie, beschrijving=EXCLUDED.beschrijving,
-		    conflict_met_dienst=EXCLUDED.conflict_met_dienst, status=EXCLUDED.status,
+		    conflict_met_dienst=EXCLUDED.conflict_met_dienst,
+		    symbol=COALESCE(EXCLUDED.symbol, personal_events.symbol),
+		    status=EXCLUDED.status,
 		    kalender=EXCLUDED.kalender
-		  WHERE personal_events.status NOT IN ($15, $16, $17)`,
+		  WHERE personal_events.status NOT IN ($16, $17, $18)`,
 		e.ID, e.UserID, e.EventID, e.Titel, e.StartDatum, e.StartTijd,
 		e.EindDatum, e.EindTijd, e.Heledag, e.Locatie, e.Beschrijving,
-		e.ConflictMetDienst, e.Status, e.Kalender,
+		e.ConflictMetDienst, e.Symbol, e.Status, e.Kalender,
 		PersonalEventStatusPendingCreate,
 		PersonalEventStatusPendingUpdate,
 		PersonalEventStatusPendingDelete)
@@ -261,7 +263,7 @@ func scanPE(row pgx.CollectableRow) (model.PersonalEvent, error) {
 	var e model.PersonalEvent
 	err := row.Scan(&e.ID, &e.UserID, &e.EventID, &e.Titel, &e.StartDatum, &e.StartTijd,
 		&e.EindDatum, &e.EindTijd, &e.Heledag, &e.Locatie, &e.Beschrijving,
-		&e.ConflictMetDienst, &e.Status, &e.Kalender)
+		&e.ConflictMetDienst, &e.Symbol, &e.Status, &e.Kalender)
 	return e, err
 }
 
