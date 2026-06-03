@@ -150,6 +150,14 @@ func cronGmailSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) fun
 			historyID = meta.HistoryID
 		}
 
+		storedBefore, err := emailStore.Count(ctx, cfg.UserID)
+		if err != nil {
+			return err
+		}
+		if meta != nil && storedBefore == 0 {
+			historyID = ""
+		}
+
 		result, parsedEmails, newHistID, err := google.SyncGmail(ctx, client, cfg.UserID, historyID)
 		if err != nil {
 			return err
@@ -202,16 +210,16 @@ func cronGmailSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) fun
 
 			upserted, err := emailStore.BulkUpsert(ctx, modelEmails)
 			if err != nil {
-				slog.Warn("📧 email bulk upsert failed", "error", err)
+				return err
 			} else {
 				slog.Info("📧 emails stored", "upserted", upserted)
 			}
 		}
 
 		// Update sync meta
-		totalSynced := len(parsedEmails)
-		if meta != nil {
-			totalSynced += meta.TotalSynced
+		totalSynced, err := emailStore.Count(ctx, cfg.UserID)
+		if err != nil {
+			return err
 		}
 		var lastFullSync *time.Time
 		if result.Mode == "full" {

@@ -7,13 +7,16 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // ─── Gmail API types ─────────────────────────────────────────────────────────
 
 type gmailListResponse struct {
-	Messages []struct{ ID string `json:"id"` } `json:"messages"`
+	Messages []struct {
+		ID string `json:"id"`
+	} `json:"messages"`
 }
 
 type gmailHistoryResponse struct {
@@ -22,9 +25,21 @@ type gmailHistoryResponse struct {
 }
 
 type gmailHistoryEntry struct {
-	MessagesAdded []struct{ Message struct{ ID string `json:"id"` } `json:"message"` } `json:"messagesAdded"`
-	LabelsAdded   []struct{ Message struct{ ID string `json:"id"` } `json:"message"` } `json:"labelsAdded"`
-	LabelsRemoved []struct{ Message struct{ ID string `json:"id"` } `json:"message"` } `json:"labelsRemoved"`
+	MessagesAdded []struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	} `json:"messagesAdded"`
+	LabelsAdded []struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	} `json:"labelsAdded"`
+	LabelsRemoved []struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	} `json:"labelsRemoved"`
 }
 
 type gmailMessage struct {
@@ -80,9 +95,9 @@ type GmailSyncResult struct {
 }
 
 const (
-	gmailBase        = "https://gmail.googleapis.com/gmail/v1/users/me"
-	maxInitialSync   = 200
-	batchSize        = 20
+	gmailBase      = "https://gmail.googleapis.com/gmail/v1/users/me"
+	maxInitialSync = 200
+	messageWorkers = 8
 )
 
 // SyncGmail performs incremental or full Gmail sync and returns parsed emails.
@@ -131,7 +146,10 @@ func incrementalGmailSync(ctx context.Context, client *OAuthClient, userID, hist
 		ids = append(ids, id)
 	}
 
-	emails := fetchMessageBatch(ctx, client, userID, ids)
+	emails, err := fetchMessageBatch(ctx, client, userID, ids)
+	if err != nil {
+		return nil, nil, "", err
+	}
 
 	return &GmailSyncResult{Synced: len(emails), Mode: "incremental"}, emails, histResp.HistoryID, nil
 }
@@ -147,7 +165,10 @@ func fullGmailSync(ctx context.Context, client *OAuthClient, userID string) (*Gm
 		ids[i] = m.ID
 	}
 
-	emails := fetchMessageBatch(ctx, client, userID, ids)
+	emails, err := fetchMessageBatch(ctx, client, userID, ids)
+	if err != nil {
+		return nil, nil, "", err
+	}
 
 	// Get current historyId for future incremental syncs
 	var profile gmailProfileResponse
@@ -158,26 +179,83 @@ func fullGmailSync(ctx context.Context, client *OAuthClient, userID string) (*Gm
 	return &GmailSyncResult{Synced: len(emails), Mode: "full"}, emails, profile.HistoryID, nil
 }
 
-func fetchMessageBatch(ctx context.Context, client *OAuthClient, userID string, ids []string) []ParsedEmail {
-	var emails []ParsedEmail
-	for i := 0; i < len(ids); i += batchSize {
-		end := i + batchSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		batch := ids[i:end]
-
-		for _, id := range batch {
-			u := fmt.Sprintf("%s/messages/%s?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=Subject", gmailBase, id)
-			var msg gmailMessage
-			if err := client.GetJSON(ctx, u, &msg); err != nil {
-				slog.Debug("gmail message fetch failed", "id", id, "error", err)
-				continue
-			}
-			emails = append(emails, parseGmailMessage(msg, userID))
-		}
+func fetchMessageBatch(ctx context.Context, client *OAuthClient, userID string, ids []string) ([]ParsedEmail, error) {
+	if len(ids) == 0 {
+		return nil, nil
 	}
-	return emails
+
+	workers := messageWorkers
+	if len(ids) < workers {
+		workers = len(ids)
+	}
+
+	type fetchResult struct {
+		email ParsedEmail
+		err   error
+	}
+
+	jobs := make(chan string)
+	results := make(chan fetchResult, len(ids))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				u := fmt.Sprintf("%s/messages/%s?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=Subject", gmailBase, id)
+				var msg gmailMessage
+				if err := client.GetJSON(ctx, u, &msg); err != nil {
+					results <- fetchResult{err: err}
+					continue
+				}
+				results <- fetchResult{email: parseGmailMessage(msg, userID)}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, id := range ids {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- id:
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var emails []ParsedEmail
+	var firstErr error
+	var failed int
+
+	for result := range results {
+		if result.err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		emails = append(emails, result.email)
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if len(emails) == 0 && firstErr != nil {
+		return nil, fmt.Errorf("message metadata fetch failed for all %d messages: %w", len(ids), firstErr)
+	}
+	if failed > 0 {
+		slog.Warn("gmail message metadata partial failure", "requested", len(ids), "fetched", len(emails), "failed", failed, "firstError", firstErr)
+	}
+
+	return emails, nil
 }
 
 func parseGmailMessage(msg gmailMessage, userID string) ParsedEmail {

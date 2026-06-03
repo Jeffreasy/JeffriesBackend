@@ -326,9 +326,18 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	storedBefore, err := emailStore.Count(ctx, userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail count failed: "+err.Error())
+		return
+	}
+
 	historyID := ""
 	if meta != nil {
 		historyID = meta.HistoryID
+	}
+	if meta != nil && storedBefore == 0 {
+		historyID = ""
 	}
 
 	result, parsedEmails, newHistoryID, err := google.SyncGmail(ctx, client, userID, historyID)
@@ -347,10 +356,14 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 		newHistoryID = meta.HistoryID
 	}
 
-	totalSynced := len(parsedEmails)
+	totalSynced, err := emailStore.Count(ctx, userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Gmail count update failed: "+err.Error())
+		return
+	}
+
 	var lastFullSync *time.Time
 	if meta != nil {
-		totalSynced += meta.TotalSynced
 		lastFullSync = meta.LastFullSync
 	}
 	if result.Mode == "full" {
