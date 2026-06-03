@@ -122,6 +122,30 @@ func (s *DeviceStore) UpdateState(ctx context.Context, id uuid.UUID, patch map[s
 	return err
 }
 
+// UpdateMetadata updates editable device columns without touching WiZ state.
+func (s *DeviceStore) UpdateMetadata(ctx context.Context, d model.Device) (*model.Device, error) {
+	row := s.db.Pool.QueryRow(ctx,
+		`UPDATE devices
+		    SET room_id = $2,
+		        ip_address = $3,
+		        name = $4,
+		        current_state = COALESCE(current_state, '{}'::jsonb) - 'name' - 'room_id' - 'ip_address'
+		  WHERE id = $1
+		  RETURNING id, room_id, ip_address, mac_address, matter_node_id, matter_endpoint_id,
+		            name, device_type, manufacturer, model, firmware_version,
+		            current_state, status, last_seen, commissioned_at`,
+		d.ID, d.RoomID, d.IPAddress, d.Name,
+	)
+	updated, err := scanDeviceRow(row)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
 // SetStatus updates the device status.
 func (s *DeviceStore) SetStatus(ctx context.Context, id uuid.UUID, status string) error {
 	_, err := s.db.Pool.Exec(ctx,

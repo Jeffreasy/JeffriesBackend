@@ -114,32 +114,74 @@ func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify IP if changing
-	if newIP, ok := data["ip_address"].(string); ok && newIP != "" {
-		if _, err := h.wiz.GetState(newIP); err != nil {
-			Error(w, http.StatusBadGateway, "WiZ lamp op "+newIP+" niet bereikbaar.")
-			return
-		}
-	}
-
-	patch := map[string]any{}
-	for _, key := range []string{"name", "ip_address", "room_id"} {
-		if v, ok := data[key]; ok {
-			patch[key] = v
-		}
-	}
-
-	if err := h.devices.UpdateState(r.Context(), id, patch); err != nil {
+	d, err := h.devices.GetByID(r.Context(), id)
+	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	d, _ := h.devices.GetByID(r.Context(), id)
 	if d == nil {
 		Error(w, http.StatusNotFound, "Device not found")
 		return
 	}
-	JSON(w, http.StatusOK, mapDeviceModel(*d))
+
+	if name, ok := data["name"].(string); ok {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			Error(w, http.StatusBadRequest, "name cannot be empty")
+			return
+		}
+		d.Name = name
+	}
+
+	// Verify IP if changing
+	if newIP, ok := data["ip_address"].(string); ok && newIP != "" {
+		newIP = strings.TrimSpace(newIP)
+		if newIP == "" {
+			Error(w, http.StatusBadRequest, "ip_address cannot be empty")
+			return
+		}
+		if !h.queueLightCommands() {
+			if _, err := h.wiz.GetState(newIP); err != nil {
+				Error(w, http.StatusBadGateway, "WiZ lamp op "+newIP+" niet bereikbaar.")
+				return
+			}
+		}
+		d.IPAddress = &newIP
+	} else if _, ok := data["ip_address"]; ok && data["ip_address"] == nil {
+		d.IPAddress = nil
+	}
+
+	if v, ok := data["room_id"]; ok {
+		if v == nil {
+			d.RoomID = nil
+		} else if roomID, ok := v.(string); ok {
+			roomID = strings.TrimSpace(roomID)
+			if roomID == "" {
+				d.RoomID = nil
+			} else {
+				rid, err := uuid.Parse(roomID)
+				if err != nil {
+					Error(w, http.StatusBadRequest, "Invalid room_id")
+					return
+				}
+				d.RoomID = &rid
+			}
+		} else {
+			Error(w, http.StatusBadRequest, "room_id must be a UUID string or null")
+			return
+		}
+	}
+
+	updated, err := h.devices.UpdateMetadata(r.Context(), *d)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if updated == nil {
+		Error(w, http.StatusNotFound, "Device not found")
+		return
+	}
+	JSON(w, http.StatusOK, mapDeviceModel(*updated))
 }
 
 // Delete removes a device.
