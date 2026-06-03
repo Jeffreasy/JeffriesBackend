@@ -20,6 +20,8 @@ func NewNoteStore(db *DB) *NoteStore { return &NoteStore{db: db} }
 
 var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
+var ErrNoteNotFound = pgx.ErrNoRows
+
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived,
 	deadline, linked_event_id, prioriteit, triage_flag, aangemaakt, gewijzigd`
 
@@ -63,6 +65,13 @@ func (s *NoteStore) Get(ctx context.Context, id uuid.UUID) (model.Note, error) {
 	`, noteCols), id))
 }
 
+// GetForUser returns a note only when it belongs to the given user.
+func (s *NoteStore) GetForUser(ctx context.Context, userID string, id uuid.UUID) (model.Note, error) {
+	return scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT %s FROM notes WHERE id = $1 AND user_id = $2
+	`, noteCols), id, userID))
+}
+
 // Create inserts a new note.
 func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (model.Note, error) {
 	n.ID = uuid.New()
@@ -95,6 +104,15 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 
 // Update patches a note with the given fields.
 func (s *NoteStore) Update(ctx context.Context, id uuid.UUID, fields map[string]any) (model.Note, error) {
+	return s.update(ctx, id, "", fields)
+}
+
+// UpdateForUser patches a note only when it belongs to the given user.
+func (s *NoteStore) UpdateForUser(ctx context.Context, userID string, id uuid.UUID, fields map[string]any) (model.Note, error) {
+	return s.update(ctx, id, userID, fields)
+}
+
+func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fields map[string]any) (model.Note, error) {
 	sets := []string{}
 	args := []any{}
 	argIdx := 1
@@ -109,9 +127,17 @@ func (s *NoteStore) Update(ctx context.Context, id uuid.UUID, fields map[string]
 	argIdx++
 
 	args = append(args, id)
+	idArg := argIdx
+	argIdx++
 
-	q := fmt.Sprintf(`UPDATE notes SET %s WHERE id = $%d RETURNING %s`,
-		strings.Join(sets, ", "), argIdx, noteCols)
+	where := fmt.Sprintf("id = $%d", idArg)
+	if userID != "" {
+		args = append(args, userID)
+		where += fmt.Sprintf(" AND user_id = $%d", argIdx)
+	}
+
+	q := fmt.Sprintf(`UPDATE notes SET %s WHERE %s RETURNING %s`,
+		strings.Join(sets, ", "), where, noteCols)
 
 	updated, err := scanNote(s.db.Pool.QueryRow(ctx, q, args...))
 	if err != nil {
@@ -128,6 +154,15 @@ func (s *NoteStore) Update(ctx context.Context, id uuid.UUID, fields map[string]
 // Delete permanently removes a note.
 func (s *NoteStore) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.Pool.Exec(ctx, `DELETE FROM notes WHERE id = $1`, id)
+	return err
+}
+
+// DeleteForUser removes a note only when it belongs to the given user.
+func (s *NoteStore) DeleteForUser(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM notes WHERE id = $1 AND user_id = $2`, id, userID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
@@ -288,12 +323,28 @@ func (s *NoteStore) AllTags(ctx context.Context, userID string) ([]string, error
 
 // GetBacklinks returns basic info (id, titel) of notes that link to this note.
 func (s *NoteStore) GetBacklinks(ctx context.Context, noteID uuid.UUID) ([]map[string]any, error) {
+	return s.getBacklinks(ctx, "", noteID)
+}
+
+// GetBacklinksForUser returns backlinks only when source and target notes belong to the user.
+func (s *NoteStore) GetBacklinksForUser(ctx context.Context, userID string, noteID uuid.UUID) ([]map[string]any, error) {
+	return s.getBacklinks(ctx, userID, noteID)
+}
+
+func (s *NoteStore) getBacklinks(ctx context.Context, userID string, noteID uuid.UUID) ([]map[string]any, error) {
+	where := "nl.target_id = $1"
+	args := []any{noteID}
+	if userID != "" {
+		where += " AND nl.user_id = $2 AND n.user_id = $2 AND target.user_id = $2"
+		args = append(args, userID)
+	}
+
 	rows, err := s.db.Pool.Query(ctx, `
 		SELECT n.id, n.titel
 		FROM notes n
 		JOIN note_links nl ON n.id = nl.source_id
-		WHERE nl.target_id = $1
-	`, noteID)
+		JOIN notes target ON target.id = nl.target_id
+		WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}

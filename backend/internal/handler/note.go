@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -52,12 +53,17 @@ func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {string} string "note not found"
 // @Router /notes/{id} [get]
 func (h *NoteHandler) Get(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	note, err := h.store.Get(r.Context(), id)
+	note, err := h.store.GetForUser(r.Context(), userID, id)
 	if err != nil {
 		Error(w, http.StatusNotFound, "note not found")
 		return
@@ -149,6 +155,11 @@ type noteUpdateBody struct {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id} [patch]
 func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "invalid id")
@@ -208,8 +219,12 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.store.Update(r.Context(), id, fields)
+	updated, err := h.store.UpdateForUser(r.Context(), userID, id, fields)
 	if err != nil {
+		if errors.Is(err, store.ErrNoteNotFound) {
+			Error(w, http.StatusNotFound, "note not found")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -227,12 +242,21 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id} [delete]
 func (h *NoteHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := h.store.Delete(r.Context(), id); err != nil {
+	if err := h.store.DeleteForUser(r.Context(), userID, id); err != nil {
+		if errors.Is(err, store.ErrNoteNotFound) {
+			Error(w, http.StatusNotFound, "note not found")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -307,12 +331,17 @@ func (h *NoteHandler) Tags(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id}/backlinks [get]
 func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	links, err := h.store.GetBacklinks(r.Context(), id)
+	links, err := h.store.GetBacklinksForUser(r.Context(), userID, id)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
