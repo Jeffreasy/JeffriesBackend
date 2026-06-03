@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
@@ -13,7 +14,11 @@ import (
 func main() {
 	cfg := config.Load()
 
-	dbURL := "postgres://postgres:postgres@localhost:5432/homeapp?sslmode=disable"
+	if os.Getenv("CONFIRM_CLEAN_AUTOMATIONS") != "true" {
+		log.Fatal("Set CONFIRM_CLEAN_AUTOMATIONS=true to run this destructive cleanup script")
+	}
+
+	dbURL := cfg.DatabaseURL
 	ctx := context.Background()
 	db, err := store.New(ctx, dbURL)
 	if err != nil {
@@ -34,15 +39,15 @@ func main() {
 
 	for _, a := range autos {
 		isCorrupted := strings.Contains(a.Name, "???")
-		
+
 		triggerTime := ""
 		if a.TriggerConfig != nil {
 			triggerTime = string(a.TriggerConfig)
 		}
-		
+
 		key := fmt.Sprintf("%s|%s|%s", a.UserID, a.Name, triggerTime)
 		isDuplicate := seen[key]
-		
+
 		if isCorrupted || isDuplicate {
 			fmt.Printf("Deleting automation: %s (Corrupted: %v, Duplicate: %v)\n", a.Name, isCorrupted, isDuplicate)
 			err := autoStore.Delete(ctx, a.ID)
