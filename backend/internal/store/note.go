@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 type NoteStore struct{ db *DB }
 
 func NewNoteStore(db *DB) *NoteStore { return &NoteStore{db: db} }
+
+var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived,
 	deadline, linked_event_id, prioriteit, triage_flag, aangemaakt, gewijzigd`
@@ -71,7 +74,7 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		n.Tags = []string{}
 	}
 
-	return scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
+	created, err := scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO notes (id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived,
 			deadline, linked_event_id, prioriteit, triage_flag, aangemaakt, gewijzigd)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
@@ -81,6 +84,13 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		n.IsPinned, n.IsArchived, n.Deadline, n.LinkedEventID, n.Prioriteit,
 		n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
 	))
+	if err != nil {
+		return created, err
+	}
+	if err := s.SyncLinksFromContent(ctx, userID, created.ID, created.Inhoud); err != nil {
+		return created, err
+	}
+	return created, nil
 }
 
 // Update patches a note with the given fields.
@@ -103,7 +113,16 @@ func (s *NoteStore) Update(ctx context.Context, id uuid.UUID, fields map[string]
 	q := fmt.Sprintf(`UPDATE notes SET %s WHERE id = $%d RETURNING %s`,
 		strings.Join(sets, ", "), argIdx, noteCols)
 
-	return scanNote(s.db.Pool.QueryRow(ctx, q, args...))
+	updated, err := scanNote(s.db.Pool.QueryRow(ctx, q, args...))
+	if err != nil {
+		return updated, err
+	}
+	if _, changed := fields["inhoud"]; changed {
+		if err := s.SyncLinksFromContent(ctx, updated.UserID, updated.ID, updated.Inhoud); err != nil {
+			return updated, err
+		}
+	}
+	return updated, nil
 }
 
 // Delete permanently removes a note.
@@ -177,6 +196,71 @@ func (s *NoteStore) RemoveLink(ctx context.Context, sourceID, targetID uuid.UUID
 	return err
 }
 
+// SyncLinksFromContent replaces outgoing wiki links for a note based on [[Title]] references.
+func (s *NoteStore) SyncLinksFromContent(ctx context.Context, userID string, sourceID uuid.UUID, content string) error {
+	titles := extractWikiLinkTitles(content)
+
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM note_links WHERE user_id = $1 AND source_id = $2`, userID, sourceID); err != nil {
+		return err
+	}
+
+	for _, title := range titles {
+		var targetID uuid.UUID
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM notes
+			WHERE user_id = $1
+			  AND id <> $2
+			  AND lower(COALESCE(NULLIF(titel, ''), left(split_part(inhoud, E'\n', 1), 50))) = lower($3)
+			ORDER BY gewijzigd DESC
+			LIMIT 1
+		`, userID, sourceID, title).Scan(&targetID)
+		if err == pgx.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO note_links (user_id, source_id, target_id)
+			VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
+		`, userID, sourceID, targetID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func extractWikiLinkTitles(content string) []string {
+	matches := wikiLinkPattern.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	titles := make([]string, 0, len(matches))
+	for _, match := range matches {
+		title := strings.TrimSpace(match[1])
+		if title == "" {
+			continue
+		}
+		key := strings.ToLower(title)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		titles = append(titles, title)
+	}
+	return titles
+}
+
 // AllTags returns all unique tags across a user's notes.
 func (s *NoteStore) AllTags(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.db.Pool.Query(ctx, `
@@ -222,14 +306,14 @@ func (s *NoteStore) GetBacklinks(ctx context.Context, noteID uuid.UUID) ([]map[s
 		if err := rows.Scan(&id, &titel); err != nil {
 			return nil, err
 		}
-		
+
 		t := ""
 		if titel != nil {
 			t = *titel
 		} else {
 			t = "Naamloze notitie"
 		}
-		
+
 		links = append(links, map[string]any{
 			"id":    id.String(),
 			"titel": t,
