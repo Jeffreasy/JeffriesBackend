@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,15 +38,14 @@ func init() {
 	}()
 }
 
-func getClient(ip string) *rate.Limiter {
+func getClient(key string, limit rate.Limit, burst int) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
 
-	c, exists := clients[ip]
+	c, exists := clients[key]
 	if !exists {
-		// Allow 5 requests per second, burst of 10
-		limiter := rate.NewLimiter(rate.Limit(5), 10)
-		clients[ip] = &client{
+		limiter := rate.NewLimiter(limit, burst)
+		clients[key] = &client{
 			limiter:  limiter,
 			lastSeen: time.Now(),
 		}
@@ -65,7 +65,16 @@ func RateLimiter() func(http.Handler) http.Handler {
 				ip = r.RemoteAddr
 			}
 
-			limiter := getClient(ip)
+			limit := rate.Limit(5)
+			burst := 10
+			key := ip
+			if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/") {
+				limit = rate.Limit(20)
+				burst = 80
+				key = ip + "|bridge"
+			}
+
+			limiter := getClient(key, limit, burst)
 			if !limiter.Allow() {
 				slog.Warn("Rate limit exceeded", "ip", ip, "path", r.URL.Path)
 				http.Error(w, `{"error": "Too Many Requests"}`, http.StatusTooManyRequests)

@@ -48,6 +48,14 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`).Scan(&processingCommands)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'failed'`).Scan(&failedCommands)
 
+	var bridgeLastSeen *time.Time
+	_ = h.db.Pool.QueryRow(ctx, `SELECT MAX(last_seen) FROM devices`).Scan(&bridgeLastSeen)
+	bridgeOnline := bridgeLastSeen != nil && time.Since(bridgeLastSeen.UTC()) <= 10*time.Minute
+	bridgeStatus := "Offline"
+	if bridgeOnline {
+		bridgeStatus = "Active"
+	}
+
 	var totalSchedule, upcomingSchedule int
 	var importedAt *time.Time
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM schedule`).Scan(&totalSchedule)
@@ -112,7 +120,7 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 		"integrations": map[string]any{
 			"backend":                  true,
 			"legacyHttpSecret":         configuredSecret(h.cfg.HomeappGASSecret),
-			"localBridge":              h.cfg.QueueLightCommands() && configuredSecret(h.cfg.BridgeAPIKey),
+			"localBridge":              h.cfg.QueueLightCommands() && bridgeOnline,
 			"telegramBot":              h.cfg.TelegramBotEnabled && h.telegram != nil,
 			"telegramOwner":            configuredValue(h.cfg.TelegramChatID),
 			"telegramWebhookSecret":    configuredSecret(h.cfg.TelegramBridgeSecret),
@@ -139,9 +147,9 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 		},
 		"sync": map[string]any{},
 		"bridge": map[string]any{
-			"online":             true,
-			"status":             "Active",
-			"lastSeenAt":         time.Now().Format(time.RFC3339),
+			"online":             bridgeOnline,
+			"status":             bridgeStatus,
+			"lastSeenAt":         bridgeLastSeen,
 			"commandsPending":    pendingCommands,
 			"commandsProcessing": processingCommands,
 			"commandsFailed":     failedCommands,
