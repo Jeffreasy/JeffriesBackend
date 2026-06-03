@@ -27,19 +27,24 @@ func main() {
 	slog.Info("============================================================")
 
 	// Database connection
-	db, err := store.New(context.Background(), cfg.DatabaseURL)
+	dbCtx := context.Background()
+	db, err := store.New(dbCtx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("database connection failed", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
+	if err := store.EnsureRuntimeSchema(dbCtx, db); err != nil {
+		slog.Error("runtime schema check failed", "error", err)
+		os.Exit(1)
+	}
 
 	// Context with OS signal cancellation
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	eng := engine.New(cfg, db)
-	
+
 	// Start the background cleanup service
 	engine.StartCleaner(ctx, db)
 
@@ -47,4 +52,3 @@ func main() {
 
 	slog.Info("✅ automation engine cleanly stopped")
 }
-

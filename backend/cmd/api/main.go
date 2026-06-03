@@ -36,15 +36,19 @@ func main() {
 		slog.Error("database connection failed", "error", err)
 		os.Exit(1)
 	}
+	if err := store.EnsureRuntimeSchema(ctx, db); err != nil {
+		slog.Error("runtime schema check failed", "error", err)
+		os.Exit(1)
+	}
 
 	// Start background automation engine if enabled (e.g. on Render)
 	if cfg.StartBackgroundEngine {
 		slog.Info("starting background automation engine (Telegram bot + Crons)")
 		eng := engine.New(cfg, db)
-		
+
 		engineCtx, cancelEngine := context.WithCancel(context.Background())
 		defer cancelEngine()
-		
+
 		go eng.Run(engineCtx)
 	}
 

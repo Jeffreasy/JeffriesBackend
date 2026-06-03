@@ -34,7 +34,7 @@ func (e *Engine) pollCommands(ctx context.Context) {
 		}
 	}()
 
-	commands, err := e.cmdStore.ListPending(ctx)
+	commands, err := e.cmdStore.ClaimPending(ctx, 25)
 	if err != nil {
 		slog.Error("command poller error", "error", err)
 		return
@@ -58,7 +58,7 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 	var command map[string]any
 	if err := json.Unmarshal(cmd.Command, &command); err != nil {
 		slog.Error("unmarshal device command", "id", cmd.ID, "error", err)
-		_ = e.cmdStore.MarkDone(ctx, cmd.ID, "failed")
+		_ = e.cmdStore.MarkDone(ctx, cmd.ID, store.DeviceCommandStatusFailed)
 		return
 	}
 
@@ -70,7 +70,7 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 			infos = append(infos, info)
 		} else {
 			slog.Warn("device command target not found", "cmdID", cmd.ID, "device", deviceID)
-			_ = e.cmdStore.MarkDone(ctx, cmd.ID, "failed")
+			_ = e.cmdStore.MarkDone(ctx, cmd.ID, store.DeviceCommandStatusFailed)
 			return
 		}
 	} else {
@@ -78,6 +78,12 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 		for _, info := range deviceMap {
 			infos = append(infos, info)
 		}
+	}
+
+	if len(infos) == 0 {
+		slog.Warn("device command has no target devices", "cmdID", cmd.ID)
+		_ = e.cmdStore.MarkDone(ctx, cmd.ID, store.DeviceCommandStatusFailed)
+		return
 	}
 
 	// Build WiZ setPilot params directly from frontend command
@@ -131,9 +137,9 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 		}
 	}
 
-	status := "done"
+	status := store.DeviceCommandStatusDone
 	if success == 0 && failed > 0 {
-		status = "failed"
+		status = store.DeviceCommandStatusFailed
 	}
 	if err := e.cmdStore.MarkDone(ctx, cmd.ID, status); err != nil {
 		slog.Error("mark command done failed", "id", cmd.ID, "error", err)

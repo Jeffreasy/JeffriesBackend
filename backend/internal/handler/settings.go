@@ -41,8 +41,9 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM automations`).Scan(&totalAutomations)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM automations WHERE enabled = true`).Scan(&activeAutomations)
 
-	var pendingCommands, failedCommands int
+	var pendingCommands, processingCommands, failedCommands int
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'pending'`).Scan(&pendingCommands)
+	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`).Scan(&processingCommands)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'failed'`).Scan(&failedCommands)
 
 	var totalSchedule, upcomingSchedule int
@@ -85,8 +86,9 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 			"total":  totalAutomations,
 		},
 		"commands": map[string]any{
-			"pending": pendingCommands,
-			"failed":  failedCommands,
+			"pending":    pendingCommands,
+			"processing": processingCommands,
+			"failed":     failedCommands,
 		},
 		"schedule": map[string]any{
 			"total":      totalSchedule,
@@ -118,12 +120,13 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 		},
 		"sync": map[string]any{},
 		"bridge": map[string]any{
-			"online":         true,
-			"status":         "Active",
-			"lastSeenAt":     time.Now().Format(time.RFC3339),
-			"commandsDone":   0, // Placeholder
-			"commandsFailed": failedCommands,
-			"lastError":      nil,
+			"online":             true,
+			"status":             "Active",
+			"lastSeenAt":         time.Now().Format(time.RFC3339),
+			"commandsPending":    pendingCommands,
+			"commandsProcessing": processingCommands,
+			"commandsFailed":     failedCommands,
+			"lastError":          nil,
 		},
 	}
 
@@ -150,12 +153,12 @@ func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
 
 	// Just a structural dump for now
 	dump := map[string]any{
-		"version": "1.0",
-		"userId":  userID,
+		"version":    "1.0",
+		"userId":     userID,
 		"exportedAt": time.Now().Format(time.RFC3339),
-		"message": "Backup functionaliteit wordt geïmplementeerd in fase 2.",
+		"message":    "Backup functionaliteit wordt geïmplementeerd in fase 2.",
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"jeffries-homeapp-backup.json\"")
 	json.NewEncoder(w).Encode(dump)
