@@ -194,30 +194,59 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := h.wiz.GetState(input.IPAddress)
+	existing, err := h.devices.GetByIP(r.Context(), input.IPAddress)
 	if err != nil {
-		Error(w, http.StatusBadGateway, "Cannot reach WiZ bulb at "+input.IPAddress+":38899.")
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing != nil {
+		JSON(w, http.StatusOK, mapDeviceModel(*existing))
 		return
 	}
 
 	dt := "color_light"
 	mfr := "WiZ"
 	mdl := "GU10 Color"
-	d := model.Device{
-		Name:         input.Name,
-		IPAddress:    &input.IPAddress,
-		DeviceType:   dt,
-		Manufacturer: &mfr,
-		Model:        &mdl,
-		CurrentState: map[string]any{
+	currentState := input.CurrentState
+	status := ""
+	if input.Status != nil {
+		status = strings.TrimSpace(*input.Status)
+	}
+	if status == "" {
+		status = "registered"
+	}
+
+	shouldProbe := !input.SkipProbe && !strings.EqualFold(h.commandMode, "queue")
+	if shouldProbe {
+		state, err := h.wiz.GetState(input.IPAddress)
+		if err != nil {
+			Error(w, http.StatusBadGateway, "Cannot reach WiZ bulb at "+input.IPAddress+":38899.")
+			return
+		}
+		currentState = map[string]any{
 			"on":         state.On,
 			"brightness": state.Brightness,
 			"color_temp": state.ColorTemp,
 			"r":          state.R,
 			"g":          state.G,
 			"b":          state.B,
-		},
-		Status: "online",
+		}
+		status = "online"
+	} else if currentState == nil {
+		currentState = map[string]any{
+			"on":         false,
+			"brightness": 0,
+		}
+	}
+
+	d := model.Device{
+		Name:         input.Name,
+		IPAddress:    &input.IPAddress,
+		DeviceType:   dt,
+		Manufacturer: &mfr,
+		Model:        &mdl,
+		CurrentState: currentState,
+		Status:       status,
 	}
 	if input.RoomID != nil {
 		rid, err := uuid.Parse(*input.RoomID)

@@ -32,21 +32,21 @@ type RoomUpdate struct {
 // ─── Device ──────────────────────────────────────────────────────────────────
 
 type Device struct {
-	ID              uuid.UUID              `json:"id" db:"id"`
-	RoomID          *uuid.UUID             `json:"room_id" db:"room_id"`
-	IPAddress       *string                `json:"ip_address" db:"ip_address"`
-	MACAddress      *string                `json:"mac_address" db:"mac_address"`
-	MatterNodeID    int                    `json:"matter_node_id" db:"matter_node_id"`
-	MatterEndpoint  int                    `json:"matter_endpoint_id" db:"matter_endpoint_id"`
-	Name            string                 `json:"name" db:"name"`
-	DeviceType      string                 `json:"device_type" db:"device_type"`
-	Manufacturer    *string                `json:"manufacturer" db:"manufacturer"`
-	Model           *string                `json:"model" db:"model"`
-	FirmwareVersion *string                `json:"firmware_version" db:"firmware_version"`
-	CurrentState    map[string]any         `json:"current_state" db:"current_state"`
-	Status          string                 `json:"status" db:"status"`
-	LastSeen        *time.Time             `json:"last_seen" db:"last_seen"`
-	CommissionedAt  time.Time              `json:"commissioned_at" db:"commissioned_at"`
+	ID              uuid.UUID      `json:"id" db:"id"`
+	RoomID          *uuid.UUID     `json:"room_id" db:"room_id"`
+	IPAddress       *string        `json:"ip_address" db:"ip_address"`
+	MACAddress      *string        `json:"mac_address" db:"mac_address"`
+	MatterNodeID    int            `json:"matter_node_id" db:"matter_node_id"`
+	MatterEndpoint  int            `json:"matter_endpoint_id" db:"matter_endpoint_id"`
+	Name            string         `json:"name" db:"name"`
+	DeviceType      string         `json:"device_type" db:"device_type"`
+	Manufacturer    *string        `json:"manufacturer" db:"manufacturer"`
+	Model           *string        `json:"model" db:"model"`
+	FirmwareVersion *string        `json:"firmware_version" db:"firmware_version"`
+	CurrentState    map[string]any `json:"current_state" db:"current_state"`
+	Status          string         `json:"status" db:"status"`
+	LastSeen        *time.Time     `json:"last_seen" db:"last_seen"`
+	CommissionedAt  time.Time      `json:"commissioned_at" db:"commissioned_at"`
 }
 
 // DeviceResponse is the API response shape for a device (from Convex).
@@ -66,21 +66,24 @@ type DeviceResponse struct {
 }
 
 type DeviceRegisterRequest struct {
-	IPAddress string  `json:"ip_address"`
-	Name      string  `json:"name"`
-	RoomID    *string `json:"room_id,omitempty"`
+	IPAddress    string         `json:"ip_address"`
+	Name         string         `json:"name"`
+	RoomID       *string        `json:"room_id,omitempty"`
+	SkipProbe    bool           `json:"skip_probe,omitempty"`
+	Status       *string        `json:"status,omitempty"`
+	CurrentState map[string]any `json:"current_state,omitempty"`
 }
 
 type DeviceCommandRequest struct {
-	On             *bool `json:"on,omitempty"`
-	Brightness     *int  `json:"brightness,omitempty"`
-	ColorTempMireds *int `json:"color_temp_mireds,omitempty"`
-	R              *int  `json:"r,omitempty"`
-	G              *int  `json:"g,omitempty"`
-	B              *int  `json:"b,omitempty"`
-	Hue            *int  `json:"hue,omitempty"`
-	Saturation     *int  `json:"saturation,omitempty"`
-	SceneID        *int  `json:"scene_id,omitempty"`
+	On              *bool `json:"on,omitempty"`
+	Brightness      *int  `json:"brightness,omitempty"`
+	ColorTempMireds *int  `json:"color_temp_mireds,omitempty"`
+	R               *int  `json:"r,omitempty"`
+	G               *int  `json:"g,omitempty"`
+	B               *int  `json:"b,omitempty"`
+	Hue             *int  `json:"hue,omitempty"`
+	Saturation      *int  `json:"saturation,omitempty"`
+	SceneID         *int  `json:"scene_id,omitempty"`
 }
 
 // ─── Scene ───────────────────────────────────────────────────────────────────
