@@ -658,6 +658,23 @@ definitions:
       waarde_indicatie:
         type: integer
     type: object
+  model.LCProjectCreate:
+    properties:
+      deadline:
+        type: string
+      fase:
+        type: string
+      naam:
+        type: string
+      samenvatting:
+        type: string
+      start_datum:
+        type: string
+      status:
+        type: string
+      waarde_indicatie:
+        type: integer
+    type: object
   model.LCProjectUpdate:
     properties:
       deadline:
@@ -1317,6 +1334,42 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Delete automation
+      tags:
+      - Automations
+    put:
+      consumes:
+      - application/json
+      description: Modifies a home automation rule
+      parameters:
+      - description: Automation ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Automation Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.AutomationRow'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.AutomationRow'
+        "400":
+          description: invalid id or JSON
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update automation
       tags:
       - Automations
   /automations/{id}/toggle:
@@ -2585,6 +2638,37 @@ paths:
       summary: List Projects
       tags:
       - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a new CRM project directly
+      parameters:
+      - description: Project Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCProjectCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCProject'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Project
+      tags:
+      - LaventeCare
   /laventecare/projects/{id}:
     patch:
       consumes:
@@ -3173,7 +3257,7 @@ paths:
       summary: Get privacy settings
       tags:
       - Privacy
-    patch:
+    put:
       consumes:
       - application/json
       description: Updates the privacy settings for the user

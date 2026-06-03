@@ -48,7 +48,7 @@ func (h *PrivacyHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string "status ok"
 // @Failure 400 {string} string "invalid JSON or missing userId"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /privacy [patch]
+// @Router /privacy [put]
 func (h *PrivacyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {

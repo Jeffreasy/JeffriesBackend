@@ -108,6 +108,8 @@ JeffriesBackend/
 
 ## API overzicht
 
+Voor een vollediger contract: zie `backend/docs/api-overview.md`, `backend/docs/swagger.json` en live `/api/v1/swagger/index.html`.
+
 | Methode | Route | Beschrijving |
 |---|---|---|
 | GET | `/api/v1/health` | Health check |

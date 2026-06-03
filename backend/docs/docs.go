@@ -169,6 +169,62 @@ const docTemplate = `{
             }
         },
         "/automations/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Modifies a home automation rule",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Automations"
+                ],
+                "summary": "Update automation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Automation ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Automation Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.AutomationRow"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.AutomationRow"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id or JSON",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
             "delete": {
                 "security": [
                     {
@@ -2101,6 +2157,55 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a new CRM project directly",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Project",
+                "parameters": [
+                    {
+                        "description": "Project Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCProjectCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCProject"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing name",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
             }
         },
         "/laventecare/projects/{id}": {
@@ -3006,7 +3111,7 @@ const docTemplate = `{
                     }
                 }
             },
-            "patch": {
+            "put": {
                 "security": [
                     {
                         "ApiKeyAuth": []
@@ -5367,6 +5472,32 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "user_id": {
+                    "type": "string"
+                },
+                "waarde_indicatie": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCProjectCreate": {
+            "type": "object",
+            "properties": {
+                "deadline": {
+                    "type": "string"
+                },
+                "fase": {
+                    "type": "string"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "samenvatting": {
+                    "type": "string"
+                },
+                "start_datum": {
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 },
                 "waarde_indicatie": {
