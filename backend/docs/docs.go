@@ -2809,6 +2809,130 @@ const docTemplate = `{
                 }
             }
         },
+        "/notes/{id}/revisions": {
+            "get": {
+                "description": "Returns recent saved versions for a note",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notes"
+                ],
+                "summary": "List note revisions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Note ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.NoteRevision"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/notes/{id}/revisions/{revisionID}/restore": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Replaces a note with a previous saved version",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notes"
+                ],
+                "summary": "Restore note revision",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Note ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Revision ID (UUID)",
+                        "name": "revisionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Note"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "note or revision not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/personal-events": {
             "get": {
                 "description": "Returns all personal calendar events for the user",
@@ -4586,6 +4710,9 @@ const docTemplate = `{
                 "isArchived": {
                     "type": "boolean"
                 },
+                "isCompleted": {
+                    "type": "boolean"
+                },
                 "isPinned": {
                     "type": "boolean"
                 },
@@ -5691,6 +5818,9 @@ const docTemplate = `{
                 "aangemaakt": {
                     "type": "string"
                 },
+                "completed_at": {
+                    "type": "string"
+                },
                 "deadline": {
                     "type": "string"
                 },
@@ -5704,6 +5834,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "is_archived": {
+                    "type": "boolean"
+                },
+                "is_completed": {
                     "type": "boolean"
                 },
                 "is_pinned": {
@@ -5732,6 +5865,50 @@ const docTemplate = `{
                 },
                 "triage_flag": {
                     "type": "boolean"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.NoteRevision": {
+            "type": "object",
+            "properties": {
+                "aangemaakt": {
+                    "type": "string"
+                },
+                "deadline": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "inhoud": {
+                    "type": "string"
+                },
+                "kleur": {
+                    "type": "string"
+                },
+                "linked_event_id": {
+                    "type": "string"
+                },
+                "note_id": {
+                    "type": "string"
+                },
+                "prioriteit": {
+                    "type": "string"
+                },
+                "symbol": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "titel": {
+                    "type": "string"
                 },
                 "user_id": {
                     "type": "string"

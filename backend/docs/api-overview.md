@@ -23,6 +23,7 @@ This backend exposes a Go/chi REST API for the Homeapp frontend. The API runs on
 | Runtime schema patches | `backend/internal/store/runtime_schema.go` |
 | Device command queue migration | `backend/migrations/009_device_command_claiming.up.sql` |
 | Note/event symbols migration | `backend/migrations/010_symbols.up.sql` |
+| Note revision history migration | `backend/migrations/011_note_revisions.up.sql` |
 
 When route behavior and Swagger disagree, fix the handler annotation or route mount and regenerate Swagger. Do not treat generated docs as the only source of truth.
 
@@ -51,7 +52,7 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 | Personal events | `GET/POST /personal-events`, `GET /personal-events/upcoming`, `GET /personal-events/date/{date}`, `PATCH /personal-events/{eventID}/status` |
 | Emails | `GET /emails`, `GET /emails/search`, `GET /emails/stats`, `PATCH /emails/read`, `PATCH /emails/delete` |
 | Privacy | `GET /privacy`, `PUT /privacy` |
-| Notes | `GET/POST /notes`, `GET /notes/search`, `GET /notes/tags`, `GET/PATCH/DELETE /notes/{id}`, `GET /notes/{id}/backlinks` |
+| Notes | `GET/POST /notes`, `GET /notes/search`, `GET /notes/tags`, `GET/PATCH/DELETE /notes/{id}`, `GET /notes/{id}/backlinks`, `GET /notes/{id}/revisions`, `POST /notes/{id}/revisions/{revisionID}/restore` |
 | Habits | `GET/POST /habits`, `GET /habits/for-date`, `GET /habits/stats`, `GET /habits/heatmap`, `GET /habits/badges`, `GET/PATCH/DELETE /habits/{id}`, habit action posts |
 | LaventeCare | cockpit, documents, leads, projects, actions, signal conversion, document seeding |
 | Settings | `GET /settings/overview`, `GET /settings/backup`, `GET /settings/telegram/status` |
@@ -71,6 +72,19 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 - `model.Note.symbol` and `model.PersonalEvent.symbol` store an app icon key from the frontend symbol registry.
 - Personal events also mirror the icon in Google Calendar descriptions as `[symbol:<key>]`, so calendar sync can preserve the choice.
 - Existing event category metadata still uses `[categorie:<id>]`; category and symbol are intentionally separate.
+
+## Note Revision History
+
+- Meaningful note edits snapshot the previous title, content, tags, color, deadline, linked event, priority, and symbol into `note_revisions`.
+- Pin/archive-only updates do not create a revision.
+- `GET /notes/{id}/revisions?userId=...&limit=20` returns recent versions for the editor.
+- `POST /notes/{id}/revisions/{revisionID}/restore?userId=...` restores a version and first snapshots the current state so the restore can be undone.
+
+## Note Completion
+
+- Completion is separate from archive: completed notes remain queryable and usable in journals.
+- `PATCH /notes/{id}` with `isCompleted: true|false` updates `is_completed`; the server manages `completed_at`.
+- Completion-only updates do not create a note revision.
 
 ## Render And WiZ Command Flow
 

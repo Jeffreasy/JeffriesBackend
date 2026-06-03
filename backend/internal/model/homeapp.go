@@ -253,6 +253,8 @@ type Note struct {
 	Kleur         *string    `json:"kleur" db:"kleur"`
 	IsPinned      bool       `json:"is_pinned" db:"is_pinned"`
 	IsArchived    bool       `json:"is_archived" db:"is_archived"`
+	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
+	CompletedAt   *time.Time `json:"completed_at" db:"completed_at"`
 	Deadline      *time.Time `json:"deadline" db:"deadline"`
 	LinkedEventID *string    `json:"linked_event_id" db:"linked_event_id"`
 	Prioriteit    *string    `json:"prioriteit" db:"prioriteit"`
@@ -260,6 +262,21 @@ type Note struct {
 	TriageFlag    *bool      `json:"triage_flag" db:"triage_flag"`
 	Aangemaakt    time.Time  `json:"aangemaakt" db:"aangemaakt"`
 	Gewijzigd     time.Time  `json:"gewijzigd" db:"gewijzigd"`
+}
+
+type NoteRevision struct {
+	ID            uuid.UUID  `json:"id" db:"id"`
+	NoteID        uuid.UUID  `json:"note_id" db:"note_id"`
+	UserID        string     `json:"user_id" db:"user_id"`
+	Titel         *string    `json:"titel" db:"titel"`
+	Inhoud        string     `json:"inhoud" db:"inhoud"`
+	Tags          []string   `json:"tags" db:"tags"`
+	Kleur         *string    `json:"kleur" db:"kleur"`
+	Deadline      *time.Time `json:"deadline" db:"deadline"`
+	LinkedEventID *string    `json:"linked_event_id" db:"linked_event_id"`
+	Prioriteit    *string    `json:"prioriteit" db:"prioriteit"`
+	Symbol        *string    `json:"symbol" db:"symbol"`
+	Aangemaakt    time.Time  `json:"aangemaakt" db:"aangemaakt"`
 }
 
 type NoteLink struct {

@@ -154,8 +154,10 @@ func registerRoutes(
 				r.Get("/tags", noteH.Tags)
 				r.Get("/{id}", noteH.Get)
 				r.Get("/{id}/backlinks", noteH.Backlinks)
+				r.Get("/{id}/revisions", noteH.Revisions)
 				r.With(authMw).Post("/", noteH.Create)
 				r.With(authMw).Patch("/{id}", noteH.Update)
+				r.With(authMw).Post("/{id}/revisions/{revisionID}/restore", noteH.RestoreRevision)
 				r.With(authMw).Delete("/{id}", noteH.Delete)
 			})
 

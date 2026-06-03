@@ -138,6 +138,7 @@ type noteUpdateBody struct {
 	Kleur         *string  `json:"kleur"`
 	IsPinned      *bool    `json:"isPinned"`
 	IsArchived    *bool    `json:"isArchived"`
+	IsCompleted   *bool    `json:"isCompleted"`
 	Deadline      *string  `json:"deadline"`
 	LinkedEventID *string  `json:"linkedEventId"`
 	Prioriteit    *string  `json:"prioriteit"`
@@ -192,6 +193,15 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.IsArchived != nil {
 		fields["is_archived"] = *body.IsArchived
+	}
+	if body.IsCompleted != nil {
+		fields["is_completed"] = *body.IsCompleted
+		if *body.IsCompleted {
+			now := time.Now()
+			fields["completed_at"] = now
+		} else {
+			fields["completed_at"] = nil
+		}
 	}
 	if body.Prioriteit != nil {
 		fields["prioriteit"] = *body.Prioriteit
@@ -357,6 +367,85 @@ func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, links)
+}
+
+// Revisions returns saved versions for a note.
+// @Summary List note revisions
+// @Description Returns recent saved versions for a note
+// @Tags Notes
+// @Produce json
+// @Param id path string true "Note ID (UUID)"
+// @Param userId query string true "User ID"
+// @Param limit query int false "Limit count" default(20)
+// @Success 200 {array} model.NoteRevision
+// @Failure 400 {string} string "invalid id"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /notes/{id}/revisions [get]
+func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	revisions, err := h.store.ListRevisions(r.Context(), userID, id, limit)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, revisions)
+}
+
+// RestoreRevision restores a note from a saved version.
+// @Summary Restore note revision
+// @Description Replaces a note with a previous saved version
+// @Tags Notes
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Note ID (UUID)"
+// @Param revisionID path string true "Revision ID (UUID)"
+// @Param userId query string true "User ID"
+// @Success 200 {object} model.Note
+// @Failure 400 {string} string "invalid id"
+// @Failure 404 {string} string "note or revision not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /notes/{id}/revisions/{revisionID}/restore [post]
+func (h *NoteHandler) RestoreRevision(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	revisionID, err := uuid.Parse(chi.URLParam(r, "revisionID"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid revision id")
+		return
+	}
+	restored, err := h.store.RestoreRevision(r.Context(), userID, id, revisionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNoteNotFound) {
+			Error(w, http.StatusNotFound, "note or revision not found")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, restored)
 }
 
 func parseDeadline(deadlineStr *string) (*time.Time, error) {
