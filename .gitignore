@@ -25,3 +25,6 @@ matter-server/
 
 # Dependencies (not needed in Git — go mod download handles this)
 vendor/
+
+# Node dependencies
+node_modules/

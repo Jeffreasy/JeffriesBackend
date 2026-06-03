@@ -58,10 +58,10 @@ func registerRoutes(
 		r.Route("/devices", func(r chi.Router) {
 			r.Get("/", devices.List)
 			r.Get("/{deviceID}", devices.Get)
-			r.Post("/register", devices.Register)
-			r.Post("/{deviceID}/command", devices.Command)
-			r.Patch("/{deviceID}", devices.Update)
-			r.Delete("/{deviceID}", devices.Delete)
+			r.With(authMw).Post("/register", devices.Register)
+			r.With(authMw).Post("/{deviceID}/command", devices.Command)
+			r.With(authMw).Patch("/{deviceID}", devices.Update)
+			r.With(authMw).Delete("/{deviceID}", devices.Delete)
 		})
 
 		// Scenes (PostgreSQL + WiZ UDP)
@@ -193,8 +193,8 @@ func registerRoutes(
 		// Sync
 		r.Route("/sync", func(r chi.Router) {
 			r.Get("/status", syncH.GetSyncStatus)
-			r.Post("/calendar", syncH.SyncCalendar)
-			r.Post("/gmail", syncH.SyncGmail)
+			r.With(authMw).Post("/calendar", syncH.SyncCalendar)
+			r.With(authMw).Post("/gmail", syncH.SyncGmail)
 		})
 	})
 }
