@@ -129,7 +129,7 @@ func (e *Engine) Run(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			e.loopTelegram(ctx)
+			e.loopTelegramWithLock(ctx)
 		}()
 	}
 
