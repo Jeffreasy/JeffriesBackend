@@ -86,43 +86,7 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 		return
 	}
 
-	// Build WiZ setPilot params directly from frontend command
-	wizParams := map[string]any{}
-
-	if state, ok := command["state"].(bool); ok {
-		wizParams["state"] = state
-	} else if on, ok := command["on"].(bool); ok {
-		wizParams["state"] = on
-	} else {
-		wizParams["state"] = true
-	}
-
-	if b, ok := command["dimming"]; ok {
-		wizParams["dimming"] = cmdToInt(b)
-	} else if b, ok := command["brightness"]; ok {
-		wizParams["dimming"] = cmdToInt(b)
-	}
-
-	if temp, ok := command["temp"]; ok {
-		wizParams["temp"] = cmdToInt(temp)
-	} else if kelvin, ok := command["color_temp"]; ok {
-		wizParams["temp"] = cmdToInt(kelvin)
-	} else if mireds, ok := command["color_temp_mireds"]; ok {
-		kelvin := wiz.MiredsToKelvin(cmdToInt(mireds))
-		wizParams["temp"] = kelvin
-	}
-
-	if r, ok := command["r"]; ok {
-		wizParams["r"] = cmdToInt(r)
-		wizParams["g"] = cmdToInt(command["g"])
-		wizParams["b"] = cmdToInt(command["b"])
-	}
-
-	if sid, ok := command["sceneId"]; ok {
-		wizParams["sceneId"] = cmdToInt(sid)
-	} else if sid, ok := command["scene_id"]; ok {
-		wizParams["sceneId"] = cmdToInt(sid)
-	}
+	wizParams := commandToWizParams(command)
 
 	// Send to all target devices
 	var success, failed int
@@ -222,6 +186,46 @@ func cmdToInt(v any) int {
 	default:
 		return 0
 	}
+}
+
+func commandToWizParams(command map[string]any) map[string]any {
+	wizParams := map[string]any{}
+
+	if state, ok := command["state"].(bool); ok {
+		wizParams["state"] = state
+	} else if on, ok := command["on"].(bool); ok {
+		wizParams["state"] = on
+	} else {
+		wizParams["state"] = true
+	}
+
+	if b, ok := command["dimming"]; ok {
+		wizParams["dimming"] = cmdToInt(b)
+	} else if b, ok := command["brightness"]; ok {
+		wizParams["dimming"] = cmdToInt(b)
+	}
+
+	if temp, ok := command["temp"]; ok {
+		wizParams["temp"] = cmdToInt(temp)
+	} else if kelvin, ok := command["color_temp"]; ok {
+		wizParams["temp"] = cmdToInt(kelvin)
+	} else if mireds, ok := command["color_temp_mireds"]; ok {
+		wizParams["temp"] = wiz.MiredsToKelvin(cmdToInt(mireds))
+	}
+
+	if r, ok := command["r"]; ok {
+		wizParams["r"] = cmdToInt(r)
+		wizParams["g"] = cmdToInt(command["g"])
+		wizParams["b"] = cmdToInt(command["b"])
+	}
+
+	if sid, ok := command["sceneId"]; ok {
+		wizParams["sceneId"] = cmdToInt(sid)
+	} else if sid, ok := command["scene_id"]; ok {
+		wizParams["sceneId"] = cmdToInt(sid)
+	}
+
+	return wizParams
 }
 
 // sleepCtx sleeps for the given duration or until the context is cancelled.

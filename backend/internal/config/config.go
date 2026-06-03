@@ -35,6 +35,9 @@ type Config struct {
 	EngineCommandPollerEnabled bool
 	EngineStatusPollEnabled    bool
 	WizDeviceIPs               string
+	BridgeAPIURL               string
+	BridgeAPIKey               string
+	BridgeStatusPollEnabled    bool
 
 	// AI APIs
 	GrokAPIKey string
@@ -91,6 +94,9 @@ func Load() *Config {
 		EngineAutomationsEnabled:   envBoolOr("ENGINE_AUTOMATIONS_ENABLED", true),
 		EngineCommandPollerEnabled: envBoolOr("ENGINE_COMMAND_POLLER_ENABLED", !queueLightCommands),
 		EngineStatusPollEnabled:    envBoolOr("ENGINE_STATUS_POLL_ENABLED", !queueLightCommands),
+		BridgeAPIURL:               strings.TrimRight(envOr("BRIDGE_API_URL", ""), "/"),
+		BridgeAPIKey:               envOr("BRIDGE_API_KEY", envOr("APP_SECRET_KEY", "change-me")),
+		BridgeStatusPollEnabled:    envBoolOr("BRIDGE_STATUS_POLL_ENABLED", true),
 
 		GrokAPIKey:   envOr("GROK_API_KEY", ""),
 		GroqAPIKey:   envOr("GROQ_API_KEY", ""),

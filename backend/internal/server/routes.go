@@ -16,6 +16,7 @@ func registerRoutes(
 	health *handler.HealthHandler,
 	rooms *handler.RoomHandler,
 	devices *handler.DeviceHandler,
+	bridgeH *handler.BridgeHandler,
 	scenes *handler.SceneHandler,
 	automations *handler.AutomationHandler,
 	scheduleH *handler.ScheduleHandler,
@@ -65,6 +66,13 @@ func registerRoutes(
 				r.With(authMw).Post("/{deviceID}/command", devices.Command)
 				r.With(authMw).Patch("/{deviceID}", devices.Update)
 				r.With(authMw).Delete("/{deviceID}", devices.Delete)
+			})
+
+			// Local LAN bridge (Render queue -> local WiZ UDP).
+			r.Route("/bridge", func(r chi.Router) {
+				r.With(authMw).Post("/commands/claim", bridgeH.ClaimCommands)
+				r.With(authMw).Post("/commands/{commandID}/complete", bridgeH.CompleteCommand)
+				r.With(authMw).Post("/devices/{deviceID}/status", bridgeH.UpdateDeviceStatus)
 			})
 
 			// Scenes (PostgreSQL + WiZ UDP)

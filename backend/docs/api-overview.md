@@ -40,6 +40,7 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 | System | `GET /health` |
 | Rooms | `GET/POST /rooms`, `GET/PATCH/DELETE /rooms/{roomID}` |
 | Devices | `GET /devices`, `GET/PATCH/DELETE /devices/{deviceID}`, `POST /devices/register`, `POST /devices/{deviceID}/command` |
+| Bridge | `POST /bridge/commands/claim`, `POST /bridge/commands/{commandID}/complete`, `POST /bridge/devices/{deviceID}/status` |
 | Scenes | `GET/POST /scenes`, `GET/DELETE /scenes/{sceneID}`, `POST /scenes/{sceneID}/activate` |
 | Automations | `GET/POST /automations`, `PUT/DELETE /automations/{id}`, `POST /automations/{id}/toggle`, `DELETE /automations/group` |
 | Schedule | `GET /schedule`, `GET /schedule/meta`, `GET /schedule/date/{date}`, `POST /schedule/import` |
@@ -69,7 +70,7 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 Render cannot send UDP to local WiZ lights directly. In cloud mode:
 
 ```text
-frontend or Telegram -> Render API -> device_commands table -> local engine bridge -> WiZ UDP
+frontend or Telegram -> Render API -> device_commands table -> local HTTP bridge -> WiZ UDP
 ```
 
 Important queue fields:
@@ -78,14 +79,14 @@ Important queue fields:
 - `claimed_at`: set when the local bridge atomically claims work
 - `updated_at`: updated by claim, completion, and failure transitions
 
-The command poller uses `FOR UPDATE SKIP LOCKED` and requeues stale `processing` commands older than two minutes.
+The bridge claims work through `POST /bridge/commands/claim`. The backend still uses `FOR UPDATE SKIP LOCKED` and requeues stale `processing` commands older than two minutes.
 
 ## Regenerate Swagger
 
 Run this after changing handlers or route annotations:
 
 ```bash
-cd C:\Users\jeffrey\Desktop\Projecten\JeffriesBackend-render-fix\backend
+cd C:\Users\jeffrey\Desktop\Projecten\JeffriesBackend\backend
 go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/api/main.go
 ```
 

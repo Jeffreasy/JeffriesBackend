@@ -48,6 +48,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	healthH := handler.NewHealthHandler(db)
 	roomH := handler.NewRoomHandler(store.NewRoomStore(db))
 	deviceH := handler.NewDeviceHandler(deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
+	bridgeH := handler.NewBridgeHandler(deviceStore, commandStore)
 	sceneH := handler.NewSceneHandler(store.NewSceneStore(db), deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
 	autoH := handler.NewAutomationHandler(store.NewAutomationStore(db))
 	scheduleH := handler.NewScheduleHandler(store.NewScheduleStore(db))
@@ -65,7 +66,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	settingsH := handler.NewSettingsHandler(db, telegramClient)
 	syncH := handler.NewSyncHandler(db, cfg)
 
-	registerRoutes(r, cfg, healthH, roomH, deviceH, sceneH, autoH,
+	registerRoutes(r, cfg, healthH, roomH, deviceH, bridgeH, sceneH, autoH,
 		scheduleH, transactionH, salaryH, loonstrookH, personalEventH, emailH,
 		privacyH, noteH, habitH, lcH, settingsH, syncH)
 

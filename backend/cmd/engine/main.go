@@ -26,6 +26,17 @@ func main() {
 	}
 	slog.Info("============================================================")
 
+	// Context with OS signal cancellation
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if cfg.BridgeAPIURL != "" {
+		slog.Info("starting local cloud bridge mode", "api", cfg.BridgeAPIURL)
+		engine.RunCloudBridge(ctx, cfg)
+		slog.Info("✅ cloud bridge cleanly stopped")
+		return
+	}
+
 	// Database connection
 	dbCtx := context.Background()
 	db, err := store.New(dbCtx, cfg.DatabaseURL)
@@ -38,10 +49,6 @@ func main() {
 		slog.Error("runtime schema check failed", "error", err)
 		os.Exit(1)
 	}
-
-	// Context with OS signal cancellation
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	eng := engine.New(cfg, db)
 

@@ -10,7 +10,7 @@
 | Backend API | Go 1.25 + chi router |
 | Database | PostgreSQL 16 + pgx v5 |
 | Automation Engine | Go goroutines (server-side) |
-| WiZ Control | UDP direct LAN of Postgres command queue |
+| WiZ Control | UDP direct LAN of Render command queue via HTTP bridge |
 | Sync | PostgreSQL-native automations, devices, notes, Gmail/Calendar metadata |
 | Container | Docker Compose |
 
@@ -31,10 +31,10 @@ Postgres wordt lokaal gepubliceerd op `127.0.0.1:15432` om conflicten met een ho
 
 ## Render + lokale lamp-bridge
 
-Render kan de API, Telegram, sync jobs, automations en PostgreSQL online houden. WiZ-lampen blijven wel lokale UDP-devices op je thuisnetwerk. Daarom gebruikt de cloudmodus een queue:
+Render kan de API, Telegram, sync jobs, automations en PostgreSQL online houden. WiZ-lampen blijven wel lokale UDP-devices op je thuisnetwerk. Daarom gebruikt de cloudmodus een queue met een lokale HTTP-bridge:
 
 ```text
-Frontend/Telegram -> Render API -> Render Postgres device_commands -> lokale engine op pc -> WiZ UDP -> lampen
+Frontend/Telegram -> Render API -> device_commands -> lokale bridge via Render API -> WiZ UDP -> lampen
 ```
 
 Aanbevolen Render API/background-engine env:
@@ -52,12 +52,11 @@ DATABASE_URL=<Render internal Postgres URL>
 Aanbevolen lokale bridge env op je pc:
 
 ```bash
-DATABASE_URL=<Render external Postgres URL>
-LIGHT_COMMAND_MODE=direct
+BRIDGE_API_URL=https://jeffriesbackend.onrender.com/api/v1
+BRIDGE_API_KEY=<zelfde waarde als APP_SECRET_KEY op Render>
+BRIDGE_STATUS_POLL_ENABLED=true
 ENGINE_CRONS_ENABLED=false
 ENGINE_AUTOMATIONS_ENABLED=false
-ENGINE_COMMAND_POLLER_ENABLED=true
-ENGINE_STATUS_POLL_ENABLED=true
 TELEGRAM_BOT_ENABLED=false
 ```
 
