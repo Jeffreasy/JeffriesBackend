@@ -92,7 +92,7 @@ func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg
 
 		// Acknowledge the click immediately so the loading spinner goes away
 		_ = client.AnswerCallbackQuery(cb.ID, "")
-		
+
 		// Process the callback data exactly as if the user typed it
 		e.processText(ctx, client, chatID, strings.TrimSpace(cb.Data))
 		return
@@ -226,6 +226,19 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		slog.Info("💡 lamp command detected", "beschrijving", cmd.beschrijving, "chat", chatID)
 		_ = client.SendTyping(chatID)
 
+		if e.cfg.QueueLightCommands() {
+			if err := e.enqueueDeviceCommand(ctx, nil, cmd.wizParams); err != nil {
+				slog.Warn("queue telegram lamp command failed", "error", err)
+				_ = client.SendMessage(chatID, "⚠️ Lampopdracht kon niet in de wachtrij.")
+				return
+			}
+			reply := fmt.Sprintf("💡 %s — opdracht staat in de wachtrij", cmd.beschrijving)
+			_ = client.SendMessage(chatID, reply)
+			agentID := "lampen"
+			_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+			return
+		}
+
 		// Get all device IPs
 		deviceMap, err := e.getDeviceMap(ctx)
 		if err != nil || len(deviceMap) == 0 {
@@ -352,32 +365,32 @@ var scenePresets = map[string]struct {
 	params map[string]any
 	naam   string
 }{
-	"ocean":    {map[string]any{"state": true, "r": 0, "g": 80, "b": 200, "dimming": 60}, "Ocean"},
-	"romance":  {map[string]any{"state": true, "r": 200, "g": 50, "b": 80, "dimming": 40}, "Romance"},
-	"sunset":   {map[string]any{"state": true, "temp": 2200, "dimming": 60}, "Sunset"},
-	"party":    {map[string]any{"state": true, "r": 255, "g": 0, "b": 150, "dimming": 100}, "Party"},
-	"feest":    {map[string]any{"state": true, "r": 255, "g": 0, "b": 150, "dimming": 100}, "Party"},
-	"cozy":     {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
-	"cosy":     {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
-	"cossy":    {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
-	"gezellig": {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
-	"warm":     {map[string]any{"state": true, "temp": 2700, "dimming": 50}, "Warm"},
-	"focus":    {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
-	"studeren": {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
-	"werk":     {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
-	"relax":    {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
-	"ontspan":  {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
-	"chill":    {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
-	"tv":       {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
-	"film":     {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
-	"netflix":  {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
-	"kerst":    {map[string]any{"state": true, "r": 200, "g": 30, "b": 0, "dimming": 70}, "Christmas"},
+	"ocean":     {map[string]any{"state": true, "r": 0, "g": 80, "b": 200, "dimming": 60}, "Ocean"},
+	"romance":   {map[string]any{"state": true, "r": 200, "g": 50, "b": 80, "dimming": 40}, "Romance"},
+	"sunset":    {map[string]any{"state": true, "temp": 2200, "dimming": 60}, "Sunset"},
+	"party":     {map[string]any{"state": true, "r": 255, "g": 0, "b": 150, "dimming": 100}, "Party"},
+	"feest":     {map[string]any{"state": true, "r": 255, "g": 0, "b": 150, "dimming": 100}, "Party"},
+	"cozy":      {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
+	"cosy":      {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
+	"cossy":     {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
+	"gezellig":  {map[string]any{"state": true, "temp": 2700, "dimming": 40}, "Cozy"},
+	"warm":      {map[string]any{"state": true, "temp": 2700, "dimming": 50}, "Warm"},
+	"focus":     {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
+	"studeren":  {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
+	"werk":      {map[string]any{"state": true, "temp": 6000, "dimming": 90}, "Focus"},
+	"relax":     {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
+	"ontspan":   {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
+	"chill":     {map[string]any{"state": true, "temp": 2500, "dimming": 30}, "Relax"},
+	"tv":        {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
+	"film":      {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
+	"netflix":   {map[string]any{"state": true, "r": 100, "g": 0, "b": 180, "dimming": 30}, "TV Time"},
+	"kerst":     {map[string]any{"state": true, "r": 200, "g": 30, "b": 0, "dimming": 70}, "Christmas"},
 	"christmas": {map[string]any{"state": true, "r": 200, "g": 30, "b": 0, "dimming": 70}, "Christmas"},
-	"helder":   {map[string]any{"state": true, "temp": 5000, "dimming": 100}, "Helder"},
-	"bright":   {map[string]any{"state": true, "temp": 5000, "dimming": 100}, "Helder"},
-	"ochtend":  {map[string]any{"state": true, "temp": 2500, "dimming": 40}, "Ochtend"},
-	"nacht":    {map[string]any{"state": true, "temp": 2200, "dimming": 15}, "Nacht"},
-	"avond":    {map[string]any{"state": true, "temp": 2700, "dimming": 60}, "Avond"},
+	"helder":    {map[string]any{"state": true, "temp": 5000, "dimming": 100}, "Helder"},
+	"bright":    {map[string]any{"state": true, "temp": 5000, "dimming": 100}, "Helder"},
+	"ochtend":   {map[string]any{"state": true, "temp": 2500, "dimming": 40}, "Ochtend"},
+	"nacht":     {map[string]any{"state": true, "temp": 2200, "dimming": 15}, "Nacht"},
+	"avond":     {map[string]any{"state": true, "temp": 2700, "dimming": 60}, "Avond"},
 }
 
 var brightnessRe = regexp.MustCompile(`(\d+)\s*%`)
@@ -423,8 +436,12 @@ func detectLampCommand(text string) *lampCommand {
 	// Brightness
 	if m := brightnessRe.FindStringSubmatch(lower); m != nil {
 		val, _ := strconv.Atoi(m[1])
-		if val > 100 { val = 100 }
-		if val < 10 { val = 10 }
+		if val > 100 {
+			val = 100
+		}
+		if val < 10 {
+			val = 10
+		}
 		return &lampCommand{map[string]any{"state": true, "dimming": val}, fmt.Sprintf("Helderheid naar %d%%", val)}
 	}
 	if strings.Contains(lower, "dim") {
@@ -468,7 +485,7 @@ func (e *Engine) handleNotitiesDashboard(ctx context.Context, client *tg.Client,
 		if n.IsPinned {
 			pinStr = "📌 "
 		}
-		
+
 		text += fmt.Sprintf("%d. %s%s\n", i+1, pinStr, titel)
 		if len(n.Tags) > 0 {
 			text += fmt.Sprintf("   🏷️ %s\n", strings.Join(n.Tags, ", "))
@@ -522,7 +539,7 @@ func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatI
 		return
 	}
 	nStore := store.NewNoteStore(e.db)
-	
+
 	_, err = nStore.Update(ctx, id, map[string]any{"is_archived": true})
 	if err != nil {
 		_ = client.SendMessage(chatID, "Fout bij archiveren.")
@@ -539,8 +556,12 @@ func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatI
 func normalizeAssistantText(text string) string {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
-		if t, ok := parsed["telegramText"].(string); ok { return t }
-		if t, ok := parsed["antwoord"].(string); ok { return t }
+		if t, ok := parsed["telegramText"].(string); ok {
+			return t
+		}
+		if t, ok := parsed["antwoord"].(string); ok {
+			return t
+		}
 	}
 	return text
 }
@@ -736,11 +757,11 @@ func (e *Engine) handleQuickNote(ctx context.Context, client *tg.Client, chatID 
 	}
 
 	reply := fmt.Sprintf("✅ Notitie opgeslagen!\n📝 \"%s\"", titel)
-	
+
 	chatStore := store.NewChatStore(e.db.Pool)
 	agentID := "notes"
 	_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
-	
+
 	keyboard := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
@@ -760,20 +781,20 @@ func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID in
 		return
 	}
 	nStore := store.NewNoteStore(e.db)
-	
+
 	note, err := nStore.Get(ctx, id)
 	if err != nil {
 		_ = client.SendMessage(chatID, "Notitie niet gevonden.")
 		return
 	}
-	
+
 	newPinned := !note.IsPinned
 	_, err = nStore.Update(ctx, id, map[string]any{"is_pinned": newPinned})
 	if err != nil {
 		_ = client.SendMessage(chatID, "Fout bij pinnen.")
 		return
 	}
-	
+
 	if newPinned {
 		_ = client.SendMessage(chatID, "📌 Notitie vastgezet.")
 	} else {

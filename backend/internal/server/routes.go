@@ -33,6 +33,9 @@ func registerRoutes(
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
 
+	r.Get("/", health.Check)
+	r.Head("/", health.Check)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Swagger Docs
 		r.Get("/swagger/*", httpSwagger.Handler(
@@ -195,4 +198,3 @@ func registerRoutes(
 		})
 	})
 }
-

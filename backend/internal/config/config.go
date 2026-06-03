@@ -20,16 +20,21 @@ type Config struct {
 	// Database
 	DatabaseURL string
 
-
-	HomeappGASSecret        string
-	HomeappUserID           string
-	TelegramBridgeSecret    string
-	TelegramBotToken        string
-	TelegramChatID          string
-	AutomationEngineEnabled bool
-	StartBackgroundEngine   bool
-	TelegramBotEnabled      bool
-	WizDeviceIPs            string
+	HomeappGASSecret           string
+	HomeappUserID              string
+	TelegramBridgeSecret       string
+	TelegramBotToken           string
+	TelegramChatID             string
+	TelegramWebAppURL          string
+	AutomationEngineEnabled    bool
+	StartBackgroundEngine      bool
+	TelegramBotEnabled         bool
+	LightCommandMode           string
+	EngineCronsEnabled         bool
+	EngineAutomationsEnabled   bool
+	EngineCommandPollerEnabled bool
+	EngineStatusPollEnabled    bool
+	WizDeviceIPs               string
 
 	// AI APIs
 	GrokAPIKey string
@@ -41,10 +46,10 @@ type Config struct {
 	TodoistEnabled        bool
 
 	// Google OAuth (for Gmail + Calendar sync)
-	GoogleClientID     string
-	GoogleClientSecret string
-	GoogleRefreshToken string
-	SDBCalendarID      string
+	GoogleClientID      string
+	GoogleClientSecret  string
+	GoogleRefreshToken  string
+	SDBCalendarID       string
 	PersonalCalendarIDs string
 
 	// Todoist
@@ -60,6 +65,9 @@ type Config struct {
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
+	lightCommandMode := envOr("LIGHT_COMMAND_MODE", "direct")
+	queueLightCommands := strings.EqualFold(lightCommandMode, "queue")
+
 	cfg := &Config{
 		AppEnv:       envOr("APP_ENV", "development"),
 		AppSecretKey: envOr("APP_SECRET_KEY", "change-me"),
@@ -69,28 +77,33 @@ func Load() *Config {
 
 		DatabaseURL: envOr("DATABASE_URL", "postgres://homeapp:change-me@localhost:5432/homeapp?sslmode=disable"),
 
+		HomeappGASSecret:           envOr("HOMEAPP_GAS_SECRET", "homeapp-gas-sync-2026-secure"),
+		HomeappUserID:              envOr("HOMEAPP_USER_ID", "user_3Ax561ZvuSkGtWpKFooeY65HNtY"),
+		TelegramBridgeSecret:       envOr("TELEGRAM_BRIDGE_SECRET", ""),
+		TelegramBotToken:           envOr("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:             envOr("TELEGRAM_CHAT_ID", ""),
+		TelegramWebAppURL:          envOr("TELEGRAM_WEBAPP_URL", "https://jeffrieshomeapp.com"),
+		AutomationEngineEnabled:    envBoolOr("AUTOMATION_ENGINE_ENABLED", false),
+		StartBackgroundEngine:      envBoolOr("START_BACKGROUND_ENGINE", false),
+		TelegramBotEnabled:         envBoolOr("TELEGRAM_BOT_ENABLED", true),
+		LightCommandMode:           lightCommandMode,
+		EngineCronsEnabled:         envBoolOr("ENGINE_CRONS_ENABLED", true),
+		EngineAutomationsEnabled:   envBoolOr("ENGINE_AUTOMATIONS_ENABLED", true),
+		EngineCommandPollerEnabled: envBoolOr("ENGINE_COMMAND_POLLER_ENABLED", !queueLightCommands),
+		EngineStatusPollEnabled:    envBoolOr("ENGINE_STATUS_POLL_ENABLED", !queueLightCommands),
 
-		HomeappGASSecret:        envOr("HOMEAPP_GAS_SECRET", "homeapp-gas-sync-2026-secure"),
-		HomeappUserID:           envOr("HOMEAPP_USER_ID", "user_3Ax561ZvuSkGtWpKFooeY65HNtY"),
-		TelegramBridgeSecret:    envOr("TELEGRAM_BRIDGE_SECRET", ""),
-		TelegramBotToken:        envOr("TELEGRAM_BOT_TOKEN", ""),
-		TelegramChatID:          envOr("TELEGRAM_CHAT_ID", ""),
-		AutomationEngineEnabled: envBoolOr("AUTOMATION_ENGINE_ENABLED", false),
-		StartBackgroundEngine:   envBoolOr("START_BACKGROUND_ENGINE", false),
-		TelegramBotEnabled:      envBoolOr("TELEGRAM_BOT_ENABLED", true),
-
-		GrokAPIKey: envOr("GROK_API_KEY", ""),
-		GroqAPIKey: envOr("GROQ_API_KEY", ""),
-		WizDeviceIPs:            envOr("WIZ_DEVICE_IPS", ""),
+		GrokAPIKey:   envOr("GROK_API_KEY", ""),
+		GroqAPIKey:   envOr("GROQ_API_KEY", ""),
+		WizDeviceIPs: envOr("WIZ_DEVICE_IPS", ""),
 
 		GmailEnabled:          envBoolOr("GMAIL_SYNC_ENABLED", false),
 		GoogleCalendarEnabled: envBoolOr("GOOGLE_CALENDAR_SYNC_ENABLED", false),
 		TodoistEnabled:        envBoolOr("TODOIST_SYNC_ENABLED", false),
 
-		GoogleClientID:     envOr("GOOGLE_CLIENT_ID", ""),
-		GoogleClientSecret: envOr("GOOGLE_CLIENT_SECRET", ""),
-		GoogleRefreshToken: envOr("GOOGLE_REFRESH_TOKEN", ""),
-		SDBCalendarID:      envOr("SDB_CALENDAR_ID", "7gml08968kada988va91mu3i2qkci0ts@import.calendar.google.com"),
+		GoogleClientID:      envOr("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret:  envOr("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRefreshToken:  envOr("GOOGLE_REFRESH_TOKEN", ""),
+		SDBCalendarID:       envOr("SDB_CALENDAR_ID", "7gml08968kada988va91mu3i2qkci0ts@import.calendar.google.com"),
 		PersonalCalendarIDs: envOr("GOOGLE_PERSONAL_CALENDAR_IDS", ""),
 
 		TodoistAPIToken:  envOr("TODOIST_API_TOKEN", ""),
@@ -126,6 +139,12 @@ func (c *Config) SlogLevel() slog.Level {
 // Addr returns "host:port" for the HTTP server.
 func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.AppHost, c.AppPort)
+}
+
+// QueueLightCommands returns true when cloud services should enqueue lamp
+// commands instead of trying to reach WiZ devices over the local network.
+func (c *Config) QueueLightCommands() bool {
+	return strings.EqualFold(c.LightCommandMode, "queue")
 }
 
 // --- helpers ---

@@ -42,11 +42,13 @@ func New(cfg *config.Config, db *store.DB) *Server {
 
 	// Handlers
 	wizClient := wiz.NewClient()
+	deviceStore := store.NewDeviceStore(db)
+	commandStore := store.NewDeviceCommandStore(db)
 
 	healthH := handler.NewHealthHandler(db)
 	roomH := handler.NewRoomHandler(store.NewRoomStore(db))
-	deviceH := handler.NewDeviceHandler(store.NewDeviceStore(db), wizClient, cfg.HomeappUserID)
-	sceneH := handler.NewSceneHandler(store.NewSceneStore(db), store.NewDeviceStore(db), wizClient)
+	deviceH := handler.NewDeviceHandler(deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
+	sceneH := handler.NewSceneHandler(store.NewSceneStore(db), deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
 	autoH := handler.NewAutomationHandler(store.NewAutomationStore(db))
 	scheduleH := handler.NewScheduleHandler(store.NewScheduleStore(db))
 	transactionH := handler.NewTransactionHandler(store.NewTransactionStore(db))

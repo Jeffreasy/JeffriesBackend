@@ -38,11 +38,11 @@ type Engine struct {
 	cfg *config.Config
 	db  *store.DB
 
-	autoStore   *store.AutomationStore
-	devStore    *store.DeviceStore
-	schedStore  *store.ScheduleStore
-	cmdStore    *store.DeviceCommandStore
-	cron        *CronScheduler
+	autoStore  *store.AutomationStore
+	devStore   *store.DeviceStore
+	schedStore *store.ScheduleStore
+	cmdStore   *store.DeviceCommandStore
+	cron       *CronScheduler
 
 	firedAt   map[string]time.Time
 	firedMu   sync.Mutex
@@ -75,41 +75,55 @@ func (e *Engine) Run(ctx context.Context) {
 		"user", e.cfg.HomeappUserID[:12]+"...",
 	)
 
-	RegisterHomeappCrons(e.cron, e.db, CronConfig{
-		TelegramBotToken:      e.cfg.TelegramBotToken,
-		TelegramChatID:        e.cfg.TelegramChatID,
-		GmailEnabled:          e.cfg.GmailEnabled,
-		GoogleCalendarEnabled: e.cfg.GoogleCalendarEnabled,
-		TodoistEnabled:        e.cfg.TodoistEnabled,
-		UserID:                e.cfg.HomeappUserID,
-		GoogleClientID:        e.cfg.GoogleClientID,
-		GoogleClientSecret:    e.cfg.GoogleClientSecret,
-		GoogleRefreshToken:    e.cfg.GoogleRefreshToken,
-		SDBCalendarID:         e.cfg.SDBCalendarID,
-		PersonalCalendarIDs:   e.cfg.PersonalCalendarIDs,
-		TodoistAPIToken:       e.cfg.TodoistAPIToken,
-		TodoistProjectID:      e.cfg.TodoistProjectID,
-	})
-
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		e.cron.Run(ctx)
-	}()
+	if e.cfg.EngineCronsEnabled {
+		RegisterHomeappCrons(e.cron, e.db, CronConfig{
+			TelegramBotToken:      e.cfg.TelegramBotToken,
+			TelegramChatID:        e.cfg.TelegramChatID,
+			GmailEnabled:          e.cfg.GmailEnabled,
+			GoogleCalendarEnabled: e.cfg.GoogleCalendarEnabled,
+			TodoistEnabled:        e.cfg.TodoistEnabled,
+			UserID:                e.cfg.HomeappUserID,
+			GoogleClientID:        e.cfg.GoogleClientID,
+			GoogleClientSecret:    e.cfg.GoogleClientSecret,
+			GoogleRefreshToken:    e.cfg.GoogleRefreshToken,
+			SDBCalendarID:         e.cfg.SDBCalendarID,
+			PersonalCalendarIDs:   e.cfg.PersonalCalendarIDs,
+			TodoistAPIToken:       e.cfg.TodoistAPIToken,
+			TodoistProjectID:      e.cfg.TodoistProjectID,
+		})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		e.loopAutomations(ctx)
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.cron.Run(ctx)
+		}()
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		e.loopDeviceCommands(ctx)
-	}()
+	if e.cfg.EngineAutomationsEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.loopAutomations(ctx)
+		}()
+	}
+
+	if e.cfg.EngineCommandPollerEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.loopDeviceCommands(ctx)
+		}()
+	}
+
+	if e.cfg.EngineStatusPollEnabled && !e.cfg.EngineAutomationsEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.loopDeviceStatus(ctx)
+		}()
+	}
 
 	if e.cfg.TelegramBotToken != "" && e.cfg.TelegramBotEnabled {
 		wg.Add(1)
@@ -222,7 +236,7 @@ func (e *Engine) tick(ctx context.Context) error {
 
 	// Device status poll every N ticks
 	e.tickCount++
-	if e.tickCount%StatusPollEvery == 0 {
+	if e.cfg.EngineStatusPollEnabled && e.tickCount%StatusPollEvery == 0 {
 		e.pollDeviceStatus(ctx)
 	}
 
@@ -268,13 +282,29 @@ func (e *Engine) executeAction(ctx context.Context, auto map[string]any, deviceM
 		wg.Add(1)
 		go func(di deviceInfo) {
 			defer wg.Done()
-			e.applyAction(di, actionType, action)
+			e.applyAction(ctx, di, actionType, action)
 		}(info)
 	}
 	wg.Wait()
 }
 
-func (e *Engine) applyAction(di deviceInfo, actionType string, action map[string]any) {
+func (e *Engine) applyAction(ctx context.Context, di deviceInfo, actionType string, action map[string]any) {
+	if e.cfg.QueueLightCommands() {
+		if di.ID == uuid.Nil {
+			slog.Warn("cannot queue automation for fallback device without UUID", "type", actionType, "ip", di.IP)
+			return
+		}
+		command, ok := buildDeviceCommandFromAction(actionType, action)
+		if !ok {
+			slog.Warn("unknown action type", "type", actionType, "ip", di.IP)
+			return
+		}
+		if err := e.enqueueDeviceCommand(ctx, &di.ID, command); err != nil {
+			slog.Warn("queue automation command failed", "type", actionType, "device", di.ID, "error", err)
+		}
+		return
+	}
+
 	ip := di.IP
 	var err error
 
@@ -319,6 +349,7 @@ func (e *Engine) applyAction(di deviceInfo, actionType string, action map[string
 // ─── Device Map (PostgreSQL) ─────────────────────────────────────────────────
 
 type deviceInfo struct {
+	ID         uuid.UUID
 	IP         string
 	DeviceType string
 }
@@ -343,7 +374,7 @@ func (e *Engine) getDeviceMap(ctx context.Context) (map[string]deviceInfo, error
 		if dt == "" {
 			dt = "color_light"
 		}
-		result[d.ID.String()] = deviceInfo{IP: ip, DeviceType: dt}
+		result[d.ID.String()] = deviceInfo{ID: d.ID, IP: ip, DeviceType: dt}
 	}
 
 	// Fall back to WIZ_DEVICE_IPS when DB has no devices with IPs
@@ -365,6 +396,22 @@ func (e *Engine) fallbackDeviceMap() map[string]deviceInfo {
 }
 
 // ─── Device Status Poller ────────────────────────────────────────────────────
+
+func (e *Engine) loopDeviceStatus(ctx context.Context) {
+	slog.Info("device status poller started")
+	ticker := time.NewTicker(time.Duration(StatusPollEvery) * EngineInterval)
+	defer ticker.Stop()
+
+	e.pollDeviceStatus(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.pollDeviceStatus(ctx)
+		}
+	}
+}
 
 func (e *Engine) pollDeviceStatus(ctx context.Context) {
 	slog.Info("🔍 device status poll started")

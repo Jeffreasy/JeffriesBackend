@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -17,14 +18,16 @@ import (
 
 // DeviceHandler handles device operations (PostgreSQL + WiZ UDP).
 type DeviceHandler struct {
-	devices *store.DeviceStore
-	wiz     *wiz.Client
-	userID  string
+	devices     *store.DeviceStore
+	commands    *store.DeviceCommandStore
+	wiz         *wiz.Client
+	userID      string
+	commandMode string
 }
 
 // NewDeviceHandler creates a new DeviceHandler.
-func NewDeviceHandler(devices *store.DeviceStore, w *wiz.Client, userID string) *DeviceHandler {
-	return &DeviceHandler{devices: devices, wiz: w, userID: userID}
+func NewDeviceHandler(devices *store.DeviceStore, commands *store.DeviceCommandStore, w *wiz.Client, userID, commandMode string) *DeviceHandler {
+	return &DeviceHandler{devices: devices, commands: commands, wiz: w, userID: userID, commandMode: commandMode}
 }
 
 // List returns all devices from PostgreSQL.
@@ -309,12 +312,36 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cmd.SceneID != nil {
+		statePatch["on"] = true
+	}
+
+	if h.queueLightCommands() {
+		raw, err := json.Marshal(cmd)
+		if err != nil {
+			Error(w, http.StatusInternalServerError, "Command serialiseren mislukt")
+			return
+		}
+		if _, err := h.commands.Create(r.Context(), h.userID, &id, raw); err != nil {
+			Error(w, http.StatusInternalServerError, "Command queue mislukt: "+err.Error())
+			return
+		}
+		if len(statePatch) > 0 {
+			go func() {
+				if err := h.devices.UpdateState(context.Background(), id, statePatch); err != nil {
+					slog.Warn("optimistic state update failed", "device", id, "error", err)
+				}
+			}()
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if cmd.SceneID != nil {
 		if err := h.wiz.SetScene(ip, *cmd.SceneID); err != nil {
 			slog.Error("WiZ command failed", "device", id, "ip", ip, "error", err)
 			Error(w, http.StatusBadGateway, "WiZ command failed: "+err.Error())
 			return
 		}
-		statePatch["on"] = true
 	} else {
 		if err := h.wiz.SetState(ip, opts); err != nil {
 			slog.Error("WiZ command failed", "device", id, "ip", ip, "error", err)
@@ -333,6 +360,10 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *DeviceHandler) queueLightCommands() bool {
+	return strings.EqualFold(h.commandMode, "queue")
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

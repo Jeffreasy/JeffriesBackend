@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -16,14 +18,17 @@ import (
 
 // SceneHandler handles scene CRUD + activation via PostgreSQL and WiZ UDP.
 type SceneHandler struct {
-	scenes  *store.SceneStore
-	devices *store.DeviceStore
-	wiz     *wiz.Client
+	scenes      *store.SceneStore
+	devices     *store.DeviceStore
+	commands    *store.DeviceCommandStore
+	wiz         *wiz.Client
+	userID      string
+	commandMode string
 }
 
 // NewSceneHandler creates a new SceneHandler.
-func NewSceneHandler(scenes *store.SceneStore, devices *store.DeviceStore, w *wiz.Client) *SceneHandler {
-	return &SceneHandler{scenes: scenes, devices: devices, wiz: w}
+func NewSceneHandler(scenes *store.SceneStore, devices *store.DeviceStore, commands *store.DeviceCommandStore, w *wiz.Client, userID, commandMode string) *SceneHandler {
+	return &SceneHandler{scenes: scenes, devices: devices, commands: commands, wiz: w, userID: userID, commandMode: commandMode}
 }
 
 // List returns all scenes.
@@ -172,6 +177,28 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if h.queueLightCommands() {
+		for _, action := range scene.Actions {
+			command, statePatch := commandFromSceneAction(action)
+			raw, err := json.Marshal(command)
+			if err != nil {
+				Error(w, http.StatusInternalServerError, "Scene command serialiseren mislukt")
+				return
+			}
+			if _, err := h.commands.Create(ctx, h.userID, &action.DeviceID, raw); err != nil {
+				Error(w, http.StatusInternalServerError, "Scene command queue mislukt: "+err.Error())
+				return
+			}
+			if len(statePatch) > 0 {
+				if err := h.devices.UpdateState(context.Background(), action.DeviceID, statePatch); err != nil {
+					slog.Warn("scene optimistic state update failed", "device", action.DeviceID, "error", err)
+				}
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	var wg sync.WaitGroup
 	for _, action := range scene.Actions {
 		wg.Add(1)
@@ -224,7 +251,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 				slog.Error("WiZ command failed", "ip", *device.IPAddress, "error", err)
 				return
 			}
-			
+
 			if len(statePatch) > 0 {
 				if err := h.devices.UpdateState(context.Background(), a.DeviceID, statePatch); err != nil {
 					slog.Warn("scene state update failed", "device", a.DeviceID, "error", err)
@@ -237,6 +264,48 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SceneHandler) queueLightCommands() bool {
+	return strings.EqualFold(h.commandMode, "queue")
+}
+
+func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any) {
+	command := map[string]any{"on": true}
+	statePatch := map[string]any{"on": true}
+
+	if v, ok := a.TargetState["brightness"]; ok {
+		if b, ok := toIntVal(v); ok {
+			command["brightness"] = b
+			statePatch["brightness"] = b
+		}
+	}
+	if v, ok := a.TargetState["color_temp"]; ok {
+		if ct, ok := toIntVal(v); ok {
+			command["color_temp"] = ct
+			statePatch["color_temp"] = ct
+		}
+	}
+	if rv, ok := a.TargetState["r"]; ok {
+		if r, ok := toIntVal(rv); ok {
+			command["r"] = r
+			statePatch["r"] = r
+		}
+	}
+	if gv, ok := a.TargetState["g"]; ok {
+		if g, ok := toIntVal(gv); ok {
+			command["g"] = g
+			statePatch["g"] = g
+		}
+	}
+	if bv, ok := a.TargetState["b"]; ok {
+		if b, ok := toIntVal(bv); ok {
+			command["b"] = b
+			statePatch["b"] = b
+		}
+	}
+
+	return command, statePatch
 }
 
 // toIntVal converts a JSON number (float64 from unmarshalling) to int.
