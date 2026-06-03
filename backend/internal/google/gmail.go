@@ -288,9 +288,7 @@ func parseGmailMessage(msg gmailMessage, userID string) ParsedEmail {
 	}
 
 	searchText := strings.Join([]string{subject, msg.Snippet, from, to}, " ")
-	if len(searchText) > 500 {
-		searchText = searchText[:500]
-	}
+	searchText = truncateRunes(searchText, 500)
 
 	hasLabel := func(l string) bool {
 		for _, id := range labelIDs {
@@ -343,4 +341,21 @@ func parseGmailMessage(msg gmailMessage, userID string) ParsedEmail {
 		SearchText:    searchText,
 		SyncedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	count := 0
+	for _, r := range s {
+		if count >= max {
+			break
+		}
+		b.WriteRune(r)
+		count++
+	}
+	return b.String()
 }
