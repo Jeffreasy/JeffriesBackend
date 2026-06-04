@@ -878,13 +878,36 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			}
 		}
 
+		loc, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			loc = time.UTC
+		}
+		now := time.Now().In(loc)
+		stats := buildNoteStats(activeNotes(notes), now, loc)
+		focusNotes := selectFocusNotes(activeNotes(notes), now, loc, limit)
+		focus := make([]map[string]any, 0, len(focusNotes))
+		for _, note := range focusNotes {
+			focus = append(focus, noteAIItem(note, now, loc))
+		}
+
 		return e.jsonResponse(map[string]any{
 			"totalActive":    totalActive,
 			"totalPinned":    totalPinned,
 			"totalCompleted": totalCompleted,
 			"totalArchived":  totalArchived,
 			"limit":          limit,
-			"items":          active,
+			"hasActive":      totalActive > 0,
+			"stats": map[string]any{
+				"active":    stats.Active,
+				"today":     stats.Today,
+				"pinned":    stats.Pinned,
+				"completed": stats.Completed,
+				"attention": stats.Attention,
+				"topTags":   stats.TopTags,
+			},
+			"focus":       focus,
+			"items":       active,
+			"instruction": "Als totalActive groter is dan 0, zeg nooit dat er geen actieve notities zijn. Gebruik focus voor prioriteit, deadline, checklist en triage.",
 		}, nil)
 
 	case "notitieAanmaken":

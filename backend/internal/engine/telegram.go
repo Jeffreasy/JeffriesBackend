@@ -350,7 +350,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	}
 
 	tools := ai.GetToolsForAgent(agentID, ai.AllTools)
-	prompt := ai.BuildSystemPrompt(agent, map[string]any{"status": "Go backend"}, tools)
+	prompt := ai.BuildSystemPrompt(agent, e.buildAILiveContext(ctx, agentID), tools)
 
 	executor := NewConfirmingExecutor(
 		e.db.Pool,
@@ -486,6 +486,85 @@ func (e *Engine) googleOAuthClient() *google.OAuthClient {
 		return nil
 	}
 	return google.NewOAuthClient(e.cfg.GoogleClientID, e.cfg.GoogleClientSecret, e.cfg.GoogleRefreshToken)
+}
+
+func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[string]any {
+	live := map[string]any{"status": "Go backend"}
+
+	switch agentID {
+	case "notes", "brain", "dashboard":
+		if snapshot, err := e.buildNotesAISnapshot(ctx, 8); err == nil {
+			live["notes"] = snapshot
+		} else {
+			live["notesError"] = err.Error()
+		}
+	}
+
+	return live
+}
+
+func (e *Engine) buildNotesAISnapshot(ctx context.Context, limit int) (map[string]any, error) {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+
+	notes, err := store.NewNoteStore(e.db).List(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		return nil, err
+	}
+	active := activeNotes(notes)
+	stats := buildNoteStats(active, now, loc)
+	focus := selectFocusNotes(active, now, loc, limit)
+
+	items := make([]map[string]any, 0, len(focus))
+	for _, note := range focus {
+		items = append(items, noteAIItem(note, now, loc))
+	}
+
+	return map[string]any{
+		"source":      "server-side live note snapshot",
+		"generatedAt": now.Format(time.RFC3339),
+		"stats": map[string]any{
+			"active":    stats.Active,
+			"today":     stats.Today,
+			"pinned":    stats.Pinned,
+			"completed": stats.Completed,
+			"attention": stats.Attention,
+			"topTags":   stats.TopTags,
+		},
+		"focus":       items,
+		"instruction": "Gebruik deze snapshot als basis voor notitievragen. Zeg niet dat er geen actieve notities zijn wanneer stats.active groter is dan 0.",
+	}, nil
+}
+
+func noteAIItem(note model.Note, now time.Time, loc *time.Location) map[string]any {
+	checked, total := checklistProgress(note.Inhoud)
+	item := map[string]any{
+		"id":             note.ID.String(),
+		"title":          noteTitle(note),
+		"priority":       optionalNoteString(note.Prioriteit),
+		"symbol":         optionalNoteString(note.Symbol),
+		"tags":           note.Tags,
+		"isPinned":       note.IsPinned,
+		"isCompleted":    note.IsCompleted,
+		"triageFlag":     note.TriageFlag != nil && *note.TriageFlag,
+		"checklistDone":  checked,
+		"checklistTotal": total,
+		"attention":      noteNeedsAttention(note, now, loc),
+		"updatedAt":      note.Gewijzigd.In(loc).Format(time.RFC3339),
+		"summaryLine":    formatNoteListLine(note, now, loc),
+	}
+	if note.Deadline != nil {
+		item["deadline"] = note.Deadline.In(loc).Format(time.RFC3339)
+		item["deadlineLabel"] = formatNoteDeadline(*note.Deadline, now, loc)
+	}
+	snippet := strings.TrimSpace(note.Inhoud)
+	if snippet != "" {
+		item["snippet"] = truncateRunes(strings.ReplaceAll(snippet, "\n", " "), 220)
+	}
+	return item
 }
 
 // ─── Command Routing ────────────────────────────────────────────────────────

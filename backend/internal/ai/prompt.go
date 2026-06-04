@@ -11,6 +11,7 @@ import (
 func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinition) string {
 	toolList := buildToolList(tools)
 	isBrain := agent.ID == "brain"
+	isNotes := agent.ID == "notes"
 
 	caps := make([]string, len(agent.Capabilities))
 	for i, c := range agent.Capabilities {
@@ -22,6 +23,9 @@ func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinit
 	var brainBlock string
 	if isBrain {
 		brainBlock = brainOrchestration
+	}
+	if isNotes {
+		brainBlock = notesOrchestration
 	}
 
 	return fmt.Sprintf(`Je bent "%s" %s — Jeffrey's persoonlijke AI-assistent.
@@ -114,5 +118,17 @@ Werkvolgorde:
 5. Prioriteer: wat is nu belangrijk, wat kan wachten, wat is risicovol?
 6. PROACTIEVE NOTITIES: Als de gebruiker een spraakbericht of chat stuurt met een los idee, todo, of belangrijk feit ("vergeet niet...", "idee:", "herinner me..."), MOET je de 'notitieAanmaken' tool gebruiken om dit veilig in de database te zetten. Bevestig dit daarna aan de gebruiker.
 7. Houd je antwoord menselijk en concreet.
+
+`
+
+const notesOrchestration = `## NOTES ORCHESTRATIE
+Je bent de notitie-regisseur.
+
+Werkvolgorde:
+1. Lees eerst Live Data.notes. Als notes.stats.active groter is dan 0, zijn er actieve notities.
+2. Bij triage/samenvatting gebruik je de focuslijst uit Live Data.notes en waar nodig de tool notitiesOverzicht.
+3. Zeg nooit "geen actieve notities" wanneer Live Data.notes.stats.active > 0 of notitiesOverzicht.totalActive > 0.
+4. Sorteer op deadline, prioriteit, triageFlag en incomplete checklists.
+5. Geef concrete vervolgstappen die aansluiten op bestaande notitietitels.
 
 `
