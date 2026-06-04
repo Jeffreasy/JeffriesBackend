@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
@@ -30,6 +32,7 @@ func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
 			"status":  "degraded",
 			"service": "homeapp-api",
 			"db":      "error",
+			"build":   buildInfo(),
 			"detail":  err.Error(),
 		})
 		return
@@ -39,5 +42,20 @@ func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"service": "homeapp-api",
 		"db":      "ok",
+		"build":   buildInfo(),
 	})
+}
+
+func buildInfo() map[string]any {
+	commit := strings.TrimSpace(os.Getenv("RENDER_GIT_COMMIT"))
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	if commit == "" {
+		commit = "local"
+	}
+	return map[string]any{
+		"commit": commit,
+		"render": strings.EqualFold(os.Getenv("RENDER"), "true"),
+	}
 }
