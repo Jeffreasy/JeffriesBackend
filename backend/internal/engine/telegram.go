@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -184,6 +185,288 @@ func (e *Engine) handleVoice(ctx context.Context, client *tg.Client, chatID int6
 	e.processText(ctx, client, chatID, transcript)
 }
 
+func (e *Engine) handleHabitStatus(ctx context.Context, client *tg.Client, chatID int64) {
+	_ = client.SendTyping(chatID)
+
+	habitStore := store.NewHabitStore(e.db)
+	userID := e.cfg.HomeappUserID
+	today := time.Now().In(telegramLocation()).Format("2006-01-02")
+
+	stats, statsErr := habitStore.Stats(ctx, userID)
+	habits, habitsErr := habitStore.List(ctx, userID)
+	due, dueErr := habitStore.ListDueForDate(ctx, userID, today)
+	logs, logsErr := habitStore.ListLogsForDate(ctx, userID, today)
+	badges, badgesErr := habitStore.ListBadges(ctx, userID)
+	if statsErr != nil || habitsErr != nil {
+		_ = client.SendMessage(chatID, "❌ Habit status ophalen mislukt.")
+		return
+	}
+
+	logByHabit := make(map[string]model.HabitLog)
+	if logsErr == nil {
+		for _, log := range logs {
+			logByHabit[log.HabitID.String()] = log
+		}
+	}
+
+	active := make([]model.Habit, 0, len(habits))
+	paused := 0
+	for _, habit := range habits {
+		if habit.IsPauze {
+			paused++
+			continue
+		}
+		active = append(active, habit)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "🎯 Habit cockpit — %s\n\n", today)
+	fmt.Fprintf(&b, "Vandaag\n")
+	fmt.Fprintf(&b, "• Due: %d · voltooid: %d\n", len(due), stats.TodayCompleted)
+	fmt.Fprintf(&b, "• Streak: %dd · record: %dd\n", stats.CurrentStreak, stats.LongestStreak)
+	fmt.Fprintf(&b, "• Incidenten 30d: %d\n\n", stats.Incidents30d)
+
+	fmt.Fprintf(&b, "Systeem\n")
+	fmt.Fprintf(&b, "• Actief: %d", len(active))
+	if paused > 0 {
+		fmt.Fprintf(&b, " · pauze: %d", paused)
+	}
+	fmt.Fprintf(&b, "\n• XP: %d · voltooiingen: %d", stats.TotaalXP, stats.TotaalVoltooid)
+	if badgesErr == nil {
+		fmt.Fprintf(&b, " · badges: %d", len(badges))
+	}
+	fmt.Fprintf(&b, "\n\n")
+
+	if len(due) > 0 {
+		fmt.Fprintf(&b, "Vandaag gepland\n")
+		for i, habit := range due[:minInt(len(due), 6)] {
+			log, hasLog := logByHabit[habit.ID.String()]
+			status := "open"
+			if habit.Type == "negatief" && !log.IsIncident {
+				status = "clean"
+			}
+			if hasLog && log.Voltooid {
+				status = "voltooid"
+			}
+			if hasLog && log.IsIncident {
+				status = "incident"
+			}
+			fmt.Fprintf(&b, "%d. %s — %s\n", i+1, formatHabitTelegramName(habit), status)
+		}
+		fmt.Fprintf(&b, "\n")
+	} else if len(active) > 0 {
+		fmt.Fprintf(&b, "Niet gepland vandaag\n")
+		for i, habit := range active[:minInt(len(active), 5)] {
+			fmt.Fprintf(&b, "%d. %s — %s\n", i+1, formatHabitTelegramName(habit), formatHabitScheduleSummary(habit))
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	if dueErr != nil {
+		fmt.Fprintf(&b, "Let op: due-check had een fallback nodig: %s\n\n", truncateRunes(dueErr.Error(), 120))
+	}
+	if logsErr != nil {
+		fmt.Fprintf(&b, "Let op: logs van vandaag konden niet worden geladen.\n\n")
+	}
+
+	if len(due) > 0 {
+		fmt.Fprintf(&b, "Tip: stuur /check of zeg welke habit je wil afvinken.")
+	} else if len(active) > 0 {
+		fmt.Fprintf(&b, "Tip: als dit wel dagelijks moet, zet frequentie/roosterfilter in de Habits UI goed.")
+	} else {
+		fmt.Fprintf(&b, "Tip: maak je eerste habit aan via de Habits UI of Telegram.")
+	}
+
+	_ = client.SendMessageWithKeyboard(chatID, b.String(), buildMainMenu())
+}
+
+func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, chatID int64) {
+	_ = client.SendTyping(chatID)
+
+	transactionStore := store.NewTransactionStore(e.db)
+	userID := e.cfg.HomeappUserID
+	stats, err := transactionStore.GetStats(ctx, userID)
+	if err != nil {
+		_ = client.SendMessage(chatID, "❌ Finance status ophalen mislukt.")
+		return
+	}
+
+	txs, totalOutgoing, txErr := transactionStore.ListFiltered(ctx, userID, store.TransactionFilter{
+		ExcludeIntern: true,
+		Richting:      "uit",
+		Limit:         5000,
+	})
+	if txErr != nil {
+		_ = client.SendMessage(chatID, "❌ Finance breakdown ophalen mislukt: "+truncateRunes(txErr.Error(), 180))
+		return
+	}
+
+	summary := summarizeFinanceTransactions(txs)
+	topCategories := topFinanceBreakdowns(txs, "categorie", 5)
+	topMerchants := topFinanceBreakdowns(txs, "merchant", 5)
+	uncategorized := uncategorizedFinanceTransactions(txs, 5)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "💰 Finance cockpit\n\n")
+	fmt.Fprintf(&b, "Status\n")
+	fmt.Fprintf(&b, "• Saldo: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
+	fmt.Fprintf(&b, "• Inkomsten: %s\n", formatEuroTelegram(floatFromSummary(stats, "inkomsten")))
+	fmt.Fprintf(&b, "• Uitgaven: %s\n", formatEuroTelegram(math.Abs(floatFromSummary(stats, "uitgaven"))))
+	fmt.Fprintf(&b, "• Netto: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
+	fmt.Fprintf(&b, "• Transacties: %d\n\n", intFromSummary(stats, "totaal"))
+
+	fmt.Fprintf(&b, "Uitgaande transacties\n")
+	fmt.Fprintf(&b, "• Geanalyseerd: %d", len(txs))
+	if totalOutgoing > len(txs) {
+		fmt.Fprintf(&b, " van %d", totalOutgoing)
+	}
+	fmt.Fprintf(&b, "\n• Totaal uitgaand: %s\n\n", formatEuroTelegram(floatFromSummary(summary, "uitgaven")))
+
+	appendFinanceBreakdown(&b, "Top categorieën", topCategories)
+	appendFinanceBreakdown(&b, "Top tegenpartijen", topMerchants)
+
+	if len(uncategorized) > 0 {
+		fmt.Fprintf(&b, "\nOngelabeld\n")
+		for i, tx := range uncategorized {
+			fmt.Fprintf(&b, "%d. %s — %s\n", i+1, transactionCounterparty(tx), formatEuroTelegram(math.Abs(tx.Bedrag)))
+		}
+	} else {
+		fmt.Fprintf(&b, "\nOngelabeld\nGeen ongelabelde transacties in de geanalyseerde set.\n")
+	}
+
+	_ = client.SendMessageWithKeyboard(chatID, b.String(), buildMainMenu())
+}
+
+func telegramLocation() *time.Location {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+func formatHabitTelegramName(habit model.Habit) string {
+	name := strings.TrimSpace(habit.Naam)
+	emoji := strings.TrimSpace(habit.Emoji)
+	if emoji == "" && name == "" {
+		return "Habit"
+	}
+	if emoji == "" {
+		return name
+	}
+	if name == "" {
+		return emoji
+	}
+	return emoji + " " + name
+}
+
+func formatHabitScheduleSummary(habit model.Habit) string {
+	parts := []string{}
+	frequency := strings.TrimSpace(habit.Frequentie)
+	if frequency == "" {
+		frequency = "dagelijks"
+	}
+
+	switch frequency {
+	case "dagelijks":
+		parts = append(parts, "dagelijks")
+	case "weekdagen":
+		parts = append(parts, "weekdagen")
+	case "weekenddagen":
+		parts = append(parts, "weekend")
+	case "aangepast":
+		if len(habit.AangepasteDagen) > 0 {
+			parts = append(parts, "dagen "+formatHabitDayLabels(habit.AangepasteDagen))
+		} else {
+			parts = append(parts, "aangepaste dagen leeg")
+		}
+	case "x_per_week":
+		target := 1
+		if habit.DoelAantal != nil && *habit.DoelAantal > 0 {
+			target = *habit.DoelAantal
+		}
+		parts = append(parts, fmt.Sprintf("%dx per week", target))
+	case "x_per_maand":
+		target := 1
+		if habit.DoelAantal != nil && *habit.DoelAantal > 0 {
+			target = *habit.DoelAantal
+		}
+		parts = append(parts, fmt.Sprintf("%dx per maand", target))
+	default:
+		parts = append(parts, frequency)
+	}
+
+	if habit.RoosterFilter != nil {
+		filter := strings.TrimSpace(*habit.RoosterFilter)
+		if filter != "" && !strings.EqualFold(filter, "alle") {
+			parts = append(parts, "rooster "+filter)
+		}
+	}
+	if habit.DoelTijd != nil && strings.TrimSpace(*habit.DoelTijd) != "" {
+		parts = append(parts, "tijd "+strings.TrimSpace(*habit.DoelTijd))
+	}
+	if habit.Type == "negatief" {
+		parts = append(parts, "avoid")
+	}
+	if len(parts) == 0 {
+		return "geen planning zichtbaar"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatHabitDayLabels(days []int32) string {
+	labels := map[int32]string{
+		0: "zo",
+		1: "ma",
+		2: "di",
+		3: "wo",
+		4: "do",
+		5: "vr",
+		6: "za",
+	}
+	out := make([]string, 0, len(days))
+	for _, day := range days {
+		if label, ok := labels[day]; ok {
+			out = append(out, label)
+		}
+	}
+	if len(out) == 0 {
+		return "-"
+	}
+	return strings.Join(out, ", ")
+}
+
+func formatEuroTelegram(value float64) string {
+	if value < 0 {
+		return fmt.Sprintf("-€%.2f", math.Abs(value))
+	}
+	return fmt.Sprintf("€%.2f", value)
+}
+
+func appendFinanceBreakdown(b *strings.Builder, title string, rows []map[string]any) {
+	fmt.Fprintf(b, "%s\n", title)
+	if len(rows) == 0 {
+		fmt.Fprintf(b, "Geen data.\n\n")
+		return
+	}
+	for i, row := range rows {
+		name, _ := row["naam"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name = "Onbekend"
+		}
+		fmt.Fprintf(
+			b,
+			"%d. %s — %s (%dx)\n",
+			i+1,
+			truncateRunes(name, 54),
+			formatEuroTelegram(floatFromSummary(row, "bedrag")),
+			intFromSummary(row, "count"),
+		)
+	}
+	fmt.Fprintf(b, "\n")
+}
+
 func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int64, text string) {
 	// Save user message
 	chatStore := store.NewChatStore(e.db.Pool)
@@ -193,46 +476,54 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		return
 	}
 
+	command := strings.ToLower(strings.TrimSpace(text))
+
 	// Built-in commands
 	switch {
-	case text == "/start":
+	case command == "/start":
 		e.handleStart(ctx, client, chatID)
 		return
-	case text == "/help":
+	case command == "/help":
 		_ = client.SendMessageWithKeyboard(chatID, buildHelpText(), buildMainMenu())
 		return
-	case text == "/status" || text == "/health":
+	case command == "/status" || command == "/health":
 		_ = client.SendMessage(chatID, "⚙️ Go backend actief")
 		return
-	case text == "/ai":
+	case command == "/ai":
 		e.handleAIStatus(ctx, client, chatID)
 		return
-	case text == "/notehelp":
+	case command == "/notehelp":
 		_ = client.SendMessageWithKeyboard(chatID, buildNoteHelpText(), buildNotesMenu())
 		return
-	case text == "/zoeknote":
+	case command == "/zoeknote":
 		_ = client.SendMessageWithKeyboard(chatID, buildNoteSearchHelpText(), buildNotesMenu())
 		return
-	case text == "/voicehelp":
+	case command == "/voicehelp":
 		_ = client.SendMessageWithKeyboard(chatID, buildVoiceHelpText(), buildMainMenu())
 		return
-	case text == "/lampen":
+	case command == "/lampen":
 		e.handleLampStatus(ctx, client, chatID)
 		return
-	case text == "/notities":
+	case command == "/habits" || command == "/habitrapport" || command == "/streak":
+		e.handleHabitStatus(ctx, client, chatID)
+		return
+	case command == "/finance":
+		e.handleFinanceStatus(ctx, client, chatID)
+		return
+	case command == "/notities":
 		e.handleNotitiesDashboard(ctx, client, chatID)
 		return
-	case text == "/vandaag":
+	case command == "/vandaag":
 		e.handleVandaagNotities(ctx, client, chatID)
 		return
-	case text == "/week":
+	case command == "/week":
 		e.handleWeekNotities(ctx, client, chatID)
 		return
-	case strings.HasPrefix(text, "/noteer "):
-		e.handleQuickNote(ctx, client, chatID, strings.TrimPrefix(text, "/noteer "))
+	case strings.HasPrefix(command, "/noteer "):
+		e.handleQuickNote(ctx, client, chatID, strings.TrimSpace(text[strings.Index(text, " ")+1:]))
 		return
-	case strings.HasPrefix(text, "/zoeknote "):
-		e.handleNoteSearch(ctx, client, chatID, strings.TrimSpace(strings.TrimPrefix(text, "/zoeknote ")))
+	case strings.HasPrefix(command, "/zoeknote "):
+		e.handleNoteSearch(ctx, client, chatID, strings.TrimSpace(text[strings.Index(text, " ")+1:]))
 		return
 	case strings.HasPrefix(text, "note_read_"):
 		e.handleNoteRead(ctx, client, chatID, strings.TrimPrefix(text, "note_read_"))
