@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -295,10 +296,10 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	userID := e.cfg.HomeappUserID
 	period := parseTelegramFinancePeriod(text, time.Now().In(amsterdamLocation()))
 
-	stats, err := transactionStore.GetStats(ctx, userID)
-	if err != nil {
-		_ = client.SendMessage(chatID, "❌ Finance status ophalen mislukt.")
-		return
+	stats, statsErr := transactionStore.GetStats(ctx, userID)
+	if statsErr != nil {
+		slog.Warn("telegram finance stats failed", "error", statsErr, "user", userID)
+		stats = map[string]any{}
 	}
 
 	var firstDate, lastDate string
@@ -340,8 +341,13 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	var b strings.Builder
 	fmt.Fprintf(&b, "💰 Finance cockpit\n\n")
 	fmt.Fprintf(&b, "Status\n")
-	fmt.Fprintf(&b, "• Huidig saldo: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
-	fmt.Fprintf(&b, "• Dataset: %d transacties", intFromSummary(stats, "totaal"))
+	if statsErr == nil {
+		fmt.Fprintf(&b, "• Huidig saldo: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
+		fmt.Fprintf(&b, "• Dataset: %d transacties", intFromSummary(stats, "totaal"))
+	} else {
+		fmt.Fprintf(&b, "• Huidig saldo: tijdelijk onbekend\n")
+		fmt.Fprintf(&b, "• Dataset: stats-query tijdelijk niet beschikbaar")
+	}
 	if firstDate != "" && lastDate != "" {
 		fmt.Fprintf(&b, " (%s t/m %s)", firstDate, lastDate)
 	}
@@ -389,6 +395,17 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 
 func telegramLocation() *time.Location {
 	return amsterdamLocation()
+}
+
+func telegramBuildLine() string {
+	commit := strings.TrimSpace(os.Getenv("RENDER_GIT_COMMIT"))
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	if commit == "" {
+		commit = "local"
+	}
+	return fmt.Sprintf("Build: %s · Render: %t", commit, strings.EqualFold(os.Getenv("RENDER"), "true"))
 }
 
 func parseTelegramFinancePeriod(text string, now time.Time) telegramFinancePeriod {
@@ -666,7 +683,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		_ = client.SendMessageWithKeyboard(chatID, buildHelpText(), buildMainMenu())
 		return
 	case command == "/status" || command == "/health":
-		_ = client.SendMessage(chatID, "⚙️ Go backend actief")
+		_ = client.SendMessage(chatID, "⚙️ Go backend actief\n"+telegramBuildLine())
 		return
 	case command == "/ai":
 		e.handleAIStatus(ctx, client, chatID)
