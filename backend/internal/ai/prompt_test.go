@@ -70,3 +70,43 @@ func TestBuildSystemPromptAddsRoosterGuardrails(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSystemPromptAddsFinanceGuardrails(t *testing.T) {
+	agent := GetAgent("finance")
+	if agent == nil {
+		t.Fatal("finance agent not found")
+	}
+
+	prompt := BuildSystemPrompt(agent, map[string]any{}, nil)
+	for _, needle := range []string{
+		"FINANCE ORCHESTRATIE",
+		"saldoOpvragen",
+		"transactiesZoeken",
+		"specifieke analyse-tools",
+		"Verzin nooit bedragen",
+	} {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("prompt missing %q", needle)
+		}
+	}
+}
+
+func TestBuildSystemPromptAddsLaventeCareGuardrails(t *testing.T) {
+	agent := GetAgent("laventecare")
+	if agent == nil {
+		t.Fatal("laventecare agent not found")
+	}
+
+	prompt := BuildSystemPrompt(agent, map[string]any{}, nil)
+	for _, needle := range []string{
+		"LAVENTECARE ORCHESTRATIE",
+		"laventecareCockpit",
+		"documentbasis leeg",
+		"Nederlandse status- en prioriteitswaarden",
+		"Verzin nooit leads",
+	} {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("prompt missing %q", needle)
+		}
+	}
+}

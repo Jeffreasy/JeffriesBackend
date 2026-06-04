@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -222,6 +224,262 @@ func clampToolLimit(value, fallback, max int) int {
 		return max
 	}
 	return value
+}
+
+func applyFinancePeriodFilter(filter *store.TransactionFilter, jaar, maand string) error {
+	if maand != "" {
+		from, to, err := financeMonthRange(maand)
+		if err != nil {
+			return err
+		}
+		filter.DatumVan = from
+		filter.DatumTot = to
+		return nil
+	}
+	if jaar == "" {
+		return nil
+	}
+	if len(jaar) != 4 {
+		return fmt.Errorf("ongeldig jaar: %s", jaar)
+	}
+	if _, err := time.Parse("2006", jaar); err != nil {
+		return fmt.Errorf("ongeldig jaar: %s", jaar)
+	}
+	filter.DatumVan = jaar + "-01-01"
+	filter.DatumTot = jaar + "-12-31"
+	return nil
+}
+
+func financeMonthRange(month string) (string, string, error) {
+	if month == "" {
+		return "", "", fmt.Errorf("maand verplicht in YYYY-MM formaat")
+	}
+	start, err := time.Parse("2006-01", month)
+	if err != nil {
+		return "", "", fmt.Errorf("ongeldige maand: %s", month)
+	}
+	end := start.AddDate(0, 1, -1)
+	return start.Format("2006-01-02"), end.Format("2006-01-02"), nil
+}
+
+func financePeriodLabel(jaar, maand string) string {
+	jaar = strings.TrimSpace(jaar)
+	maand = strings.TrimSpace(maand)
+	if maand != "" {
+		return maand
+	}
+	if jaar != "" {
+		return jaar
+	}
+	return "alles"
+}
+
+func summarizeFinanceTransactions(txs []model.Transaction) map[string]any {
+	var inkomsten, uitgaven float64
+	for _, tx := range txs {
+		if tx.Bedrag >= 0 {
+			inkomsten += tx.Bedrag
+		} else {
+			uitgaven += math.Abs(tx.Bedrag)
+		}
+	}
+	return map[string]any{
+		"aantal":    len(txs),
+		"inkomsten": financeRound2(inkomsten),
+		"uitgaven":  financeRound2(uitgaven),
+		"netto":     financeRound2(inkomsten - uitgaven),
+	}
+}
+
+func compareFinanceSummaries(a, b map[string]any) map[string]any {
+	return map[string]any{
+		"aantal":    intFromSummary(b, "aantal") - intFromSummary(a, "aantal"),
+		"inkomsten": financeRound2(floatFromSummary(b, "inkomsten") - floatFromSummary(a, "inkomsten")),
+		"uitgaven":  financeRound2(floatFromSummary(b, "uitgaven") - floatFromSummary(a, "uitgaven")),
+		"netto":     financeRound2(floatFromSummary(b, "netto") - floatFromSummary(a, "netto")),
+	}
+}
+
+func floatFromSummary(summary map[string]any, key string) float64 {
+	switch value := summary[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	default:
+		return 0
+	}
+}
+
+func intFromSummary(summary map[string]any, key string) int {
+	switch value := summary[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func topFinanceBreakdowns(txs []model.Transaction, mode string, limit int) []map[string]any {
+	type bucket struct {
+		key    string
+		count  int
+		amount float64
+	}
+	buckets := make(map[string]*bucket)
+	for _, tx := range txs {
+		key := transactionCategory(tx)
+		if mode == "merchant" {
+			key = transactionCounterparty(tx)
+		}
+		item, ok := buckets[key]
+		if !ok {
+			item = &bucket{key: key}
+			buckets[key] = item
+		}
+		item.count++
+		item.amount += math.Abs(tx.Bedrag)
+	}
+	items := make([]*bucket, 0, len(buckets))
+	for _, item := range buckets {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].amount == items[j].amount {
+			return items[i].count > items[j].count
+		}
+		return items[i].amount > items[j].amount
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, map[string]any{
+			"naam":   item.key,
+			"count":  item.count,
+			"bedrag": financeRound2(item.amount),
+		})
+	}
+	return out
+}
+
+func recurringFinanceExpenses(txs []model.Transaction, limit int) []map[string]any {
+	type recurring struct {
+		key        string
+		months     map[string]bool
+		count      int
+		total      float64
+		lastDate   string
+		categories map[string]int
+	}
+	buckets := make(map[string]*recurring)
+	for _, tx := range txs {
+		if len(tx.Datum) < 7 {
+			continue
+		}
+		key := transactionCounterparty(tx)
+		item, ok := buckets[key]
+		if !ok {
+			item = &recurring{key: key, months: make(map[string]bool), categories: make(map[string]int)}
+			buckets[key] = item
+		}
+		item.months[tx.Datum[:7]] = true
+		item.count++
+		item.total += math.Abs(tx.Bedrag)
+		if tx.Datum > item.lastDate {
+			item.lastDate = tx.Datum
+		}
+		item.categories[transactionCategory(tx)]++
+	}
+	items := make([]*recurring, 0, len(buckets))
+	for _, item := range buckets {
+		if len(item.months) >= 2 {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if len(items[i].months) == len(items[j].months) {
+			return items[i].total > items[j].total
+		}
+		return len(items[i].months) > len(items[j].months)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		months := len(item.months)
+		out = append(out, map[string]any{
+			"naam":      item.key,
+			"maanden":   months,
+			"count":     item.count,
+			"totaal":    financeRound2(item.total),
+			"gemiddeld": financeRound2(item.total / float64(maxInt(months, 1))),
+			"laatste":   item.lastDate,
+			"categorie": mostUsedCategory(item.categories),
+		})
+	}
+	return out
+}
+
+func uncategorizedFinanceTransactions(txs []model.Transaction, limit int) []model.Transaction {
+	out := make([]model.Transaction, 0, limit)
+	for _, tx := range txs {
+		if tx.Categorie != nil && strings.TrimSpace(*tx.Categorie) != "" {
+			continue
+		}
+		out = append(out, tx)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func transactionCategory(tx model.Transaction) string {
+	if tx.Categorie != nil && strings.TrimSpace(*tx.Categorie) != "" {
+		return strings.TrimSpace(*tx.Categorie)
+	}
+	return "Ongelabeld"
+}
+
+func transactionCounterparty(tx model.Transaction) string {
+	if tx.TegenpartijNaam != nil && strings.TrimSpace(*tx.TegenpartijNaam) != "" {
+		return strings.TrimSpace(*tx.TegenpartijNaam)
+	}
+	if strings.TrimSpace(tx.Omschrijving) != "" {
+		return truncateRunes(strings.TrimSpace(tx.Omschrijving), 80)
+	}
+	if tx.TegenrekeningIban != nil && strings.TrimSpace(*tx.TegenrekeningIban) != "" {
+		return strings.TrimSpace(*tx.TegenrekeningIban)
+	}
+	return "Onbekend"
+}
+
+func mostUsedCategory(values map[string]int) string {
+	best := "Ongelabeld"
+	bestCount := -1
+	for name, count := range values {
+		if count > bestCount {
+			best = name
+			bestCount = count
+		}
+	}
+	return best
+}
+
+func financeRound2(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func scheduleMetaValue(meta *model.ScheduleMeta, key string) any {
@@ -777,11 +1035,20 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	// ── FINANCE ──────────────────────────────────────────────────────
 	case "saldoOpvragen":
 		stats, err := e.transactionStore.GetStats(ctx, e.userID)
-		return e.jsonResponse(stats, err)
+		return e.jsonResponse(map[string]any{
+			"scope":       "finance dashboard",
+			"stats":       stats,
+			"instruction": "Gebruik deze velden als compacte finance-status. Voor categorieen, merchants en jaren gebruik aanvullend uitgavenOverzicht.",
+		}, err)
 
 	case "salarisOpvragen":
 		salaries, err := e.salaryStore.List(ctx, e.userID)
-		return e.jsonResponse(salaries, err)
+		return e.jsonResponse(map[string]any{
+			"scope":       "salaris",
+			"count":       len(salaries),
+			"items":       salaries,
+			"instruction": "Gebruik alleen bedragen en periodes uit deze loonstroken. Combineer met rooster-tools als de vraag over uren of prognose gaat.",
+		}, err)
 
 	case "transactiesZoeken":
 		var args struct {
@@ -797,8 +1064,133 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			args.Limit = 20
 		}
 		filter := store.TransactionFilter{Zoekterm: args.Query, Limit: args.Limit}
-		txs, _, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
-		return e.jsonResponse(txs, err)
+		txs, total, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
+		return e.jsonResponse(map[string]any{
+			"scope":       "financiele transacties",
+			"query":       strings.TrimSpace(args.Query),
+			"limit":       args.Limit,
+			"count":       len(txs),
+			"total":       total,
+			"items":       txs,
+			"instruction": "Dit is een beperkte selectie. Zeg expliciet hoeveel resultaten zijn teruggegeven en hoeveel totaal matchen.",
+		}, err)
+
+	case "uitgavenOverzicht":
+		var args struct {
+			Jaar  string `json:"jaar"`
+			Maand string `json:"maand"`
+			Iban  string `json:"iban"`
+			Limit int    `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		filter := store.TransactionFilter{
+			ExcludeIntern: true,
+			Richting:      "uit",
+			Iban:          strings.TrimSpace(args.Iban),
+			Limit:         5000,
+		}
+		if err := applyFinancePeriodFilter(&filter, strings.TrimSpace(args.Jaar), strings.TrimSpace(args.Maand)); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		txs, total, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"scope":            "uitgavenoverzicht",
+			"periode":          financePeriodLabel(args.Jaar, args.Maand),
+			"rekening":         strings.TrimSpace(args.Iban),
+			"totalMatches":     total,
+			"sampled":          len(txs),
+			"summary":          summarizeFinanceTransactions(txs),
+			"topCategorieen":   topFinanceBreakdowns(txs, "categorie", clampToolLimit(args.Limit, 5, 10)),
+			"topTegenpartijen": topFinanceBreakdowns(txs, "merchant", clampToolLimit(args.Limit, 5, 10)),
+			"instruction":      "Dit overzicht gebruikt uitgaande externe transacties. Noem totalMatches als sampled lager is dan totalMatches.",
+		}, nil)
+
+	case "maandVergelijken":
+		var args struct {
+			MaandA string `json:"maandA"`
+			MaandB string `json:"maandB"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		aFrom, aTo, err := financeMonthRange(strings.TrimSpace(args.MaandA))
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		bFrom, bTo, err := financeMonthRange(strings.TrimSpace(args.MaandB))
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		aTxs, aTotal, err := e.transactionStore.ListFiltered(ctx, e.userID, store.TransactionFilter{ExcludeIntern: true, DatumVan: aFrom, DatumTot: aTo, Limit: 5000})
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		bTxs, bTotal, err := e.transactionStore.ListFiltered(ctx, e.userID, store.TransactionFilter{ExcludeIntern: true, DatumVan: bFrom, DatumTot: bTo, Limit: 5000})
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		aSummary := summarizeFinanceTransactions(aTxs)
+		bSummary := summarizeFinanceTransactions(bTxs)
+		return e.jsonResponse(map[string]any{
+			"scope":       "maandvergelijking",
+			"maandA":      map[string]any{"maand": args.MaandA, "totalMatches": aTotal, "sampled": len(aTxs), "summary": aSummary},
+			"maandB":      map[string]any{"maand": args.MaandB, "totalMatches": bTotal, "sampled": len(bTxs), "summary": bSummary},
+			"verschil":    compareFinanceSummaries(aSummary, bSummary),
+			"instruction": "Vergelijk maandB met maandA. Gebruik de verschilvelden en verzin geen verklaringen zonder transactiedata.",
+		}, nil)
+
+	case "vasteLastenAnalyse":
+		var args struct {
+			Jaar  string `json:"jaar"`
+			Limit int    `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		filter := store.TransactionFilter{ExcludeIntern: true, Richting: "uit", Limit: 5000}
+		if err := applyFinancePeriodFilter(&filter, strings.TrimSpace(args.Jaar), ""); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		txs, total, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"scope":        "vaste lasten analyse",
+			"periode":      financePeriodLabel(args.Jaar, ""),
+			"totalMatches": total,
+			"sampled":      len(txs),
+			"items":        recurringFinanceExpenses(txs, clampToolLimit(args.Limit, 10, 15)),
+			"instruction":  "Dit zijn terugkerende uitgaven op basis van tegenpartij/omschrijving die in meerdere maanden voorkomen.",
+		}, nil)
+
+	case "ongelabeldAnalyse":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		limit := clampToolLimit(args.Limit, 20, 30)
+		txs, total, err := e.transactionStore.ListFiltered(ctx, e.userID, store.TransactionFilter{ExcludeIntern: true, Limit: 1000})
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		ungrouped := uncategorizedFinanceTransactions(txs, limit)
+		return e.jsonResponse(map[string]any{
+			"scope":       "ongelabelde transacties",
+			"scanned":     len(txs),
+			"total":       total,
+			"limit":       limit,
+			"items":       ungrouped,
+			"groups":      topFinanceBreakdowns(ungrouped, "merchant", 10),
+			"instruction": "Dit zijn recente externe transacties zonder categorie. Gebruik categorieWijzigen of bulkCategoriseren alleen via bevestiging.",
+		}, nil)
 
 	case "categorieWijzigen":
 		var args struct {
@@ -1306,7 +1698,11 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	// ── LAVENTECARE ──────────────────────────────────────────────────
 	case "laventecareCockpit":
 		cockpit, err := e.laventeCareStore.GetCockpit(ctx, e.userID)
-		return e.jsonResponse(cockpit, err)
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare cockpit",
+			"cockpit":     cockpit,
+			"instruction": "Gebruik summary als hoofdbron. Als summary.documentsSeeded false is of summary.documents 0 is, benoem dat de documentbasis nog leeg is.",
+		}, err)
 
 	case "laventecareKennisZoeken":
 		var args struct {
@@ -1316,7 +1712,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		docs, err := e.laventeCareStore.SearchDocuments(ctx, e.userID, args.Query, 5)
-		return e.jsonResponse(docs, err)
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare kennisbank",
+			"query":       strings.TrimSpace(args.Query),
+			"count":       len(docs),
+			"items":       docs,
+			"instruction": "Gebruik alleen deze documenten als kennisbron. Bij count 0: zeg dat er niets gevonden is en adviseer de documentbasis te initialiseren of een concretere zoekterm te gebruiken.",
+		}, err)
 
 	case "laventecareLeadsOpvragen":
 		var args struct {
@@ -1326,7 +1728,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		leads, err := e.laventeCareStore.ListLeads(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
-		return e.jsonResponse(leads, err)
+		return e.jsonResponse(map[string]any{"scope": "laventecare leads", "count": len(leads), "items": leads}, err)
 
 	case "laventecareProjectenOpvragen":
 		var args struct {
@@ -1336,7 +1738,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		projects, err := e.laventeCareStore.ListProjects(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
-		return e.jsonResponse(projects, err)
+		return e.jsonResponse(map[string]any{"scope": "laventecare projecten", "count": len(projects), "items": projects}, err)
 
 	case "laventecareActiesOpvragen":
 		var args struct {
@@ -1346,7 +1748,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
-		return e.jsonResponse(actions, err)
+		return e.jsonResponse(map[string]any{"scope": "laventecare acties", "count": len(actions), "items": actions}, err)
 
 	case "laventecareLeadMaken":
 		var args model.LCLeadCreate
@@ -1428,7 +1830,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			args.Fase = "intake"
 		}
 		if strings.TrimSpace(args.Status) == "" {
-			args.Status = "active"
+			args.Status = "actief"
 		}
 		project, err := e.laventeCareStore.CreateProject(ctx, e.userID, model.LCProject{
 			Naam:            args.Naam,
@@ -1493,10 +1895,10 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			args.Source = "ai"
 		}
 		if strings.TrimSpace(args.ActionType) == "" {
-			args.ActionType = "follow_up"
+			args.ActionType = "opvolgen"
 		}
 		if strings.TrimSpace(args.Priority) == "" {
-			args.Priority = "normal"
+			args.Priority = "normaal"
 		}
 		var linkedLeadID, linkedProjectID *uuid.UUID
 		if args.LinkedLeadID != nil && strings.TrimSpace(*args.LinkedLeadID) != "" {

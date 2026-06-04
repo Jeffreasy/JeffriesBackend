@@ -262,20 +262,108 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "transactiesZoeken",
-			Description: "Zoekt in de financiële transacties.",
+			Description: "Zoekt in de financiële transacties. Zonder query geeft dit een beperkte recente selectie terug.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {
 						"type": "string",
-						"description": "Omschrijving of tegenrekening."
+						"description": "Omschrijving, tegenpartij of tegenrekening. Optioneel."
 					},
 					"limit": {
 						"type": "number",
 						"description": "Aantal resultaten (max 20)."
 					}
 				},
-				"required": ["query"]
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "uitgavenOverzicht",
+			Description: "Geeft een uitgavenoverzicht met topcategorieën, merchants en kasstroom. Jaar, maand en rekening zijn optioneel.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"jaar": {
+						"type": "string",
+						"description": "Kalenderjaar, bijvoorbeeld 2026."
+					},
+					"maand": {
+						"type": "string",
+						"description": "Maand in YYYY-MM formaat, bijvoorbeeld 2026-06."
+					},
+					"iban": {
+						"type": "string",
+						"description": "Optionele rekeningfilter."
+					},
+					"limit": {
+						"type": "number",
+						"description": "Aantal topregels (max 10)."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "maandVergelijken",
+			Description: "Vergelijkt twee financiële maanden op inkomsten, uitgaven, netto stroom en transacties.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"maandA": {
+						"type": "string",
+						"description": "Eerste maand in YYYY-MM formaat."
+					},
+					"maandB": {
+						"type": "string",
+						"description": "Tweede maand in YYYY-MM formaat."
+					}
+				},
+				"required": ["maandA", "maandB"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "vasteLastenAnalyse",
+			Description: "Analyseert terugkerende uitgaven op basis van merchants die in meerdere maanden voorkomen.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"jaar": {
+						"type": "string",
+						"description": "Optioneel kalenderjaar, bijvoorbeeld 2026."
+					},
+					"limit": {
+						"type": "number",
+						"description": "Aantal terugkerende posten (max 15)."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "ongelabeldAnalyse",
+			Description: "Vindt recente transacties zonder categorie en groepeert ze voor categorisatievoorstellen.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal transacties zonder categorie (max 30)."
+					}
+				},
+				"required": []
 			}`),
 		},
 	},

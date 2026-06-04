@@ -24,6 +24,20 @@ func TestRouteFreeTextNoteIntentGoesToNotes(t *testing.T) {
 	}
 }
 
+func TestRouteFreeTextFinanceIntentGoesToFinance(t *testing.T) {
+	got := routeFreeText("wat zijn mijn grootste uitgaven deze maand?")
+	if got != "finance" {
+		t.Fatalf("routeFreeText() = %q, want finance", got)
+	}
+}
+
+func TestRouteFreeTextLaventeCareIntentGoesToLaventeCare(t *testing.T) {
+	got := routeFreeText("geef mijn LaventeCare CRM cockpit")
+	if got != "laventecare" {
+		t.Fatalf("routeFreeText() = %q, want laventecare", got)
+	}
+}
+
 func TestExternalNewsIntent(t *testing.T) {
 	if !hasExternalNewsIntent("wat was het laatste nieuws de afgelopen 24 uur?") {
 		t.Fatal("expected news intent")
@@ -64,6 +78,8 @@ func TestExpandTelegramCommand(t *testing.T) {
 		{input: "/planning", agentHint: "agenda", contains: "planning"},
 		{input: "/agenda", agentHint: "agenda", contains: "afsprakenopvragen"},
 		{input: "/rooster", agentHint: "rooster", contains: "dienstenopvragen"},
+		{input: "/finance", agentHint: "finance", contains: "uitgavenoverzicht"},
+		{input: "/laventecare", agentHint: "laventecare", contains: "laventecarecockpit"},
 		{input: "/news", agentHint: "brain", contains: "nieuws"},
 		{input: "/noteai", agentHint: "notes", contains: "notities"},
 		{input: "/notetriage", agentHint: "notes", contains: "triage"},
