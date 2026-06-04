@@ -495,7 +495,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "notitiesVandaag",
-			Description: "Haalt alle notities op die vandaag zijn aangemaakt of gewijzigd.",
+			Description: "Haalt notities op die vandaag zijn aangemaakt of gewijzigd. Dit is een vandaag-filter, geen volledig actief notitieoverzicht.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {},

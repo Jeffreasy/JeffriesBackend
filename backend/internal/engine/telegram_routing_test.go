@@ -82,6 +82,23 @@ func TestExpandTelegramCommand(t *testing.T) {
 	}
 }
 
+func TestExpandNotesAICommandPrefersLiveNotesSnapshot(t *testing.T) {
+	expanded, agentHint, ok := expandTelegramCommand("/noteai")
+	if !ok {
+		t.Fatal("expected /noteai to expand")
+	}
+	if agentHint != "notes" {
+		t.Fatalf("agentHint = %q, want notes", agentHint)
+	}
+
+	lower := strings.ToLower(expanded)
+	for _, needle := range []string{"live data.notes", "notitiesoverzicht", "notitiesvandaag alleen", "leeg vandaag betekent niet"} {
+		if !strings.Contains(lower, needle) {
+			t.Fatalf("/noteai expansion missing %q: %s", needle, expanded)
+		}
+	}
+}
+
 func TestTelegramMenusUseShortCallbackData(t *testing.T) {
 	for _, menu := range []struct {
 		name string

@@ -54,6 +54,10 @@ func NewHomeBotExecutorWithGoogle(pool *pgxpool.Pool, userID string, googleClien
 
 // Helpers
 func (e *HomeBotExecutor) parseArgs(argsJSON string, v any) error {
+	argsJSON = strings.TrimSpace(argsJSON)
+	if argsJSON == "" || argsJSON == "null" {
+		argsJSON = "{}"
+	}
 	if err := json.Unmarshal([]byte(argsJSON), v); err != nil {
 		return fmt.Errorf("invalid arguments: %v", err)
 	}
@@ -949,21 +953,43 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		return fmt.Sprintf(`{"success": true, "note_id": "%s"}`, n.ID)
 
 	case "notitiesVandaag":
-		nStore := store.NewNoteStore(&store.DB{Pool: e.pool})
-		notes, err := nStore.List(ctx, e.userID)
+		notes, err := e.noteStore.List(ctx, e.userID)
 		if err != nil {
-			return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+			return e.jsonResponse(nil, err)
 		}
-		loc, _ := time.LoadLocation("Europe/Amsterdam")
-		todayStr := time.Now().In(loc).Format("2006-01-02")
+
+		loc, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			loc = time.UTC
+		}
+		now := time.Now().In(loc)
+		todayStr := now.Format("2006-01-02")
 		var todayNotes []model.Note
 		for _, n := range notes {
 			if !n.IsArchived && (n.Aangemaakt.In(loc).Format("2006-01-02") == todayStr || n.Gewijzigd.In(loc).Format("2006-01-02") == todayStr) {
 				todayNotes = append(todayNotes, n)
 			}
 		}
-		b, _ := json.Marshal(todayNotes)
-		return string(b)
+
+		active := activeNotes(notes)
+		stats := buildNoteStats(active, now, loc)
+		return e.jsonResponse(map[string]any{
+			"scope":       "notities aangemaakt of gewijzigd vandaag",
+			"date":        todayStr,
+			"count":       len(todayNotes),
+			"items":       todayNotes,
+			"totalActive": len(active),
+			"hasActive":   len(active) > 0,
+			"stats": map[string]any{
+				"active":    stats.Active,
+				"today":     stats.Today,
+				"pinned":    stats.Pinned,
+				"completed": stats.Completed,
+				"attention": stats.Attention,
+				"topTags":   stats.TopTags,
+			},
+			"instruction": "Een lege items-lijst betekent alleen dat er vandaag niets is aangemaakt of gewijzigd. Gebruik Live Data.notes of notitiesOverzicht voor alle actieve notities.",
+		}, nil)
 
 	// ── AGENDA ───────────────────────────────────────────────────────
 	case "planningOpvragen":

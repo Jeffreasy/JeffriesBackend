@@ -602,11 +602,11 @@ func expandTelegramCommand(text string) (expanded string, agentHint string, ok b
 	case "/habits", "/streak":
 		return "Geef mijn habit status met actieve habits, streaks, badges en een kort advies voor vandaag.", "habits", true
 	case "/noteai", "/notitieai":
-		return "Analyseer mijn actieve notities als slimme notitieassistent. Gebruik notitiesOverzicht en notitiesVandaag. Geef: 1) belangrijkste thema's, 2) open acties, 3) wat vandaag aandacht nodig heeft, 4) maximaal drie concrete vervolgstappen.", "notes", true
+		return "Analyseer mijn actieve notities als slimme notitieassistent. Gebruik eerst Live Data.notes als actueel overzicht en verifieer daarna met notitiesOverzicht. Gebruik notitiesVandaag alleen voor nieuw/gewijzigd vandaag; leeg vandaag betekent niet dat er geen actieve notities zijn. Geef: 1) belangrijkste thema's, 2) open acties, 3) wat vandaag aandacht nodig heeft, 4) maximaal drie concrete vervolgstappen.", "notes", true
 	case "/notetriage", "/triagenotes":
-		return "Doe een triage van mijn actieve notities. Gebruik notitiesOverzicht en notitiesVandaag. Sorteer op urgentie, deadline, prioriteit, incomplete checklists en triage-vlaggen. Geef een compacte actielijst voor vandaag.", "notes", true
+		return "Doe een triage van mijn actieve notities. Gebruik eerst Live Data.notes en verifieer daarna met notitiesOverzicht. Gebruik notitiesVandaag alleen voor nieuw/gewijzigd vandaag. Sorteer op urgentie, deadline, prioriteit, incomplete checklists en triage-vlaggen. Geef een compacte actielijst voor vandaag.", "notes", true
 	case "/notesamenvatting", "/samenvatnotes":
-		return "Vat mijn actieve notities compact samen. Gebruik notitiesOverzicht. Groepeer per thema/tag en benoem losse actiepunten apart.", "notes", true
+		return "Vat mijn actieve notities compact samen. Gebruik eerst Live Data.notes en verifieer met notitiesOverzicht. Groepeer per thema/tag en benoem losse actiepunten apart.", "notes", true
 	case "/automations":
 		return "Geef de automation en sync status van mijn systeem.", "automations", true
 	case "/news", "/nieuws":
