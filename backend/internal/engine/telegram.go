@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
+	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	tg "github.com/Jeffreasy/JeffriesBackend/internal/telegram"
@@ -188,6 +189,10 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	chatStore := store.NewChatStore(e.db.Pool)
 	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
 
+	if e.handlePendingConfirmationCommand(ctx, client, chatID, text) {
+		return
+	}
+
 	// Built-in commands
 	switch {
 	case text == "/start":
@@ -347,7 +352,12 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	tools := ai.GetToolsForAgent(agentID, ai.AllTools)
 	prompt := ai.BuildSystemPrompt(agent, map[string]any{"status": "Go backend"}, tools)
 
-	executor := NewHomeBotExecutor(e.db.Pool, e.cfg.HomeappUserID)
+	executor := NewConfirmingExecutor(
+		e.db.Pool,
+		e.cfg.HomeappUserID,
+		agentID,
+		NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()),
+	)
 	result := grokClient.Chat(ctx, prompt, text, aiHistory, tools, executor)
 
 	var reply string
@@ -359,6 +369,123 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 
 	_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
 	_ = client.SendMessage(chatID, reply)
+}
+
+func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *tg.Client, chatID int64, text string) bool {
+	normalized := strings.TrimSpace(text)
+	lower := strings.ToLower(normalized)
+
+	switch {
+	case lower == "/pending" || lower == "/bevestigingen":
+		e.handlePendingList(ctx, client, chatID)
+		return true
+	case strings.HasPrefix(lower, "pending_confirm_"):
+		id := strings.TrimPrefix(normalized, "pending_confirm_")
+		e.handlePendingConfirmID(ctx, client, chatID, id)
+		return true
+	case strings.HasPrefix(lower, "pending_reject_"):
+		id := strings.TrimPrefix(normalized, "pending_reject_")
+		e.handlePendingCancelID(ctx, client, chatID, id)
+		return true
+	}
+
+	fields := strings.Fields(normalized)
+	if len(fields) < 2 {
+		return false
+	}
+
+	cmd := strings.ToLower(strings.Split(fields[0], "@")[0])
+	code := strings.TrimSpace(fields[1])
+	switch cmd {
+	case "/approve", "/confirm", "/akkoord":
+		e.handlePendingConfirmCode(ctx, client, chatID, code)
+		return true
+	case "/reject", "/cancel", "/annuleer":
+		e.handlePendingCancelCode(ctx, client, chatID, code)
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) handlePendingList(ctx context.Context, client *tg.Client, chatID int64) {
+	actions, err := store.NewPendingStore(e.db.Pool).ListPending(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		_ = client.SendMessage(chatID, "❌ Bevestigingen ophalen mislukt: "+err.Error())
+		return
+	}
+	if len(actions) == 0 {
+		_ = client.SendMessage(chatID, "✅ Geen openstaande bevestigingen.")
+		return
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "⏳ Openstaande bevestigingen (%d)\n\n", len(actions))
+	rows := make([][]tg.InlineKeyboardButton, 0, len(actions)*2+1)
+	for i, action := range actions {
+		if i >= 8 {
+			fmt.Fprintf(&b, "… en %d extra via Settings.\n", len(actions)-i)
+			break
+		}
+		fmt.Fprintf(&b, "%d. %s\nCode: %s\nTool: %s\n\n", i+1, action.Summary, action.Code, action.ToolName)
+		short := truncateRunes(action.Summary, 24)
+		rows = append(rows, []tg.InlineKeyboardButton{
+			{Text: "✅ " + short, CallbackData: "pending_confirm_" + action.ID},
+		})
+		rows = append(rows, []tg.InlineKeyboardButton{
+			{Text: "✕ Annuleer " + action.Code, CallbackData: "pending_reject_" + action.ID},
+		})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{Text: "🏠 Startmenu", CallbackData: "/start"}})
+	_ = client.SendMessageWithKeyboard(chatID, b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+}
+
+func (e *Engine) handlePendingConfirmID(ctx context.Context, client *tg.Client, chatID int64, id string) {
+	result, err := ConfirmPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, id, e.googleOAuthClient())
+	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd")
+}
+
+func (e *Engine) handlePendingConfirmCode(ctx context.Context, client *tg.Client, chatID int64, code string) {
+	result, err := ConfirmPendingActionByCode(ctx, e.db.Pool, e.cfg.HomeappUserID, code, e.googleOAuthClient())
+	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd")
+}
+
+func (e *Engine) handlePendingCancelID(ctx context.Context, client *tg.Client, chatID int64, id string) {
+	result, err := CancelPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, id)
+	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd")
+}
+
+func (e *Engine) handlePendingCancelCode(ctx context.Context, client *tg.Client, chatID int64, code string) {
+	pending := store.NewPendingStore(e.db.Pool)
+	action, err := pending.FindByCode(ctx, e.cfg.HomeappUserID, code)
+	if err != nil {
+		_ = client.SendMessage(chatID, "❌ Bevestiging niet gevonden of verlopen.")
+		return
+	}
+	result, err := CancelPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, action.ID)
+	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd")
+}
+
+func (e *Engine) sendPendingOutcome(client *tg.Client, chatID int64, result map[string]any, err error, verb string) {
+	if err != nil {
+		_ = client.SendMessageWithKeyboard(chatID, "❌ Actie mislukt: "+err.Error(), buildPendingMenu())
+		return
+	}
+	summary := ""
+	if raw, ok := result["summary"]; ok {
+		summary = strings.TrimSpace(fmt.Sprint(raw))
+	}
+	if summary == "" {
+		summary = "AI-actie"
+	}
+	_ = client.SendMessageWithKeyboard(chatID, fmt.Sprintf("✅ %s %s.", summary, verb), buildPendingMenu())
+}
+
+func (e *Engine) googleOAuthClient() *google.OAuthClient {
+	if e.cfg.GoogleClientID == "" || e.cfg.GoogleClientSecret == "" || e.cfg.GoogleRefreshToken == "" {
+		return nil
+	}
+	return google.NewOAuthClient(e.cfg.GoogleClientID, e.cfg.GoogleClientSecret, e.cfg.GoogleRefreshToken)
 }
 
 // ─── Command Routing ────────────────────────────────────────────────────────
@@ -586,6 +713,7 @@ type telegramStartSnapshot struct {
 	TotalDevices    int
 	OnlineDevices   int
 	PendingCommands int
+	PendingAI       int
 	NextSchedule    *model.Schedule
 }
 
@@ -663,6 +791,11 @@ func (e *Engine) buildStartSnapshot(ctx context.Context) telegramStartSnapshot {
 		`SELECT COUNT(*) FROM device_commands WHERE user_id = $1 AND status IN ('pending', 'processing')`,
 		userID,
 	).Scan(&snapshot.PendingCommands)
+
+	_ = e.db.Pool.QueryRow(sCtx,
+		`SELECT COUNT(*) FROM ai_pending_actions WHERE user_id = $1 AND status = 'pending' AND expires_at > now()`,
+		userID,
+	).Scan(&snapshot.PendingAI)
 
 	return snapshot
 }
@@ -1330,7 +1463,8 @@ func buildWelcomeText(snapshot telegramStartSnapshot) string {
 	fmt.Fprintf(&b, "🏠 Systeem\n")
 	fmt.Fprintf(&b, "• Lampen: %d/%d online\n", snapshot.OnlineDevices, snapshot.TotalDevices)
 	fmt.Fprintf(&b, "• Bridge queue: %d actief\n", snapshot.PendingCommands)
-	fmt.Fprintf(&b, "• AI: %d agents / %d tools live\n\n", len(ai.Registry), len(ai.AllTools))
+	fmt.Fprintf(&b, "• AI: %d agents / %d tools live\n", len(ai.Registry), len(ai.AllTools))
+	fmt.Fprintf(&b, "• Bevestigingen: %d open\n\n", snapshot.PendingAI)
 	fmt.Fprintf(&b, "Typ of spreek natuurlijk, bijvoorbeeld:\n")
 	fmt.Fprintf(&b, "• wat staat er vandaag op mijn planning?\n")
 	fmt.Fprintf(&b, "• geef mijn dagbriefing\n")
@@ -1339,7 +1473,7 @@ func buildWelcomeText(snapshot telegramStartSnapshot) string {
 }
 
 func buildHelpText() string {
-	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notitie cockpit\n/noteai — AI triage van notities\n/zoeknote [term] — notities zoeken\n/noteer [tekst] — slimme snelle notitie\n/habits — habits\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
+	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/pending — openstaande bevestigingen\n/approve CODE — actie uitvoeren\n/reject CODE — actie annuleren\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notitie cockpit\n/noteai — AI triage van notities\n/zoeknote [term] — notities zoeken\n/noteer [tekst] — slimme snelle notitie\n/habits — habits\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {
@@ -1370,8 +1504,22 @@ func buildMainMenu() tg.InlineKeyboardMarkup {
 				{Text: "🤖 AI status", CallbackData: "/ai"},
 			},
 			{
+				{Text: "⏳ Bevestigingen", CallbackData: "/pending"},
+			},
+			{
 				{Text: "🎙️ Spraak", CallbackData: "/voicehelp"},
 				{Text: "❔ Help", CallbackData: "/help"},
+			},
+		},
+	}
+}
+
+func buildPendingMenu() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "⏳ Bevestigingen", CallbackData: "/pending"},
+				{Text: "🏠 Startmenu", CallbackData: "/start"},
 			},
 		},
 	}

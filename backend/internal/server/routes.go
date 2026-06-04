@@ -31,6 +31,7 @@ func registerRoutes(
 	lcH *handler.LaventeCareHandler,
 	settingsH *handler.SettingsHandler,
 	syncH *handler.SyncHandler,
+	pendingH *handler.PendingActionHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
 
@@ -203,6 +204,13 @@ func registerRoutes(
 				r.Get("/backup", settingsH.Backup)
 				r.Get("/telegram/status", settingsH.TelegramStatus)
 				r.Get("/ai/diagnostics", settingsH.AIDiagnostics)
+			})
+
+			// AI confirmation queue
+			r.Route("/ai/pending", func(r chi.Router) {
+				r.Get("/", pendingH.List)
+				r.With(authMw).Post("/{id}/confirm", pendingH.Confirm)
+				r.With(authMw).Post("/{id}/cancel", pendingH.Cancel)
 			})
 
 			// Sync

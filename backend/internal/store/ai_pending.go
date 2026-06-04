@@ -94,6 +94,22 @@ func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAc
 	return &pa, nil
 }
 
+// Cancel marks a pending action as cancelled for a user.
+func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingAction, error) {
+	var pa PendingAction
+	err := s.pool.QueryRow(ctx,
+		`UPDATE ai_pending_actions
+		 SET status = 'cancelled', updated_at = now()
+		 WHERE id = $1 AND user_id = $2 AND status = 'pending'
+		 RETURNING id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at`,
+		id, userID,
+	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &pa, nil
+}
+
 // MarkStatus updates an action's status.
 func (s *PendingStore) MarkStatus(ctx context.Context, id, status string, result, errMsg *string) error {
 	_, err := s.pool.Exec(ctx,

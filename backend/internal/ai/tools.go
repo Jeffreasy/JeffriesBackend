@@ -43,6 +43,127 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "markeerGelezen",
+			Description: "Markeert een e-mail als gelezen of ongelezen. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailId": {"type": "string", "description": "Gmail message ID."},
+					"emailId": {"type": "string", "description": "Alias voor gmailId."},
+					"read": {"type": "boolean", "description": "true = gelezen, false = ongelezen."}
+				},
+				"required": ["gmailId"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "markeerSter",
+			Description: "Zet of verwijdert een ster op een e-mail. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailId": {"type": "string", "description": "Gmail message ID."},
+					"starred": {"type": "boolean", "description": "true = ster plaatsen, false = ster verwijderen."}
+				},
+				"required": ["gmailId"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "verwijderEmail",
+			Description: "Verplaatst een e-mail naar prullenbak en markeert hem lokaal verwijderd. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailId": {"type": "string", "description": "Gmail message ID."}
+				},
+				"required": ["gmailId"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "emailVersturen",
+			Description: "Verstuurt een nieuwe e-mail via Gmail. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"to": {"type": "string", "description": "Ontvanger."},
+					"subject": {"type": "string", "description": "Onderwerp."},
+					"body": {"type": "string", "description": "Plain text bericht."}
+				},
+				"required": ["to", "subject", "body"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "emailBeantwoorden",
+			Description: "Beantwoordt een bestaande e-mail in dezelfde Gmail-thread. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailId": {"type": "string", "description": "Gmail message ID."},
+					"body": {"type": "string", "description": "Plain text antwoord."}
+				},
+				"required": ["gmailId", "body"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "bulkMarkeerGelezen",
+			Description: "Markeert maximaal 20 e-mails als gelezen of ongelezen. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailIds": {"type": "array", "items": {"type": "string"}},
+					"read": {"type": "boolean"}
+				},
+				"required": ["gmailIds"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "bulkVerwijder",
+			Description: "Verwijdert maximaal 20 e-mails. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"gmailIds": {"type": "array", "items": {"type": "string"}}
+				},
+				"required": ["gmailIds"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "inboxOpruimen",
+			Description: "Zoekt e-mails en ruimt maximaal 20 matches op door te markeren als gelezen of te verwijderen. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Zoekterm."},
+					"action": {"type": "string", "enum": ["mark_read", "delete"], "description": "Actie op matches."},
+					"limit": {"type": "number", "description": "Maximaal aantal matches (max 20)."}
+				},
+				"required": ["query", "action"]
+			}`),
+		},
+	},
 
 	// ── SYSTEM & AUTOMATIONS ──────────────────────────────────────────
 	{
@@ -158,6 +279,36 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "categorieWijzigen",
+			Description: "Wijzigt de categorie van één financiële transactie. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"transactionId": {"type": "string", "description": "UUID van de transactie."},
+					"categorie": {"type": "string", "description": "Nieuwe categorie."}
+				},
+				"required": ["transactionId", "categorie"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "bulkCategoriseren",
+			Description: "Wijzigt de categorie van meerdere financiële transacties. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"transactionIds": {"type": "array", "items": {"type": "string"}, "description": "UUIDs van transacties, max 50."},
+					"categorie": {"type": "string", "description": "Nieuwe categorie."}
+				},
+				"required": ["transactionIds", "categorie"]
+			}`),
+		},
+	},
 
 	// ── AGENDA ─────────────────────────────────────────────────────────
 	{
@@ -199,6 +350,65 @@ var AllTools = []ToolDefinition{
 					}
 				},
 				"required": ["startIso", "eindIso"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "afspraakMaken",
+			Description: "Maakt een persoonlijke agenda-afspraak. Deze mutatie komt eerst in de bevestigingswachtrij en daarna in de Google Calendar sync-wachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"titel": {"type": "string", "description": "Titel van de afspraak."},
+					"startDatum": {"type": "string", "description": "Startdatum YYYY-MM-DD."},
+					"startTijd": {"type": "string", "description": "Starttijd HH:MM, leeg bij hele dag."},
+					"eindDatum": {"type": "string", "description": "Einddatum YYYY-MM-DD."},
+					"eindTijd": {"type": "string", "description": "Eindtijd HH:MM, leeg bij hele dag."},
+					"heledag": {"type": "boolean"},
+					"locatie": {"type": "string"},
+					"beschrijving": {"type": "string"},
+					"symbol": {"type": "string", "description": "Optioneel UI-symbool."}
+				},
+				"required": ["titel", "startDatum"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "afspraakBewerken",
+			Description: "Bewerkt een persoonlijke agenda-afspraak. Deze mutatie komt eerst in de bevestigingswachtrij en daarna in de Google Calendar sync-wachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"eventId": {"type": "string", "description": "Event ID uit persoonlijke agenda."},
+					"titel": {"type": "string"},
+					"startDatum": {"type": "string"},
+					"startTijd": {"type": "string"},
+					"eindDatum": {"type": "string"},
+					"eindTijd": {"type": "string"},
+					"heledag": {"type": "boolean"},
+					"locatie": {"type": "string"},
+					"beschrijving": {"type": "string"},
+					"symbol": {"type": "string"}
+				},
+				"required": ["eventId"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "afspraakVerwijderen",
+			Description: "Verwijdert een persoonlijke agenda-afspraak. Deze mutatie komt eerst in de bevestigingswachtrij en daarna in de Google Calendar sync-wachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"eventId": {"type": "string", "description": "Event ID uit persoonlijke agenda."}
+				},
+				"required": ["eventId"]
 			}`),
 		},
 	},
@@ -425,6 +635,143 @@ var AllTools = []ToolDefinition{
 					}
 				},
 				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareLeadMaken",
+			Description: "Maakt een LaventeCare lead. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"titel": {"type": "string"},
+					"company_name": {"type": "string"},
+					"website": {"type": "string"},
+					"bron": {"type": "string"},
+					"pijnpunt": {"type": "string"},
+					"prioriteit": {"type": "string"},
+					"fit_score": {"type": "number"},
+					"volgende_stap": {"type": "string"},
+					"volgende_actie_datum": {"type": "string"}
+				},
+				"required": ["titel"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareLeadBijwerken",
+			Description: "Werkt een LaventeCare lead bij. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"status": {"type": "string"},
+					"fit_score": {"type": "number"},
+					"pijnpunt": {"type": "string"},
+					"prioriteit": {"type": "string"},
+					"volgende_stap": {"type": "string"},
+					"volgende_actie_datum": {"type": "string"}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareLeadNaarProject",
+			Description: "Converteert een LaventeCare lead naar een project. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"lead_id": {"type": "string"},
+					"naam": {"type": "string"},
+					"fase": {"type": "string"},
+					"status": {"type": "string"},
+					"samenvatting": {"type": "string"}
+				},
+				"required": ["lead_id", "naam"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareProjectMaken",
+			Description: "Maakt een LaventeCare project. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"naam": {"type": "string"},
+					"fase": {"type": "string"},
+					"status": {"type": "string"},
+					"waarde_indicatie": {"type": "number"},
+					"start_datum": {"type": "string"},
+					"deadline": {"type": "string"},
+					"samenvatting": {"type": "string"}
+				},
+				"required": ["naam"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareProjectBijwerken",
+			Description: "Werkt een LaventeCare project bij. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"fase": {"type": "string"},
+					"status": {"type": "string"},
+					"waarde_indicatie": {"type": "number"},
+					"start_datum": {"type": "string"},
+					"deadline": {"type": "string"},
+					"samenvatting": {"type": "string"}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareActieMaken",
+			Description: "Maakt een LaventeCare actie-item. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"source": {"type": "string"},
+					"source_id": {"type": "string"},
+					"title": {"type": "string"},
+					"summary": {"type": "string"},
+					"action_type": {"type": "string"},
+					"priority": {"type": "string"},
+					"due_date": {"type": "string"},
+					"linked_lead_id": {"type": "string"},
+					"linked_project_id": {"type": "string"}
+				},
+				"required": ["title"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareActieAfronden",
+			Description: "Rondt een LaventeCare actie af of wijzigt de status. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"status": {"type": "string", "description": "Bij leeg wordt done gebruikt."}
+				},
+				"required": ["id"]
 			}`),
 		},
 	},

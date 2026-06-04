@@ -534,13 +534,27 @@ func aiDiagnosticRecommendations() []map[string]string {
 	hasPendingConfirmation := false
 	hasPendingAgendaWrite := false
 	hasPendingEmailWrite := false
+	hasPendingFinanceWrite := false
 	hasPendingCRMWrite := false
 
 	for name, policy := range ai.Policies {
 		if exposed[name] {
 			continue
 		}
-		if policy.RequiresConfirmation {
+		targetWrite := policy.Mutates && (strings.HasPrefix(name, "afspraak") ||
+			name == "categorieWijzigen" ||
+			name == "bulkCategoriseren" ||
+			strings.Contains(strings.ToLower(name), "email") ||
+			strings.Contains(strings.ToLower(name), "gelezen") ||
+			strings.Contains(strings.ToLower(name), "ster") ||
+			name == "laventecareLeadMaken" ||
+			name == "laventecareLeadBijwerken" ||
+			name == "laventecareLeadNaarProject" ||
+			name == "laventecareProjectMaken" ||
+			name == "laventecareProjectBijwerken" ||
+			name == "laventecareActieMaken" ||
+			name == "laventecareActieAfronden")
+		if policy.RequiresConfirmation && targetWrite {
 			hasPendingConfirmation = true
 		}
 		if strings.HasPrefix(name, "afspraak") {
@@ -549,7 +563,16 @@ func aiDiagnosticRecommendations() []map[string]string {
 		if strings.Contains(strings.ToLower(name), "email") || strings.Contains(strings.ToLower(name), "gelezen") || strings.Contains(strings.ToLower(name), "ster") {
 			hasPendingEmailWrite = true
 		}
-		if strings.HasPrefix(name, "laventecare") && policy.Mutates {
+		if name == "categorieWijzigen" || name == "bulkCategoriseren" {
+			hasPendingFinanceWrite = true
+		}
+		if name == "laventecareLeadMaken" ||
+			name == "laventecareLeadBijwerken" ||
+			name == "laventecareLeadNaarProject" ||
+			name == "laventecareProjectMaken" ||
+			name == "laventecareProjectBijwerken" ||
+			name == "laventecareActieMaken" ||
+			name == "laventecareActieAfronden" {
 			hasPendingCRMWrite = true
 		}
 	}
@@ -574,6 +597,13 @@ func aiDiagnosticRecommendations() []map[string]string {
 			"priority": "middel",
 			"title":    "Email actielaag",
 			"detail":   "Markeren, beantwoorden en opruimen kunnen via dezelfde confirmation queue zodra Gmail mutations zijn afgeschermd.",
+		})
+	}
+	if hasPendingFinanceWrite {
+		recommendations = append(recommendations, map[string]string{
+			"priority": "middel",
+			"title":    "Finance mutaties",
+			"detail":   "Categoriseren en bulk-categoriseren kunnen daarna veilig als pending acties met bevestiging worden uitgevoerd.",
 		})
 	}
 	if hasPendingCRMWrite {

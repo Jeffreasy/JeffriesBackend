@@ -182,6 +182,20 @@ func (s *TransactionStore) UpdateCategorie(ctx context.Context, id uuid.UUID, ca
 	return err
 }
 
+// BulkUpdateCategorie sets one category for multiple transactions.
+func (s *TransactionStore) BulkUpdateCategorie(ctx context.Context, ids []uuid.UUID, categorie string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE transactions SET categorie = $2 WHERE id = ANY($1)`,
+		ids, categorie)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // GetStats returns aggregate stats for a user.
 func (s *TransactionStore) GetStats(ctx context.Context, userID string) (map[string]any, error) {
 	var totaal int

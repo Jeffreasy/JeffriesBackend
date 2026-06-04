@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,9 +27,14 @@ type HomeBotExecutor struct {
 	habitStore       *store.HabitStore
 	automationStore  *store.AutomationStore
 	laventeCareStore *store.LaventeCareStore
+	googleClient     *google.OAuthClient
 }
 
 func NewHomeBotExecutor(pool *pgxpool.Pool, userID string) *HomeBotExecutor {
+	return NewHomeBotExecutorWithGoogle(pool, userID, nil)
+}
+
+func NewHomeBotExecutorWithGoogle(pool *pgxpool.Pool, userID string, googleClient *google.OAuthClient) *HomeBotExecutor {
 	db := &store.DB{Pool: pool}
 	return &HomeBotExecutor{
 		pool:             pool,
@@ -41,6 +48,7 @@ func NewHomeBotExecutor(pool *pgxpool.Pool, userID string) *HomeBotExecutor {
 		habitStore:       store.NewHabitStore(db),
 		automationStore:  store.NewAutomationStore(db),
 		laventeCareStore: store.NewLaventeCareStore(db),
+		googleClient:     googleClient,
 	}
 }
 
@@ -61,6 +69,39 @@ func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
 	}
 	b, _ := json.Marshal(data)
 	return string(b)
+}
+
+func optionalStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func parseUUIDs(values []string) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		id, err := uuid.Parse(value)
+		if err != nil {
+			return nil, fmt.Errorf("ongeldige uuid: %s", value)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func parseToolDateRange(argsJSON string, fallbackToday bool) (startIso, eindIso string, hasRange bool, err error) {
@@ -300,6 +341,280 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		emails, err := e.emailStore.Search(ctx, e.userID, args.Query, args.Limit)
 		return e.jsonResponse(emails, err)
 
+	case "markeerGelezen":
+		var args struct {
+			EmailID      string `json:"emailId"`
+			EmailIDSnake string `json:"email_id"`
+			GmailID      string `json:"gmailId"`
+			GmailIDSnake string `json:"gmail_id"`
+			ID           string `json:"id"`
+			Read         *bool  `json:"read"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		gmailID := firstNonEmpty(args.GmailID, args.GmailIDSnake, args.EmailID, args.EmailIDSnake, args.ID)
+		if gmailID == "" {
+			return e.jsonResponse(nil, fmt.Errorf("emailId of gmailId verplicht"))
+		}
+		read := true
+		if args.Read != nil {
+			read = *args.Read
+		}
+		if e.googleClient != nil {
+			add, remove := []string{}, []string{"UNREAD"}
+			if !read {
+				add, remove = []string{"UNREAD"}, []string{}
+			}
+			if err := google.ModifyGmailLabels(ctx, e.googleClient, gmailID, add, remove); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+		}
+		if err := e.emailStore.MarkRead(ctx, e.userID, gmailID, read); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "gmailId": gmailID, "read": read, "remote": e.googleClient != nil}, nil)
+
+	case "markeerSter":
+		var args struct {
+			EmailID      string `json:"emailId"`
+			EmailIDSnake string `json:"email_id"`
+			GmailID      string `json:"gmailId"`
+			GmailIDSnake string `json:"gmail_id"`
+			ID           string `json:"id"`
+			Starred      *bool  `json:"starred"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		gmailID := firstNonEmpty(args.GmailID, args.GmailIDSnake, args.EmailID, args.EmailIDSnake, args.ID)
+		if gmailID == "" {
+			return e.jsonResponse(nil, fmt.Errorf("emailId of gmailId verplicht"))
+		}
+		starred := true
+		if args.Starred != nil {
+			starred = *args.Starred
+		}
+		if e.googleClient != nil {
+			add, remove := []string{}, []string{"STARRED"}
+			if starred {
+				add, remove = []string{"STARRED"}, []string{}
+			}
+			if err := google.ModifyGmailLabels(ctx, e.googleClient, gmailID, add, remove); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+		}
+		if err := e.emailStore.MarkStar(ctx, e.userID, gmailID, starred); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "gmailId": gmailID, "starred": starred, "remote": e.googleClient != nil}, nil)
+
+	case "verwijderEmail":
+		var args struct {
+			EmailID      string `json:"emailId"`
+			EmailIDSnake string `json:"email_id"`
+			GmailID      string `json:"gmailId"`
+			GmailIDSnake string `json:"gmail_id"`
+			ID           string `json:"id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		gmailID := firstNonEmpty(args.GmailID, args.GmailIDSnake, args.EmailID, args.EmailIDSnake, args.ID)
+		if gmailID == "" {
+			return e.jsonResponse(nil, fmt.Errorf("emailId of gmailId verplicht"))
+		}
+		if e.googleClient != nil {
+			if err := google.TrashGmailMessage(ctx, e.googleClient, gmailID); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+		}
+		if err := e.emailStore.MarkDeleted(ctx, e.userID, gmailID); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "gmailId": gmailID, "deleted": true, "remote": e.googleClient != nil}, nil)
+
+	case "bulkMarkeerGelezen":
+		var args struct {
+			EmailIDs      []string `json:"emailIds"`
+			EmailIDsSnake []string `json:"email_ids"`
+			GmailIDs      []string `json:"gmailIds"`
+			GmailIDsSnake []string `json:"gmail_ids"`
+			Read          *bool    `json:"read"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		ids := args.GmailIDs
+		if len(ids) == 0 {
+			ids = args.GmailIDsSnake
+		}
+		if len(ids) == 0 {
+			ids = args.EmailIDs
+		}
+		if len(ids) == 0 {
+			ids = args.EmailIDsSnake
+		}
+		if len(ids) > 20 {
+			ids = ids[:20]
+		}
+		read := true
+		if args.Read != nil {
+			read = *args.Read
+		}
+		updated := 0
+		for _, gmailID := range ids {
+			gmailID = strings.TrimSpace(gmailID)
+			if gmailID == "" {
+				continue
+			}
+			if e.googleClient != nil {
+				add, remove := []string{}, []string{"UNREAD"}
+				if !read {
+					add, remove = []string{"UNREAD"}, []string{}
+				}
+				if err := google.ModifyGmailLabels(ctx, e.googleClient, gmailID, add, remove); err != nil {
+					return e.jsonResponse(nil, err)
+				}
+			}
+			if err := e.emailStore.MarkRead(ctx, e.userID, gmailID, read); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			updated++
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "updated": updated, "read": read, "remote": e.googleClient != nil}, nil)
+
+	case "bulkVerwijder":
+		var args struct {
+			EmailIDs      []string `json:"emailIds"`
+			EmailIDsSnake []string `json:"email_ids"`
+			GmailIDs      []string `json:"gmailIds"`
+			GmailIDsSnake []string `json:"gmail_ids"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		ids := args.GmailIDs
+		if len(ids) == 0 {
+			ids = args.GmailIDsSnake
+		}
+		if len(ids) == 0 {
+			ids = args.EmailIDs
+		}
+		if len(ids) == 0 {
+			ids = args.EmailIDsSnake
+		}
+		if len(ids) > 20 {
+			ids = ids[:20]
+		}
+		deleted := 0
+		for _, gmailID := range ids {
+			gmailID = strings.TrimSpace(gmailID)
+			if gmailID == "" {
+				continue
+			}
+			if e.googleClient != nil {
+				if err := google.TrashGmailMessage(ctx, e.googleClient, gmailID); err != nil {
+					return e.jsonResponse(nil, err)
+				}
+			}
+			if err := e.emailStore.MarkDeleted(ctx, e.userID, gmailID); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			deleted++
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "deleted": deleted, "remote": e.googleClient != nil}, nil)
+
+	case "inboxOpruimen":
+		var args struct {
+			Query  string `json:"query"`
+			Action string `json:"action"`
+			Limit  int    `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		limit := clampToolLimit(args.Limit, 10, 20)
+		emails, err := e.emailStore.Search(ctx, e.userID, args.Query, limit)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		action := strings.ToLower(strings.TrimSpace(args.Action))
+		if action == "" {
+			action = "mark_read"
+		}
+		changed := 0
+		for _, email := range emails {
+			switch action {
+			case "delete", "trash", "verwijder":
+				if e.googleClient != nil {
+					if err := google.TrashGmailMessage(ctx, e.googleClient, email.GmailID); err != nil {
+						return e.jsonResponse(nil, err)
+					}
+				}
+				if err := e.emailStore.MarkDeleted(ctx, e.userID, email.GmailID); err != nil {
+					return e.jsonResponse(nil, err)
+				}
+			default:
+				if e.googleClient != nil {
+					if err := google.ModifyGmailLabels(ctx, e.googleClient, email.GmailID, []string{}, []string{"UNREAD"}); err != nil {
+						return e.jsonResponse(nil, err)
+					}
+				}
+				if err := e.emailStore.MarkRead(ctx, e.userID, email.GmailID, true); err != nil {
+					return e.jsonResponse(nil, err)
+				}
+			}
+			changed++
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "action": action, "matched": len(emails), "changed": changed, "remote": e.googleClient != nil}, nil)
+
+	case "emailVersturen":
+		var args struct {
+			To      string `json:"to"`
+			Subject string `json:"subject"`
+			Body    string `json:"body"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.To) == "" || strings.TrimSpace(args.Subject) == "" || strings.TrimSpace(args.Body) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("to, subject en body zijn verplicht"))
+		}
+		result, err := google.SendGmailMessage(ctx, e.googleClient, args.To, args.Subject, args.Body)
+		return e.jsonResponse(map[string]any{"ok": true, "sent": result}, err)
+
+	case "emailBeantwoorden":
+		var args struct {
+			EmailID      string `json:"emailId"`
+			EmailIDSnake string `json:"email_id"`
+			GmailID      string `json:"gmailId"`
+			GmailIDSnake string `json:"gmail_id"`
+			ID           string `json:"id"`
+			Body         string `json:"body"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		gmailID := firstNonEmpty(args.GmailID, args.GmailIDSnake, args.EmailID, args.EmailIDSnake, args.ID)
+		if gmailID == "" || strings.TrimSpace(args.Body) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("emailId/gmailId en body zijn verplicht"))
+		}
+		email, err := e.emailStore.GetByGmailID(ctx, e.userID, gmailID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if email == nil {
+			return e.jsonResponse(nil, fmt.Errorf("email niet gevonden: %s", gmailID))
+		}
+		to := google.ExtractEmailAddress(email.FromAddr)
+		result, err := google.ReplyGmailMessage(ctx, e.googleClient, email.ThreadID, to, email.Subject, args.Body)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		_ = e.emailStore.MarkRead(ctx, e.userID, gmailID, true)
+		return e.jsonResponse(map[string]any{"ok": true, "reply": result, "threadId": email.ThreadID}, nil)
+
 	// ── SYSTEM & AUTOMATIONS ────────────────────────────────────────
 	case "syncStatusOpvragen":
 		scheduleMeta, scheduleErr := e.scheduleStore.GetMeta(ctx, e.userID)
@@ -466,6 +781,54 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		txs, _, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
 		return e.jsonResponse(txs, err)
 
+	case "categorieWijzigen":
+		var args struct {
+			TransactionID string `json:"transactionId"`
+			ID            string `json:"id"`
+			Categorie     string `json:"categorie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		idValue := firstNonEmpty(args.TransactionID, args.ID)
+		if idValue == "" || strings.TrimSpace(args.Categorie) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("transactionId en categorie verplicht"))
+		}
+		id, err := uuid.Parse(idValue)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if err := e.transactionStore.UpdateCategorie(ctx, id, args.Categorie); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "transactionId": id.String(), "categorie": args.Categorie}, nil)
+
+	case "bulkCategoriseren":
+		var args struct {
+			TransactionIDs []string `json:"transactionIds"`
+			IDs            []string `json:"ids"`
+			Categorie      string   `json:"categorie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		idsRaw := args.TransactionIDs
+		if len(idsRaw) == 0 {
+			idsRaw = args.IDs
+		}
+		if len(idsRaw) > 50 {
+			idsRaw = idsRaw[:50]
+		}
+		ids, err := parseUUIDs(idsRaw)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if len(ids) == 0 || strings.TrimSpace(args.Categorie) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("transactionIds en categorie verplicht"))
+		}
+		updated, err := e.transactionStore.BulkUpdateCategorie(ctx, ids, args.Categorie)
+		return e.jsonResponse(map[string]any{"ok": true, "updated": updated, "categorie": args.Categorie}, err)
+
 	// ── NOTITIES ─────────────────────────────────────────────────────
 	case "notitiesZoeken":
 		var args struct {
@@ -630,6 +993,172 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		events = visiblePersonalEvents(events)
 		return e.jsonResponse(events, err)
 
+	case "afspraakMaken":
+		var args struct {
+			Titel        string `json:"titel"`
+			Title        string `json:"title"`
+			StartDatum   string `json:"startDatum"`
+			StartDatumDB string `json:"start_datum"`
+			StartIso     string `json:"startIso"`
+			StartTijd    string `json:"startTijd"`
+			StartTijdDB  string `json:"start_tijd"`
+			EindDatum    string `json:"eindDatum"`
+			EindDatumDB  string `json:"eind_datum"`
+			EindIso      string `json:"eindIso"`
+			EindTijd     string `json:"eindTijd"`
+			EindTijdDB   string `json:"eind_tijd"`
+			Heledag      *bool  `json:"heledag"`
+			AllDay       *bool  `json:"allDay"`
+			Locatie      string `json:"locatie"`
+			Beschrijving string `json:"beschrijving"`
+			Symbol       string `json:"symbol"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		title := firstNonEmpty(args.Titel, args.Title)
+		startDate := firstNonEmpty(args.StartDatum, args.StartDatumDB, args.StartIso)
+		endDate := firstNonEmpty(args.EindDatum, args.EindDatumDB, args.EindIso, startDate)
+		if title == "" || startDate == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel en startDatum zijn verplicht"))
+		}
+		allDay := false
+		if args.Heledag != nil {
+			allDay = *args.Heledag
+		}
+		if args.AllDay != nil {
+			allDay = *args.AllDay
+		}
+		eventID := "ai-" + uuid.NewString()
+		event := model.PersonalEvent{
+			UserID:       e.userID,
+			EventID:      eventID,
+			Titel:        title,
+			StartDatum:   startDate,
+			StartTijd:    optionalStringPtr(firstNonEmpty(args.StartTijd, args.StartTijdDB)),
+			EindDatum:    endDate,
+			EindTijd:     optionalStringPtr(firstNonEmpty(args.EindTijd, args.EindTijdDB)),
+			Heledag:      allDay,
+			Locatie:      optionalStringPtr(args.Locatie),
+			Beschrijving: optionalStringPtr(args.Beschrijving),
+			Symbol:       optionalStringPtr(args.Symbol),
+			Status:       store.PersonalEventStatusPendingCreate,
+			Kalender:     "AI",
+		}
+		if event.Heledag {
+			event.StartTijd = nil
+			event.EindTijd = nil
+		}
+		if err := e.personalEvStore.Upsert(ctx, event); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"ok":      true,
+			"eventId": eventID,
+			"status":  store.PersonalEventStatusPendingCreate,
+			"message": "Afspraak staat klaar voor Google Calendar sync.",
+		}, nil)
+
+	case "afspraakBewerken":
+		var args struct {
+			EventID      string `json:"eventId"`
+			EventIDDB    string `json:"event_id"`
+			Titel        string `json:"titel"`
+			Title        string `json:"title"`
+			StartDatum   string `json:"startDatum"`
+			StartDatumDB string `json:"start_datum"`
+			StartIso     string `json:"startIso"`
+			StartTijd    string `json:"startTijd"`
+			StartTijdDB  string `json:"start_tijd"`
+			EindDatum    string `json:"eindDatum"`
+			EindDatumDB  string `json:"eind_datum"`
+			EindIso      string `json:"eindIso"`
+			EindTijd     string `json:"eindTijd"`
+			EindTijdDB   string `json:"eind_tijd"`
+			Heledag      *bool  `json:"heledag"`
+			AllDay       *bool  `json:"allDay"`
+			Locatie      string `json:"locatie"`
+			Beschrijving string `json:"beschrijving"`
+			Symbol       string `json:"symbol"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		eventID := firstNonEmpty(args.EventID, args.EventIDDB)
+		if eventID == "" {
+			return e.jsonResponse(nil, fmt.Errorf("eventId verplicht"))
+		}
+		event, err := e.personalEvStore.GetByUserEventID(ctx, e.userID, eventID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if title := firstNonEmpty(args.Titel, args.Title); title != "" {
+			event.Titel = title
+		}
+		if startDate := firstNonEmpty(args.StartDatum, args.StartDatumDB, args.StartIso); startDate != "" {
+			event.StartDatum = startDate
+		}
+		if endDate := firstNonEmpty(args.EindDatum, args.EindDatumDB, args.EindIso); endDate != "" {
+			event.EindDatum = endDate
+		}
+		if startTime := firstNonEmpty(args.StartTijd, args.StartTijdDB); startTime != "" {
+			event.StartTijd = optionalStringPtr(startTime)
+		}
+		if endTime := firstNonEmpty(args.EindTijd, args.EindTijdDB); endTime != "" {
+			event.EindTijd = optionalStringPtr(endTime)
+		}
+		if args.Heledag != nil {
+			event.Heledag = *args.Heledag
+		}
+		if args.AllDay != nil {
+			event.Heledag = *args.AllDay
+		}
+		if event.Heledag {
+			event.StartTijd = nil
+			event.EindTijd = nil
+		}
+		if strings.TrimSpace(args.Locatie) != "" {
+			event.Locatie = optionalStringPtr(args.Locatie)
+		}
+		if strings.TrimSpace(args.Beschrijving) != "" {
+			event.Beschrijving = optionalStringPtr(args.Beschrijving)
+		}
+		if strings.TrimSpace(args.Symbol) != "" {
+			event.Symbol = optionalStringPtr(args.Symbol)
+		}
+		event.Status = store.PersonalEventStatusPendingUpdate
+		if err := e.personalEvStore.Upsert(ctx, event); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"ok":      true,
+			"eventId": event.EventID,
+			"status":  store.PersonalEventStatusPendingUpdate,
+			"message": "Afspraakwijziging staat klaar voor Google Calendar sync.",
+		}, nil)
+
+	case "afspraakVerwijderen":
+		var args struct {
+			EventID   string `json:"eventId"`
+			EventIDDB string `json:"event_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		eventID := firstNonEmpty(args.EventID, args.EventIDDB)
+		if eventID == "" {
+			return e.jsonResponse(nil, fmt.Errorf("eventId verplicht"))
+		}
+		if err := e.personalEvStore.UpdateStatus(ctx, e.userID, eventID, store.PersonalEventStatusPendingDelete); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"ok":      true,
+			"eventId": eventID,
+			"status":  store.PersonalEventStatusPendingDelete,
+			"message": "Afspraakverwijdering staat klaar voor Google Calendar sync.",
+		}, nil)
+
 	// ── HABITS ───────────────────────────────────────────────────────
 	case "habitsOverzicht":
 		habits, err := e.habitStore.List(ctx, e.userID)
@@ -748,6 +1277,205 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
 		return e.jsonResponse(actions, err)
+
+	case "laventecareLeadMaken":
+		var args model.LCLeadCreate
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Titel) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel verplicht"))
+		}
+		if strings.TrimSpace(args.Bron) == "" {
+			args.Bron = "ai"
+		}
+		lead, err := e.laventeCareStore.CreateLead(ctx, e.userID, args)
+		return e.jsonResponse(map[string]any{"ok": true, "lead": lead}, err)
+
+	case "laventecareLeadBijwerken":
+		var args struct {
+			ID                 string  `json:"id"`
+			Status             *string `json:"status"`
+			FitScore           *int    `json:"fit_score"`
+			Pijnpunt           *string `json:"pijnpunt"`
+			Prioriteit         *string `json:"prioriteit"`
+			VolgendeStap       *string `json:"volgende_stap"`
+			VolgendeActieDatum *string `json:"volgende_actie_datum"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		input := model.LCLeadUpdate{
+			Status:             args.Status,
+			FitScore:           args.FitScore,
+			Pijnpunt:           args.Pijnpunt,
+			Prioriteit:         args.Prioriteit,
+			VolgendeStap:       args.VolgendeStap,
+			VolgendeActieDatum: args.VolgendeActieDatum,
+		}
+		if err := e.laventeCareStore.UpdateLead(ctx, e.userID, id, input); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "leadId": id.String()}, nil)
+
+	case "laventecareLeadNaarProject":
+		var args struct {
+			LeadID       string  `json:"lead_id"`
+			Naam         string  `json:"naam"`
+			Fase         *string `json:"fase"`
+			Status       *string `json:"status"`
+			Samenvatting *string `json:"samenvatting"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		leadID, err := uuid.Parse(args.LeadID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		project, err := e.laventeCareStore.ConvertLeadToProject(ctx, e.userID, model.LCConvertLeadToProject{
+			LeadID:       leadID,
+			Naam:         args.Naam,
+			Fase:         args.Fase,
+			Status:       args.Status,
+			Samenvatting: args.Samenvatting,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "project": project}, err)
+
+	case "laventecareProjectMaken":
+		var args model.LCProjectCreate
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Naam) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("naam verplicht"))
+		}
+		if strings.TrimSpace(args.Fase) == "" {
+			args.Fase = "intake"
+		}
+		if strings.TrimSpace(args.Status) == "" {
+			args.Status = "active"
+		}
+		project, err := e.laventeCareStore.CreateProject(ctx, e.userID, model.LCProject{
+			Naam:            args.Naam,
+			Fase:            args.Fase,
+			Status:          args.Status,
+			WaardeIndicatie: args.WaardeIndicatie,
+			StartDatum:      args.StartDatum,
+			Deadline:        args.Deadline,
+			Samenvatting:    args.Samenvatting,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "project": project}, err)
+
+	case "laventecareProjectBijwerken":
+		var args struct {
+			ID              string  `json:"id"`
+			Fase            *string `json:"fase"`
+			Status          *string `json:"status"`
+			WaardeIndicatie *int    `json:"waarde_indicatie"`
+			StartDatum      *string `json:"start_datum"`
+			Deadline        *string `json:"deadline"`
+			Samenvatting    *string `json:"samenvatting"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		input := model.LCProjectUpdate{
+			Fase:            args.Fase,
+			Status:          args.Status,
+			WaardeIndicatie: args.WaardeIndicatie,
+			StartDatum:      args.StartDatum,
+			Deadline:        args.Deadline,
+			Samenvatting:    args.Samenvatting,
+		}
+		if err := e.laventeCareStore.UpdateProject(ctx, e.userID, id, input); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "projectId": id.String()}, nil)
+
+	case "laventecareActieMaken":
+		var args struct {
+			Source          string  `json:"source"`
+			SourceID        *string `json:"source_id"`
+			Title           string  `json:"title"`
+			Summary         *string `json:"summary"`
+			ActionType      string  `json:"action_type"`
+			Priority        string  `json:"priority"`
+			DueDate         *string `json:"due_date"`
+			LinkedLeadID    *string `json:"linked_lead_id"`
+			LinkedProjectID *string `json:"linked_project_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Title) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("title verplicht"))
+		}
+		if strings.TrimSpace(args.Source) == "" {
+			args.Source = "ai"
+		}
+		if strings.TrimSpace(args.ActionType) == "" {
+			args.ActionType = "follow_up"
+		}
+		if strings.TrimSpace(args.Priority) == "" {
+			args.Priority = "normal"
+		}
+		var linkedLeadID, linkedProjectID *uuid.UUID
+		if args.LinkedLeadID != nil && strings.TrimSpace(*args.LinkedLeadID) != "" {
+			id, err := uuid.Parse(*args.LinkedLeadID)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			linkedLeadID = &id
+		}
+		if args.LinkedProjectID != nil && strings.TrimSpace(*args.LinkedProjectID) != "" {
+			id, err := uuid.Parse(*args.LinkedProjectID)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			linkedProjectID = &id
+		}
+		action, err := e.laventeCareStore.CreateAction(ctx, e.userID, model.LCActionCreate{
+			Source:          args.Source,
+			SourceID:        args.SourceID,
+			Title:           args.Title,
+			Summary:         args.Summary,
+			ActionType:      args.ActionType,
+			Priority:        args.Priority,
+			DueDate:         args.DueDate,
+			LinkedLeadID:    linkedLeadID,
+			LinkedProjectID: linkedProjectID,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "action": action}, err)
+
+	case "laventecareActieAfronden":
+		var args struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		status := strings.TrimSpace(args.Status)
+		if status == "" {
+			status = "done"
+		}
+		if err := e.laventeCareStore.UpdateActionStatus(ctx, e.userID, id, status); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "actionId": id.String(), "status": status}, nil)
 
 	// ── SMART HOME ───────────────────────────────────────────────────
 	case "lampBedien":

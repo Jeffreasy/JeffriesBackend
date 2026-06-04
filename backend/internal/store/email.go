@@ -163,6 +163,14 @@ func (s *EmailStore) MarkDeleted(ctx context.Context, userID, gmailID string) er
 	return err
 }
 
+// MarkStar updates the starred status of an email.
+func (s *EmailStore) MarkStar(ctx context.Context, userID, gmailID string, starred bool) error {
+	_, err := s.db.Pool.Exec(ctx,
+		`UPDATE emails SET is_ster = $3 WHERE user_id = $1 AND gmail_id = $2`,
+		userID, gmailID, starred)
+	return err
+}
+
 // Count returns total email count for a user (excluding deleted).
 func (s *EmailStore) Count(ctx context.Context, userID string) (int, error) {
 	var count int
