@@ -23,6 +23,7 @@ type HomeBotExecutor struct {
 	noteStore        *store.NoteStore
 	personalEvStore  *store.PersonalEventStore
 	habitStore       *store.HabitStore
+	automationStore  *store.AutomationStore
 	laventeCareStore *store.LaventeCareStore
 }
 
@@ -38,6 +39,7 @@ func NewHomeBotExecutor(pool *pgxpool.Pool, userID string) *HomeBotExecutor {
 		noteStore:        store.NewNoteStore(db),
 		personalEvStore:  store.NewPersonalEventStore(db),
 		habitStore:       store.NewHabitStore(db),
+		automationStore:  store.NewAutomationStore(db),
 		laventeCareStore: store.NewLaventeCareStore(db),
 	}
 }
@@ -130,6 +132,50 @@ func visiblePersonalEvents(events []model.PersonalEvent) []model.PersonalEvent {
 		visible = append(visible, event)
 	}
 	return visible
+}
+
+func clampToolLimit(value, fallback, max int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func scheduleMetaValue(meta *model.ScheduleMeta, key string) any {
+	if meta == nil {
+		return nil
+	}
+	switch key {
+	case "importedAt":
+		return meta.ImportedAt
+	case "fileName":
+		return meta.FileName
+	case "totalRows":
+		return meta.TotalRows
+	default:
+		return nil
+	}
+}
+
+func emailMetaValue(meta *model.EmailSyncMeta, key string) any {
+	if meta == nil {
+		return nil
+	}
+	switch key {
+	case "updatedAt":
+		return meta.UpdatedAt
+	case "lastFullSync":
+		return meta.LastFullSync
+	case "totalSynced":
+		return meta.TotalSynced
+	case "historyID":
+		return meta.HistoryID
+	default:
+		return nil
+	}
 }
 
 func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
@@ -230,6 +276,112 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		emails, err := e.emailStore.Search(ctx, e.userID, args.Query, args.Limit)
 		return e.jsonResponse(emails, err)
 
+	// ── SYSTEM & AUTOMATIONS ────────────────────────────────────────
+	case "syncStatusOpvragen":
+		scheduleMeta, scheduleErr := e.scheduleStore.GetMeta(ctx, e.userID)
+		if scheduleErr != nil {
+			return e.jsonResponse(nil, scheduleErr)
+		}
+		emailMeta, emailErr := e.emailStore.GetSyncMeta(ctx, e.userID)
+		if emailErr != nil {
+			return e.jsonResponse(nil, emailErr)
+		}
+
+		var personalTotal, pendingPersonal int
+		if err := e.pool.QueryRow(ctx,
+			`SELECT COUNT(*),
+			        COUNT(*) FILTER (WHERE status IN ($2, $3, $4))
+			   FROM personal_events
+			  WHERE user_id = $1`,
+			e.userID,
+			store.PersonalEventStatusPendingCreate,
+			store.PersonalEventStatusPendingUpdate,
+			store.PersonalEventStatusPendingDelete,
+		).Scan(&personalTotal, &pendingPersonal); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		var pendingCommands, processingCommands, failedCommands int
+		if err := e.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FILTER (WHERE status = 'pending'),
+			        COUNT(*) FILTER (WHERE status = 'processing'),
+			        COUNT(*) FILTER (WHERE status = 'failed')
+			   FROM device_commands
+			  WHERE user_id = $1`,
+			e.userID,
+		).Scan(&pendingCommands, &processingCommands, &failedCommands); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		return e.jsonResponse(map[string]any{
+			"schedule": map[string]any{
+				"importedAt": scheduleMetaValue(scheduleMeta, "importedAt"),
+				"totalRows":  scheduleMetaValue(scheduleMeta, "totalRows"),
+			},
+			"personalCalendar": map[string]any{
+				"total":   personalTotal,
+				"pending": pendingPersonal,
+			},
+			"gmail": map[string]any{
+				"updatedAt":     emailMetaValue(emailMeta, "updatedAt"),
+				"lastFullSync":  emailMetaValue(emailMeta, "lastFullSync"),
+				"totalSynced":   emailMetaValue(emailMeta, "totalSynced"),
+				"historyIDSet":  emailMeta != nil && strings.TrimSpace(emailMeta.HistoryID) != "",
+				"metaAvailable": emailMeta != nil,
+			},
+			"commands": map[string]int{
+				"pending":    pendingCommands,
+				"processing": processingCommands,
+				"failed":     failedCommands,
+			},
+		}, nil)
+
+	case "automationsOverzicht":
+		automations, err := e.automationStore.List(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		items := make([]map[string]any, 0, len(automations))
+		active := 0
+		for _, automation := range automations {
+			if automation.Enabled {
+				active++
+			}
+			items = append(items, map[string]any{
+				"id":          automation.ID,
+				"name":        automation.Name,
+				"enabled":     automation.Enabled,
+				"group":       automation.GroupName,
+				"lastFiredAt": automation.LastFiredAt,
+				"createdAt":   automation.CreatedAt,
+			})
+		}
+
+		var pendingCommands, processingCommands, failedCommands int
+		if err := e.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FILTER (WHERE status = 'pending'),
+			        COUNT(*) FILTER (WHERE status = 'processing'),
+			        COUNT(*) FILTER (WHERE status = 'failed')
+			   FROM device_commands
+			  WHERE user_id = $1`,
+			e.userID,
+		).Scan(&pendingCommands, &processingCommands, &failedCommands); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		return e.jsonResponse(map[string]any{
+			"total":    len(automations),
+			"active":   active,
+			"inactive": len(automations) - active,
+			"items":    items,
+			"commands": map[string]int{
+				"pending":    pendingCommands,
+				"processing": processingCommands,
+				"failed":     failedCommands,
+			},
+		}, nil)
+
 	// ── ROOSTER ──────────────────────────────────────────────────────
 	case "dienstenOpvragen":
 		var events []model.Schedule
@@ -300,6 +452,50 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		notes, err := e.noteStore.Search(ctx, e.userID, args.Query, 5) // Hard cap op 5
 		return e.jsonResponse(notes, err)
+
+	case "notitiesOverzicht":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		limit := clampToolLimit(args.Limit, 10, 20)
+		notes, err := e.noteStore.List(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		active := make([]model.Note, 0, limit)
+		totalActive := 0
+		totalPinned := 0
+		totalCompleted := 0
+		totalArchived := 0
+		for _, note := range notes {
+			if note.IsArchived {
+				totalArchived++
+				continue
+			}
+			totalActive++
+			if note.IsPinned {
+				totalPinned++
+			}
+			if note.IsCompleted {
+				totalCompleted++
+			}
+			if len(active) < limit {
+				active = append(active, note)
+			}
+		}
+
+		return e.jsonResponse(map[string]any{
+			"totalActive":    totalActive,
+			"totalPinned":    totalPinned,
+			"totalCompleted": totalCompleted,
+			"totalArchived":  totalArchived,
+			"limit":          limit,
+			"items":          active,
+		}, nil)
 
 	case "notitieAanmaken":
 		var args struct {
@@ -393,6 +589,75 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		habits, err := e.habitStore.List(ctx, e.userID)
 		return e.jsonResponse(habits, err)
 
+	case "habitStreaks":
+		stats, err := e.habitStore.Stats(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		habits, err := e.habitStore.List(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		items := make([]map[string]any, 0, len(habits))
+		for _, habit := range habits {
+			items = append(items, map[string]any{
+				"id":             habit.ID,
+				"naam":           habit.Naam,
+				"emoji":          habit.Emoji,
+				"type":           habit.Type,
+				"frequentie":     habit.Frequentie,
+				"huidigeStreak":  habit.HuidigeStreak,
+				"langsteStreak":  habit.LangsteStreak,
+				"totaalVoltooid": habit.TotaalVoltooid,
+				"totaalXP":       habit.TotaalXP,
+				"isPauze":        habit.IsPauze,
+			})
+		}
+
+		return e.jsonResponse(map[string]any{
+			"stats": stats,
+			"items": items,
+		}, nil)
+
+	case "habitBadges":
+		badges, err := e.habitStore.ListBadges(ctx, e.userID)
+		return e.jsonResponse(badges, err)
+
+	case "habitRapport":
+		var args struct {
+			Dagen int `json:"dagen"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		days := clampToolLimit(args.Dagen, 30, 60)
+
+		stats, err := e.habitStore.Stats(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		habits, err := e.habitStore.List(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		badges, err := e.habitStore.ListBadges(ctx, e.userID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		heatmap, err := e.habitStore.HeatmapData(ctx, e.userID, days)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+
+		return e.jsonResponse(map[string]any{
+			"dagen":   days,
+			"stats":   stats,
+			"habits":  habits,
+			"badges":  badges,
+			"heatmap": heatmap,
+		}, nil)
+
 	// ── LAVENTECARE ──────────────────────────────────────────────────
 	case "laventecareCockpit":
 		cockpit, err := e.laventeCareStore.GetCockpit(ctx, e.userID)
@@ -407,6 +672,36 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		docs, err := e.laventeCareStore.SearchDocuments(ctx, e.userID, args.Query, 5)
 		return e.jsonResponse(docs, err)
+
+	case "laventecareLeadsOpvragen":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		leads, err := e.laventeCareStore.ListLeads(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		return e.jsonResponse(leads, err)
+
+	case "laventecareProjectenOpvragen":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		projects, err := e.laventeCareStore.ListProjects(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		return e.jsonResponse(projects, err)
+
+	case "laventecareActiesOpvragen":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		return e.jsonResponse(actions, err)
 
 	// ── SMART HOME ───────────────────────────────────────────────────
 	case "lampBedien":

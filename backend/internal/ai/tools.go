@@ -44,6 +44,32 @@ var AllTools = []ToolDefinition{
 		},
 	},
 
+	// ── SYSTEM & AUTOMATIONS ──────────────────────────────────────────
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "syncStatusOpvragen",
+			Description: "Haalt de status op van rooster, persoonlijke agenda, Gmail sync en command queue.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "automationsOverzicht",
+			Description: "Haalt actieve automations, laatste runs en command queue status op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+
 	// ── ROOSTER & FINANCE ──────────────────────────────────────────────
 	{
 		Type: "function",
@@ -198,6 +224,23 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "notitiesOverzicht",
+			Description: "Haalt een compact overzicht van recente actieve notities op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal notities (max 20)."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "notitieAanmaken",
 			Description: "Maakt een nieuwe notitie aan in het systeem op basis van wat de gebruiker vertelt.",
 			Parameters: json.RawMessage(`{
@@ -245,6 +288,47 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitStreaks",
+			Description: "Haalt habit streaks, XP en totale voltooiingen op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitBadges",
+			Description: "Haalt behaalde habit badges op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitRapport",
+			Description: "Haalt een compact habit rapport op met stats, actieve habits, badges en heatmap.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"dagen": {
+						"type": "number",
+						"description": "Aantal dagen heatmap, max 60."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
 
 	// ── LAVENTECARE ────────────────────────────────────────────────────
 	{
@@ -273,6 +357,57 @@ var AllTools = []ToolDefinition{
 					}
 				},
 				"required": ["query"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareLeadsOpvragen",
+			Description: "Haalt recente LaventeCare leads op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal leads (max 30)."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareProjectenOpvragen",
+			Description: "Haalt recente LaventeCare projecten op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal projecten (max 30)."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareActiesOpvragen",
+			Description: "Haalt open LaventeCare actie-items op.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal acties (max 30)."
+					}
+				},
+				"required": []
 			}`),
 		},
 	},

@@ -46,6 +46,9 @@ var Policies = map[string]ToolPolicy{
 	// Email reads
 	"leesEmail":  {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"zoekEmails": {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	// System reads
+	"syncStatusOpvragen":   {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"automationsOverzicht": {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
@@ -78,12 +81,12 @@ var Policies = map[string]ToolPolicy{
 	"afspraakVerwijderen": {Agents: []string{"agenda", "rooster", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"afsprakenOpvragen":   {Agents: []string{"agenda", "rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Notes
-	"notitieMaken":          {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"notitieAanmaken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
 	"notitiesZoeken":        {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"notitiesOverzicht":     {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"notitiePinnen":         {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
 	"notitieBewerken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitieArchiveren":     {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"notitiesOverzicht":     {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"notitiesVandaag":       {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
