@@ -38,6 +38,13 @@ func TestRouteFreeTextLaventeCareIntentGoesToLaventeCare(t *testing.T) {
 	}
 }
 
+func TestRouteFreeTextHabitIntentGoesToHabits(t *testing.T) {
+	got := routeFreeText("ik heb mijn water habit afgevinkt")
+	if got != "habits" {
+		t.Fatalf("routeFreeText() = %q, want habits", got)
+	}
+}
+
 func TestExternalNewsIntent(t *testing.T) {
 	if !hasExternalNewsIntent("wat was het laatste nieuws de afgelopen 24 uur?") {
 		t.Fatal("expected news intent")
@@ -80,6 +87,8 @@ func TestExpandTelegramCommand(t *testing.T) {
 		{input: "/rooster", agentHint: "rooster", contains: "dienstenopvragen"},
 		{input: "/finance", agentHint: "finance", contains: "uitgavenoverzicht"},
 		{input: "/laventecare", agentHint: "laventecare", contains: "laventecarecockpit"},
+		{input: "/habits", agentHint: "habits", contains: "habitrapport"},
+		{input: "/check", agentHint: "habits", contains: "habitrapport"},
 		{input: "/news", agentHint: "brain", contains: "nieuws"},
 		{input: "/noteai", agentHint: "notes", contains: "notities"},
 		{input: "/notetriage", agentHint: "notes", contains: "triage"},

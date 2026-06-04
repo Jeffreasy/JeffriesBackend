@@ -580,7 +580,7 @@ var commandMap = map[string]string{
 	"/noteai": "notes", "/notitieai": "notes", "/notetriage": "notes",
 	"/triagenotes": "notes", "/notesamenvatting": "notes", "/samenvatnotes": "notes",
 	"/automations": "automations", "/habits": "habits",
-	"/streak": "habits", "/check": "habits",
+	"/streak": "habits", "/check": "habits", "/habitrapport": "habits",
 }
 
 func expandTelegramCommand(text string) (expanded string, agentHint string, ok bool) {
@@ -602,8 +602,10 @@ func expandTelegramCommand(text string) (expanded string, agentHint string, ok b
 		return "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen en of de documentbasis is geinitialiseerd. Gebruik geen verzonnen CRM-data.", "laventecare", true
 	case "/email", "/inbox":
 		return "Geef een compacte inbox status en noem welke emails aandacht nodig lijken.", "email", true
-	case "/habits", "/streak":
-		return "Geef mijn habit status met actieve habits, streaks, badges en een kort advies voor vandaag.", "habits", true
+	case "/habits", "/streak", "/habitrapport":
+		return "Geef mijn habit status voor vandaag. Gebruik habitRapport als basis en benoem vandaagDue, vandaagCompleted, streaks, badges, incidenten en maximaal drie concrete adviezen.", "habits", true
+	case "/check":
+		return "Help mij een habit af te vinken. Gebruik habitRapport om de habits van vandaag te tonen en vraag kort welke habit ik wil voltooien als de naam ontbreekt.", "habits", true
 	case "/noteai", "/notitieai":
 		return "Analyseer mijn actieve notities als slimme notitieassistent. Gebruik eerst Live Data.notes als actueel overzicht en verifieer daarna met notitiesOverzicht. Gebruik notitiesVandaag alleen voor nieuw/gewijzigd vandaag; leeg vandaag betekent niet dat er geen actieve notities zijn. Geef: 1) belangrijkste thema's, 2) open acties, 3) wat vandaag aandacht nodig heeft, 4) maximaal drie concrete vervolgstappen.", "notes", true
 	case "/notetriage", "/triagenotes":
@@ -633,6 +635,9 @@ func routeFreeText(text string) string {
 	}
 	if hasNoteIntent(lower) {
 		return "notes"
+	}
+	if hasHabitIntent(lower) {
+		return "habits"
 	}
 	if hasLaventeCareIntent(lower) {
 		return "laventecare"
@@ -687,6 +692,15 @@ func hasLaventeCareIntent(lower string) bool {
 
 func hasFinanceIntent(lower string) bool {
 	for _, kw := range []string{"finance", "financien", "financiën", "geld", "saldo", "salaris", "loonstrook", "transactie", "transacties", "uitgaven", "inkomsten", "vaste lasten", "stornering"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHabitIntent(lower string) bool {
+	for _, kw := range []string{"habit", "habits", "gewoonte", "gewoontes", "streak", "streaks", "afvinken", "afgevinkt", "gedaan", "voltooid", "xp", "terugval"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}
@@ -1579,7 +1593,7 @@ func buildWelcomeText(snapshot telegramStartSnapshot) string {
 }
 
 func buildHelpText() string {
-	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/pending — openstaande bevestigingen\n/approve CODE — actie uitvoeren\n/reject CODE — actie annuleren\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/laventecare — CRM cockpit\n/email — inbox\n/notities — notitie cockpit\n/noteai — AI triage van notities\n/zoeknote [term] — notities zoeken\n/noteer [tekst] — slimme snelle notitie\n/habits — habits\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
+	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/pending — openstaande bevestigingen\n/approve CODE — actie uitvoeren\n/reject CODE — actie annuleren\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/laventecare — CRM cockpit\n/email — inbox\n/notities — notitie cockpit\n/noteai — AI triage van notities\n/zoeknote [term] — notities zoeken\n/noteer [tekst] — slimme snelle notitie\n/habits — habit cockpit\n/habitrapport — habit analyse\n/check — habit afvinken\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {
@@ -1606,15 +1620,18 @@ func buildMainMenu() tg.InlineKeyboardMarkup {
 				{Text: "🏢 LaventeCare", CallbackData: "/laventecare"},
 			},
 			{
+				{Text: "🎯 Habits", CallbackData: "/habits"},
 				{Text: "📧 Inbox", CallbackData: "/email"},
+			},
+			{
 				{Text: "🔎 Nieuws", CallbackData: "/news"},
-			},
-			{
 				{Text: "⏳ Bevestigingen", CallbackData: "/pending"},
-				{Text: "🤖 AI status", CallbackData: "/ai"},
 			},
 			{
+				{Text: "🤖 AI status", CallbackData: "/ai"},
 				{Text: "🎙️ Spraak", CallbackData: "/voicehelp"},
+			},
+			{
 				{Text: "❔ Help", CallbackData: "/help"},
 			},
 		},

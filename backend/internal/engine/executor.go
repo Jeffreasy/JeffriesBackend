@@ -13,6 +13,7 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -75,6 +76,44 @@ func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
 	}
 	b, _ := json.Marshal(data)
 	return string(b)
+}
+
+func (e *HomeBotExecutor) resolveHabit(ctx context.Context, idValue, nameValue string) (model.Habit, error) {
+	idValue = strings.TrimSpace(idValue)
+	if idValue != "" {
+		id, err := uuid.Parse(idValue)
+		if err != nil {
+			return model.Habit{}, err
+		}
+		habit, err := e.habitStore.Get(ctx, id)
+		if err != nil {
+			return model.Habit{}, err
+		}
+		if habit.UserID != e.userID {
+			return model.Habit{}, fmt.Errorf("habit niet gevonden")
+		}
+		return habit, nil
+	}
+
+	needle := strings.ToLower(strings.TrimSpace(nameValue))
+	if needle == "" {
+		return model.Habit{}, fmt.Errorf("habit id of naam verplicht")
+	}
+	habits, err := e.habitStore.List(ctx, e.userID)
+	if err != nil {
+		return model.Habit{}, err
+	}
+	for _, habit := range habits {
+		if strings.EqualFold(strings.TrimSpace(habit.Naam), needle) {
+			return habit, nil
+		}
+	}
+	for _, habit := range habits {
+		if strings.Contains(strings.ToLower(habit.Naam), needle) {
+			return habit, nil
+		}
+	}
+	return model.Habit{}, fmt.Errorf("habit niet gevonden: %s", needle)
 }
 
 func optionalStringPtr(value string) *string {
@@ -480,6 +519,75 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func normalizedHabitType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "negatief", "vermijden", "avoid":
+		return "negatief"
+	default:
+		return "positief"
+	}
+}
+
+func normalizedHabitFrequency(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "weekdagen", "werkdagen":
+		return "weekdagen"
+	case "weekend", "weekenddagen":
+		return "weekenddagen"
+	case "aangepast", "custom":
+		return "aangepast"
+	case "x_per_week", "per_week":
+		return "x_per_week"
+	case "x_per_maand", "per_maand":
+		return "x_per_maand"
+	default:
+		return "dagelijks"
+	}
+}
+
+func normalizedHabitDifficulty(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "makkelijk", "easy":
+		return "makkelijk"
+	case "moeilijk", "hard":
+		return "moeilijk"
+	default:
+		return "normaal"
+	}
+}
+
+func habitXPForDifficulty(value string) int {
+	switch normalizedHabitDifficulty(value) {
+	case "makkelijk":
+		return 5
+	case "moeilijk":
+		return 20
+	default:
+		return 10
+	}
+}
+
+func habitSummary(habit model.Habit) map[string]any {
+	return map[string]any{
+		"id":             habit.ID.String(),
+		"naam":           habit.Naam,
+		"emoji":          habit.Emoji,
+		"type":           habit.Type,
+		"frequentie":     habit.Frequentie,
+		"huidigeStreak":  habit.HuidigeStreak,
+		"langsteStreak":  habit.LangsteStreak,
+		"totaalVoltooid": habit.TotaalVoltooid,
+	}
+}
+
+func habitNames(habits []model.Habit) []string {
+	names := make([]string, 0, len(habits))
+	for _, habit := range habits {
+		names = append(names, strings.TrimSpace(habit.Emoji+" "+habit.Naam))
+	}
+	return names
 }
 
 func scheduleMetaValue(meta *model.ScheduleMeta, key string) any {
@@ -1622,9 +1730,159 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}, nil)
 
 	// ── HABITS ───────────────────────────────────────────────────────
+	case "habitAanmaken":
+		var args struct {
+			Naam              string   `json:"naam"`
+			Emoji             string   `json:"emoji"`
+			Type              string   `json:"type"`
+			Beschrijving      string   `json:"beschrijving"`
+			Frequentie        string   `json:"frequentie"`
+			AangepasteDagen   []int32  `json:"aangepaste_dagen"`
+			DoelAantal        *int     `json:"doel_aantal"`
+			RoosterFilter     string   `json:"rooster_filter"`
+			IsKwantitatief    bool     `json:"is_kwantitatief"`
+			DoelWaarde        *float64 `json:"doel_waarde"`
+			Eenheid           string   `json:"eenheid"`
+			DoelTijd          string   `json:"doel_tijd"`
+			Moeilijkheid      string   `json:"moeilijkheid"`
+			FinancieCategorie string   `json:"financie_categorie"`
+			Kleur             string   `json:"kleur"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Naam) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("naam verplicht"))
+		}
+		habit := model.Habit{
+			Naam:              strings.TrimSpace(args.Naam),
+			Emoji:             firstNonEmpty(args.Emoji, "🎯"),
+			Type:              normalizedHabitType(args.Type),
+			Beschrijving:      optionalStringPtr(args.Beschrijving),
+			Frequentie:        normalizedHabitFrequency(args.Frequentie),
+			AangepasteDagen:   args.AangepasteDagen,
+			DoelAantal:        args.DoelAantal,
+			RoosterFilter:     optionalStringPtr(args.RoosterFilter),
+			IsKwantitatief:    args.IsKwantitatief,
+			DoelWaarde:        args.DoelWaarde,
+			Eenheid:           optionalStringPtr(args.Eenheid),
+			DoelTijd:          optionalStringPtr(args.DoelTijd),
+			XPPerVoltooiing:   habitXPForDifficulty(args.Moeilijkheid),
+			Moeilijkheid:      normalizedHabitDifficulty(args.Moeilijkheid),
+			FinancieCategorie: optionalStringPtr(args.FinancieCategorie),
+			Kleur:             optionalStringPtr(firstNonEmpty(args.Kleur, "#f97316")),
+		}
+		created, err := e.habitStore.Create(ctx, e.userID, habit)
+		return e.jsonResponse(map[string]any{"ok": true, "scope": "habit aangemaakt", "habit": created}, err)
+
+	case "habitVoltooien":
+		var args struct {
+			ID      string   `json:"id"`
+			HabitID string   `json:"habitId"`
+			Naam    string   `json:"naam"`
+			Datum   string   `json:"datum"`
+			Waarde  *float64 `json:"waarde"`
+			Notitie string   `json:"notitie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		habit, err := e.resolveHabit(ctx, firstNonEmpty(args.ID, args.HabitID), args.Naam)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		datum := firstNonEmpty(args.Datum, todayAmsterdamISO())
+		log, err := e.habitStore.UpsertLog(ctx, model.HabitLog{
+			UserID:   e.userID,
+			HabitID:  habit.ID,
+			Datum:    datum,
+			Voltooid: true,
+			Waarde:   args.Waarde,
+			Notitie:  optionalStringPtr(args.Notitie),
+			Bron:     "telegram",
+		})
+		return e.jsonResponse(map[string]any{
+			"ok":          true,
+			"scope":       "habit voltooid",
+			"habit":       habitSummary(habit),
+			"log":         log,
+			"instruction": "Bij kwantitatieve habits is voltooid alleen true als de waarde het doel haalt.",
+		}, err)
+
+	case "habitIncident":
+		var args struct {
+			ID      string `json:"id"`
+			HabitID string `json:"habitId"`
+			Naam    string `json:"naam"`
+			Trigger string `json:"trigger"`
+			Notitie string `json:"notitie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		habit, err := e.resolveHabit(ctx, firstNonEmpty(args.ID, args.HabitID), args.Naam)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		log, err := e.habitStore.UpsertLog(ctx, model.HabitLog{
+			UserID:     e.userID,
+			HabitID:    habit.ID,
+			Datum:      todayAmsterdamISO(),
+			IsIncident: true,
+			TriggerCat: optionalStringPtr(args.Trigger),
+			Notitie:    optionalStringPtr(args.Notitie),
+			Bron:       "telegram",
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "scope": "habit incident", "habit": habitSummary(habit), "log": log}, err)
+
+	case "habitNotitie":
+		var args struct {
+			ID      string `json:"id"`
+			HabitID string `json:"habitId"`
+			Naam    string `json:"naam"`
+			Datum   string `json:"datum"`
+			Notitie string `json:"notitie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Notitie) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("notitie verplicht"))
+		}
+		habit, err := e.resolveHabit(ctx, firstNonEmpty(args.ID, args.HabitID), args.Naam)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		datum := firstNonEmpty(args.Datum, todayAmsterdamISO())
+		existing, err := e.habitStore.GetLog(ctx, habit.ID, datum)
+		if err != nil && err != pgx.ErrNoRows {
+			return e.jsonResponse(nil, err)
+		}
+		logInput := existing
+		if err == pgx.ErrNoRows {
+			logInput = model.HabitLog{UserID: e.userID, HabitID: habit.ID, Datum: datum, Bron: "telegram"}
+		}
+		logInput.Notitie = optionalStringPtr(args.Notitie)
+		logInput.Bron = "telegram"
+		log, err := e.habitStore.UpsertLog(ctx, logInput)
+		return e.jsonResponse(map[string]any{"ok": true, "scope": "habit lognotitie", "habit": habitSummary(habit), "log": log}, err)
+
 	case "habitsOverzicht":
 		habits, err := e.habitStore.List(ctx, e.userID)
-		return e.jsonResponse(habits, err)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		todayHabits, err := e.habitStore.ListDueForDate(ctx, e.userID, todayAmsterdamISO())
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"scope":       "habits overzicht",
+			"count":       len(habits),
+			"vandaagDue":  len(todayHabits),
+			"items":       habits,
+			"instruction": "items bevat alle actieve habits; vandaagDue gebruikt frequentie, pauze en roosterfilter.",
+		}, nil)
 
 	case "habitStreaks":
 		stats, err := e.habitStore.Stats(ctx, e.userID)
@@ -1659,7 +1917,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "habitBadges":
 		badges, err := e.habitStore.ListBadges(ctx, e.userID)
-		return e.jsonResponse(badges, err)
+		return e.jsonResponse(map[string]any{"scope": "habit badges", "count": len(badges), "items": badges}, err)
 
 	case "habitRapport":
 		var args struct {
@@ -1686,13 +1944,21 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		todayHabits, err := e.habitStore.ListDueForDate(ctx, e.userID, todayAmsterdamISO())
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
 
 		return e.jsonResponse(map[string]any{
-			"dagen":   days,
-			"stats":   stats,
-			"habits":  habits,
-			"badges":  badges,
-			"heatmap": heatmap,
+			"scope":             "habit rapport",
+			"dagen":             days,
+			"stats":             stats,
+			"habits":            habits,
+			"badges":            badges,
+			"heatmap":           heatmap,
+			"vandaagDue":        len(todayHabits),
+			"vandaagHabitNames": habitNames(todayHabits),
+			"instruction":       "Gebruik stats.todayDue/todayCompleted voor vandaag. Heatmap-rate gebruikt due habits per datum.",
 		}, nil)
 
 	// ── LAVENTECARE ──────────────────────────────────────────────────

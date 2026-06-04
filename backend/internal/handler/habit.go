@@ -269,6 +269,10 @@ func (h *HabitHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	log := model.HabitLog{
 		UserID:   userID,
 		HabitID:  habitID,
@@ -316,6 +320,10 @@ func (h *HabitHandler) Incident(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
 	log := model.HabitLog{
 		UserID:     userID,
 		HabitID:    habitID,
@@ -436,7 +444,7 @@ func (h *HabitHandler) ForDate(w http.ResponseWriter, r *http.Request) {
 		datum = time.Now().Format("2006-01-02")
 	}
 
-	habits, err := h.store.List(r.Context(), userID)
+	habits, err := h.store.ListDueForDate(r.Context(), userID, datum)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return

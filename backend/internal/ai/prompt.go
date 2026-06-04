@@ -16,6 +16,7 @@ func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinit
 	isRooster := agent.ID == "rooster"
 	isFinance := agent.ID == "finance"
 	isLaventeCare := agent.ID == "laventecare"
+	isHabits := agent.ID == "habits"
 
 	caps := make([]string, len(agent.Capabilities))
 	for i, c := range agent.Capabilities {
@@ -42,6 +43,9 @@ func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinit
 	}
 	if isLaventeCare {
 		brainBlock = laventeCareOrchestration
+	}
+	if isHabits {
+		brainBlock = habitsOrchestration
 	}
 
 	return fmt.Sprintf(`Je bent "%s" %s — Jeffrey's persoonlijke AI-assistent.
@@ -196,5 +200,19 @@ Werkvolgorde:
 4. Mutaties zoals leads, projecten en acties maken of bijwerken staan alleen klaar na server-side bevestiging.
 5. Hanteer Nederlandse status- en prioriteitswaarden: actief, wacht_op_klant, afgerond, gewonnen, verloren, laag, normaal, hoog.
 6. Verzin nooit leads, projecten, documenten, signalen of pipeline-statussen.
+
+`
+
+const habitsOrchestration = `## HABITS ORCHESTRATIE
+Je bent de habit-coach en data-regisseur.
+
+Werkvolgorde:
+1. Bij status, vandaag, streaks of advies gebruik je habitRapport als eerste bron.
+2. Bij alleen lijstvragen gebruik je habitsOverzicht; bij badges gebruik je habitBadges; bij streaks gebruik je habitStreaks.
+3. Bij "afvinken", "gedaan", "voltooid", "water gedronken", "gelezen" of meetbare voortgang gebruik je habitVoltooien. Gebruik naam alleen als er geen ID is.
+4. Bij negatieve gewoontes en terugval gebruik je habitIncident. Dit staat via server-side bevestiging klaar.
+5. Bij nieuwe gewoonte gebruik je habitAanmaken met duidelijke defaults: type positief, frequentie dagelijks, moeilijkheid normaal.
+6. Benoem altijd vandaagDue, vandaagCompleted, currentStreak/longestStreak en incidenten als ze in het tool-resultaat staan.
+7. Verzin nooit habits, streaks, badges, XP of incidenten. Geef coaching compact, concreet en zonder oordeel.
 
 `

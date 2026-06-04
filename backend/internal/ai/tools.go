@@ -594,6 +594,88 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "habitAanmaken",
+			Description: "Maakt een nieuwe habit met verstandige defaults. Deze mutatie wordt direct uitgevoerd.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"naam": {"type": "string", "description": "Naam van de habit."},
+					"emoji": {"type": "string", "description": "Emoji voor de habit."},
+					"type": {"type": "string", "description": "positief of negatief."},
+					"beschrijving": {"type": "string"},
+					"frequentie": {"type": "string", "description": "dagelijks, weekdagen, weekenddagen, aangepast, x_per_week of x_per_maand."},
+					"aangepaste_dagen": {"type": "array", "items": {"type": "number"}, "description": "0=zondag t/m 6=zaterdag."},
+					"doel_aantal": {"type": "number"},
+					"rooster_filter": {"type": "string", "description": "alle, werkdagen, vrijeDagen, vroegeDienst of lateDienst."},
+					"is_kwantitatief": {"type": "boolean"},
+					"doel_waarde": {"type": "number"},
+					"eenheid": {"type": "string", "description": "Bijv. min, ml, km, pg of x."},
+					"doel_tijd": {"type": "string", "description": "HH:MM."},
+					"moeilijkheid": {"type": "string", "description": "makkelijk, normaal of moeilijk."},
+					"kleur": {"type": "string"}
+				},
+				"required": ["naam"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitVoltooien",
+			Description: "Vinkt een habit af of zet meetbare voortgang voor een datum. Naam mag gebruikt worden als ID ontbreekt.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Habit UUID."},
+					"habitId": {"type": "string", "description": "Habit UUID alternatief."},
+					"naam": {"type": "string", "description": "Habitnaam als ID onbekend is."},
+					"datum": {"type": "string", "description": "YYYY-MM-DD, standaard vandaag."},
+					"waarde": {"type": "number", "description": "Meetwaarde voor kwantitatieve habits."},
+					"notitie": {"type": "string"}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitIncident",
+			Description: "Logt een incident of terugval bij een negatieve habit. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Habit UUID."},
+					"habitId": {"type": "string", "description": "Habit UUID alternatief."},
+					"naam": {"type": "string", "description": "Habitnaam als ID onbekend is."},
+					"trigger": {"type": "string"},
+					"notitie": {"type": "string"}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "habitNotitie",
+			Description: "Voegt een notitie toe aan de habit-log van vandaag of een opgegeven datum.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Habit UUID."},
+					"habitId": {"type": "string", "description": "Habit UUID alternatief."},
+					"naam": {"type": "string", "description": "Habitnaam als ID onbekend is."},
+					"datum": {"type": "string", "description": "YYYY-MM-DD, standaard vandaag."},
+					"notitie": {"type": "string"}
+				},
+				"required": ["notitie"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "habitsOverzicht",
 			Description: "Haalt een overzicht van actieve habits op.",
 			Parameters: json.RawMessage(`{

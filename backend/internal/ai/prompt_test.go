@@ -110,3 +110,24 @@ func TestBuildSystemPromptAddsLaventeCareGuardrails(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSystemPromptAddsHabitsGuardrails(t *testing.T) {
+	agent := GetAgent("habits")
+	if agent == nil {
+		t.Fatal("habits agent not found")
+	}
+
+	prompt := BuildSystemPrompt(agent, map[string]any{}, nil)
+	for _, needle := range []string{
+		"HABITS ORCHESTRATIE",
+		"habitRapport",
+		"habitVoltooien",
+		"habitIncident",
+		"vandaagDue",
+		"Verzin nooit habits",
+	} {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("prompt missing %q", needle)
+		}
+	}
+}
