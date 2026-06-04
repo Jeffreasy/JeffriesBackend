@@ -350,6 +350,9 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	fmt.Fprintf(&b, "Periode: %s\n", period.Label)
 	if !period.AllTime {
 		fmt.Fprintf(&b, "• Range: %s t/m %s\n", period.DatumVan, period.DatumTot)
+		if lastDate != "" && lastDate < period.DatumTot {
+			fmt.Fprintf(&b, "• Data beschikbaar t/m: %s\n", lastDate)
+		}
 	}
 	fmt.Fprintf(&b, "• Inkomsten: %s\n", formatEuroTelegram(periodIncome))
 	fmt.Fprintf(&b, "• Uitgaven: %s\n", formatEuroTelegram(periodExpenses))
@@ -453,11 +456,13 @@ func telegramFinanceMonthPeriodByParts(yearValue, monthValue string, isDefault b
 
 func telegramFinanceMonthPeriod(date time.Time, isDefault bool) telegramFinancePeriod {
 	loc := amsterdamLocation()
-	start := time.Date(date.In(loc).Year(), date.In(loc).Month(), 1, 0, 0, 0, 0, loc)
+	localDate := date.In(loc)
+	start := time.Date(localDate.Year(), localDate.Month(), 1, 0, 0, 0, 0, loc)
 	end := start.AddDate(0, 1, -1)
 	label := dutchFinanceMonthName(start.Month()) + " " + strconv.Itoa(start.Year())
 	if isDefault {
-		label += " (standaard maand)"
+		end = localDate
+		label += " tot nu (standaard)"
 	}
 	return telegramFinancePeriod{
 		Label:    label,
@@ -1062,7 +1067,7 @@ func expandTelegramCommand(text string) (expanded string, agentHint string, ok b
 	case "/rooster":
 		return "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag.", "rooster", true
 	case "/finance":
-		return "Geef een compacte finance status voor de huidige maand. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maandanalyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand. Noem all-time alleen als de gebruiker daarom vraagt.", "finance", true
+		return "Geef een compacte finance status voor de huidige maand tot nu. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maand-tot-nu analyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand tot vandaag. Noem all-time alleen als de gebruiker daarom vraagt.", "finance", true
 	case "/laventecare", "/lc":
 		return "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen en of de documentbasis is geinitialiseerd. Gebruik geen verzonnen CRM-data.", "laventecare", true
 	case "/email", "/inbox":

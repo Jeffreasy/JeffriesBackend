@@ -113,10 +113,10 @@ func TestParseTelegramFinancePeriodDefaultsToCurrentMonth(t *testing.T) {
 	now := time.Date(2026, time.June, 5, 12, 0, 0, 0, time.UTC)
 	period := parseTelegramFinancePeriod("/finance", now)
 
-	if period.Label != "juni 2026 (standaard maand)" {
+	if period.Label != "juni 2026 tot nu (standaard)" {
 		t.Fatalf("Label = %q", period.Label)
 	}
-	if period.DatumVan != "2026-06-01" || period.DatumTot != "2026-06-30" {
+	if period.DatumVan != "2026-06-01" || period.DatumTot != "2026-06-05" {
 		t.Fatalf("range = %s..%s", period.DatumVan, period.DatumTot)
 	}
 	if period.AllTime {

@@ -485,12 +485,22 @@ func financePeriodLabel(jaar, maand string) string {
 	jaar = strings.TrimSpace(jaar)
 	maand = strings.TrimSpace(maand)
 	if maand != "" {
+		if normalized, err := normalizeFinanceMonth(jaar, maand); err == nil {
+			return normalized
+		}
 		return maand
 	}
 	if jaar != "" {
 		return jaar
 	}
 	return "alles"
+}
+
+func currentFinanceMonthToDate(now time.Time) (jaar, maand, from, to string) {
+	loc := amsterdamLocation()
+	local := now.In(loc)
+	start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
+	return strconv.Itoa(local.Year()), strconv.Itoa(int(local.Month())), start.Format("2006-01-02"), local.Format("2006-01-02")
 }
 
 func summarizeFinanceTransactions(txs []model.Transaction) map[string]any {
@@ -1323,24 +1333,24 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	// ── FINANCE ──────────────────────────────────────────────────────
 	case "saldoOpvragen":
 		stats, err := e.transactionStore.GetStats(ctx, e.userID)
-		now := time.Now().In(amsterdamLocation())
-		jaar := strconv.Itoa(now.Year())
-		maand := strconv.Itoa(int(now.Month()))
-		filter := store.TransactionFilter{ExcludeIntern: true, Limit: 20000}
-		periodErr := applyFinancePeriodFilter(&filter, jaar, maand)
+		jaar, maand, from, to := currentFinanceMonthToDate(time.Now())
+		filter := store.TransactionFilter{ExcludeIntern: true, DatumVan: from, DatumTot: to, Limit: 20000}
 		var currentMonthTxs []model.Transaction
 		var currentMonthTotal int
+		periodErr := err
 		if periodErr == nil {
 			currentMonthTxs, currentMonthTotal, periodErr = e.transactionStore.ListFiltered(ctx, e.userID, filter)
 		}
 		return e.jsonResponse(map[string]any{
 			"scope":               "finance dashboard",
 			"stats":               stats,
-			"defaultPeriode":      financePeriodLabel(jaar, maand),
+			"defaultPeriode":      financePeriodLabel(jaar, maand) + " tot nu",
+			"defaultPeriodeVan":   from,
+			"defaultPeriodeTot":   to,
 			"defaultPeriodeTotal": currentMonthTotal,
 			"defaultSummary":      summarizeFinanceTransactions(currentMonthTxs),
-			"instruction":         "Gebruik stats alleen voor huidig totaalsaldo/dataset. Voor analyse zonder expliciete periode gebruik je defaultSummary van de huidige maand. Lifetime/all-time alleen noemen als de gebruiker daarom vraagt.",
-		}, err)
+			"instruction":         "Gebruik stats alleen voor huidig totaalsaldo/dataset. Voor analyse zonder expliciete periode gebruik je defaultSummary van de huidige maand tot nu. Lifetime/all-time alleen noemen als de gebruiker daarom vraagt.",
+		}, periodErr)
 
 	case "salarisOpvragen":
 		salaries, err := e.salaryStore.List(ctx, e.userID)
@@ -1396,21 +1406,24 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		maand := strings.TrimSpace(args.Maand)
 		defaulted := false
 		if jaar == "" && maand == "" {
-			now := time.Now().In(amsterdamLocation())
-			jaar = strconv.Itoa(now.Year())
-			maand = strconv.Itoa(int(now.Month()))
+			jaar, maand, filter.DatumVan, filter.DatumTot = currentFinanceMonthToDate(time.Now())
 			defaulted = true
-		}
-		if err := applyFinancePeriodFilter(&filter, jaar, maand); err != nil {
+		} else if err := applyFinancePeriodFilter(&filter, jaar, maand); err != nil {
 			return e.jsonResponse(nil, err)
 		}
 		txs, total, err := e.transactionStore.ListFiltered(ctx, e.userID, filter)
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		periodLabel := financePeriodLabel(jaar, maand)
+		if defaulted {
+			periodLabel += " tot nu"
+		}
 		return e.jsonResponse(map[string]any{
 			"scope":            "uitgavenoverzicht",
-			"periode":          financePeriodLabel(jaar, maand),
+			"periode":          periodLabel,
+			"periodeVan":       filter.DatumVan,
+			"periodeTot":       filter.DatumTot,
 			"defaulted":        defaulted,
 			"rekening":         strings.TrimSpace(args.Iban),
 			"totalMatches":     total,
@@ -1418,7 +1431,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"summary":          summarizeFinanceTransactions(txs),
 			"topCategorieen":   topFinanceBreakdowns(txs, "categorie", clampToolLimit(args.Limit, 5, 10)),
 			"topTegenpartijen": topFinanceBreakdowns(txs, "merchant", clampToolLimit(args.Limit, 5, 10)),
-			"instruction":      "Dit overzicht gebruikt uitgaande externe transacties binnen de periode. Zonder expliciete periode is dit de huidige maand, niet alle jaren. Noem totalMatches als sampled lager is dan totalMatches.",
+			"instruction":      "Dit overzicht gebruikt uitgaande externe transacties binnen de periode. Zonder expliciete periode is dit de huidige maand tot nu, niet alle jaren en niet de volledige toekomstige maand. Noem totalMatches als sampled lager is dan totalMatches.",
 		}, nil)
 
 	case "maandVergelijken":
