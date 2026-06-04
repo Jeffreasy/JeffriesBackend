@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,9 +64,153 @@ func (e *HomeBotExecutor) parseArgs(argsJSON string, v any) error {
 		argsJSON = "{}"
 	}
 	if err := json.Unmarshal([]byte(argsJSON), v); err != nil {
+		if lenientErr := unmarshalLenientToolArgs(argsJSON, v); lenientErr == nil {
+			return nil
+		}
 		return fmt.Errorf("invalid arguments: %v", err)
 	}
 	return nil
+}
+
+func unmarshalLenientToolArgs(argsJSON string, v any) error {
+	decoder := json.NewDecoder(strings.NewReader(argsJSON))
+	decoder.UseNumber()
+	var raw map[string]any
+	if err := decoder.Decode(&raw); err != nil {
+		return err
+	}
+
+	target := reflect.ValueOf(v)
+	if target.Kind() != reflect.Ptr || target.IsNil() {
+		return fmt.Errorf("target must be pointer")
+	}
+	target = target.Elem()
+	if target.Kind() != reflect.Struct {
+		return fmt.Errorf("target must point to struct")
+	}
+
+	normalized := make(map[string]any, len(raw))
+	for i := 0; i < target.NumField(); i++ {
+		field := target.Type().Field(i)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			name = field.Name
+		}
+		value, ok := raw[name]
+		if !ok {
+			continue
+		}
+		normalized[name] = coerceToolArgValue(value, field.Type)
+	}
+
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
+}
+
+func coerceToolArgValue(value any, target reflect.Type) any {
+	if value == nil {
+		return nil
+	}
+	if target.Kind() == reflect.Ptr {
+		return coerceToolArgValue(value, target.Elem())
+	}
+
+	switch target.Kind() {
+	case reflect.String:
+		return stringifyToolArg(value)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return intifyToolArg(value)
+	case reflect.Float32, reflect.Float64:
+		return floatifyToolArg(value)
+	case reflect.Bool:
+		return boolifyToolArg(value)
+	case reflect.Slice:
+		items, ok := value.([]any)
+		if !ok {
+			return value
+		}
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, coerceToolArgValue(item, target.Elem()))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func stringifyToolArg(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func intifyToolArg(value any) any {
+	switch v := value.(type) {
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err == nil {
+			return int(parsed)
+		}
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return parsed
+		}
+		parsedFloat, err := v.Float64()
+		if err == nil {
+			return int(parsedFloat)
+		}
+	case float64:
+		return int(v)
+	}
+	return value
+}
+
+func floatifyToolArg(value any) any {
+	switch v := value.(type) {
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err == nil {
+			return parsed
+		}
+	case json.Number:
+		parsed, err := v.Float64()
+		if err == nil {
+			return parsed
+		}
+	}
+	return value
+}
+
+func boolifyToolArg(value any) any {
+	switch v := value.(type) {
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err == nil {
+			return parsed
+		}
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return parsed != 0
+		}
+	case float64:
+		return v != 0
+	}
+	return value
 }
 
 func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
@@ -267,7 +413,11 @@ func clampToolLimit(value, fallback, max int) int {
 
 func applyFinancePeriodFilter(filter *store.TransactionFilter, jaar, maand string) error {
 	if maand != "" {
-		from, to, err := financeMonthRange(maand)
+		normalizedMonth, err := normalizeFinanceMonth(jaar, maand)
+		if err != nil {
+			return err
+		}
+		from, to, err := financeMonthRange(normalizedMonth)
 		if err != nil {
 			return err
 		}
@@ -289,6 +439,28 @@ func applyFinancePeriodFilter(filter *store.TransactionFilter, jaar, maand strin
 	return nil
 }
 
+func normalizeFinanceMonth(jaar, maand string) (string, error) {
+	jaar = strings.TrimSpace(jaar)
+	maand = strings.TrimSpace(maand)
+	if maand == "" {
+		return "", fmt.Errorf("maand verplicht")
+	}
+	if len(maand) == 7 && strings.Contains(maand, "-") {
+		return maand, nil
+	}
+	monthNumber, err := strconv.Atoi(maand)
+	if err != nil || monthNumber < 1 || monthNumber > 12 {
+		return "", fmt.Errorf("ongeldige maand: %s", maand)
+	}
+	if jaar == "" {
+		jaar = time.Now().In(amsterdamLocation()).Format("2006")
+	}
+	if len(jaar) != 4 {
+		return "", fmt.Errorf("ongeldig jaar: %s", jaar)
+	}
+	return fmt.Sprintf("%s-%02d", jaar, monthNumber), nil
+}
+
 func financeMonthRange(month string) (string, string, error) {
 	if month == "" {
 		return "", "", fmt.Errorf("maand verplicht in YYYY-MM formaat")
@@ -299,6 +471,14 @@ func financeMonthRange(month string) (string, string, error) {
 	}
 	end := start.AddDate(0, 1, -1)
 	return start.Format("2006-01-02"), end.Format("2006-01-02"), nil
+}
+
+func amsterdamLocation() *time.Location {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 func financePeriodLabel(jaar, maand string) string {

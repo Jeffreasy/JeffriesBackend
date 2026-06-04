@@ -293,7 +293,7 @@ var AllTools = []ToolDefinition{
 					},
 					"maand": {
 						"type": "string",
-						"description": "Maand in YYYY-MM formaat, bijvoorbeeld 2026-06."
+						"description": "Maand in YYYY-MM formaat, of maandnummer als jaar apart is ingevuld, bijvoorbeeld 2026-06 of 6."
 					},
 					"iban": {
 						"type": "string",
