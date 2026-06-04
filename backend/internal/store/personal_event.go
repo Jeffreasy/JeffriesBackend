@@ -62,6 +62,26 @@ func (s *PersonalEventStore) ListByDate(ctx context.Context, userID, date string
 	return events, nil
 }
 
+func (s *PersonalEventStore) ListRange(ctx context.Context, userID, startIso, eindIso string) ([]model.PersonalEvent, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT `+peColumns+` FROM personal_events
+		  WHERE user_id = $1
+		    AND start_datum <= $3::date
+		    AND eind_datum >= $2::date
+		  ORDER BY start_datum, COALESCE(start_tijd, '00:00'), titel`,
+		userID, startIso, eindIso)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events, err := pgx.CollectRows(rows, scanPE)
+	if err != nil {
+		return nil, err
+	}
+	normalizePersonalEventStatuses(events)
+	return events, nil
+}
+
 func (s *PersonalEventStore) ListUpcoming(ctx context.Context, userID string, limit int) ([]model.PersonalEvent, error) {
 	events, err := s.List(ctx, userID)
 	if err != nil {

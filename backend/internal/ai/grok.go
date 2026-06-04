@@ -8,27 +8,43 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sony/gobreaker"
 )
 
 const (
-	GrokAPIURL    = "https://api.x.ai/v1/chat/completions"
-	GrokModel     = "grok-4-1-fast"
-	MaxToolRounds = 5
-	MaxTokens     = 2500
-	Temperature   = 0.3
+	GrokChatAPIURL         = "https://api.x.ai/v1/chat/completions"
+	GrokResponsesAPIURL    = "https://api.x.ai/v1/responses"
+	DefaultGrokModel       = "grok-4.3"
+	DefaultReasoningEffort = "low"
+	MaxToolRounds          = 5
+	MaxTokens              = 2500
+	Temperature            = 0.3
 )
 
 // GrokClient handles communication with the xAI Grok API.
 type GrokClient struct {
-	apiKey     string
-	httpClient *http.Client
-	cb         *gobreaker.CircuitBreaker
+	apiKey          string
+	model           string
+	reasoningEffort string
+	httpClient      *http.Client
+	cb              *gobreaker.CircuitBreaker
 }
 
 func NewGrokClient(apiKey string) *GrokClient {
+	return NewGrokClientWithOptions(apiKey, DefaultGrokModel, DefaultReasoningEffort)
+}
+
+func NewGrokClientWithOptions(apiKey, model, reasoningEffort string) *GrokClient {
+	if model == "" {
+		model = DefaultGrokModel
+	}
+	if reasoningEffort == "" {
+		reasoningEffort = DefaultReasoningEffort
+	}
+
 	// Configure Circuit Breaker: 3 consecutive failures -> open state for 30s
 	st := gobreaker.Settings{
 		Name:        "GrokAPI",
@@ -44,9 +60,11 @@ func NewGrokClient(apiKey string) *GrokClient {
 	}
 
 	return &GrokClient{
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
-		cb:         gobreaker.NewCircuitBreaker(st),
+		apiKey:          apiKey,
+		model:           model,
+		reasoningEffort: reasoningEffort,
+		httpClient:      &http.Client{Timeout: 60 * time.Second},
+		cb:              gobreaker.NewCircuitBreaker(st),
 	}
 }
 
@@ -85,13 +103,31 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+type ResponsesAPIResponse struct {
+	OutputText string `json:"output_text"`
+	Output     []struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+	Citations []string `json:"citations"`
+	Error     *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
+	Usage Usage `json:"usage"`
+}
+
 // ChatResult is the final result of a chat interaction.
 type ChatResult struct {
-	OK       bool    `json:"ok"`
-	Agent    *Agent  `json:"agent,omitempty"`
-	Antwoord string  `json:"antwoord,omitempty"`
-	Error    string  `json:"error,omitempty"`
-	Tokens   *Usage  `json:"tokens,omitempty"`
+	OK       bool   `json:"ok"`
+	Agent    *Agent `json:"agent,omitempty"`
+	Antwoord string `json:"antwoord,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Tokens   *Usage `json:"tokens,omitempty"`
 }
 
 // Chat runs a full chat interaction with tool calling.
@@ -117,11 +153,14 @@ func (c *GrokClient) Chat(
 
 	for round := 0; round < MaxToolRounds; round++ {
 		reqBody := map[string]any{
-			"model":       GrokModel,
+			"model":       c.model,
 			"messages":    messages,
 			"stream":      false,
 			"temperature": Temperature,
 			"max_tokens":  MaxTokens,
+		}
+		if c.reasoningEffort != "" {
+			reqBody["reasoning_effort"] = c.reasoningEffort
 		}
 		if len(tools) > 0 {
 			reqBody["tools"] = tools
@@ -132,7 +171,7 @@ func (c *GrokClient) Chat(
 			return ChatResult{Error: fmt.Sprintf("marshal error: %v", err)}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, GrokAPIURL, bytes.NewReader(data))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, GrokChatAPIURL, bytes.NewReader(data))
 		if err != nil {
 			return ChatResult{Error: fmt.Sprintf("request error: %v", err)}
 		}
@@ -237,6 +276,117 @@ func (c *GrokClient) Chat(
 	}
 }
 
+// SearchWeb answers current-events questions through xAI Responses API web_search.
+func (c *GrokClient) SearchWeb(ctx context.Context, userMessage string) ChatResult {
+	start := time.Now()
+	input := fmt.Sprintf(`Beantwoord Jeffrey in het Nederlands voor Telegram plain text.
+Gebruik web_search voor actuele informatie.
+Vraag: %s
+
+Regels:
+- Focus op de laatste 24 uur als de vraag dat vraagt.
+- Geef een compacte top 5 met bronnaam of domein per punt.
+- Noem expliciet als iets onzeker is of als bronnen verschillende details geven.
+- Geen markdown-opmaak, geen codeblokken.`, userMessage)
+
+	reqBody := map[string]any{
+		"model": c.model,
+		"input": []map[string]string{
+			{
+				"role":    "user",
+				"content": input,
+			},
+		},
+		"tools": []map[string]any{
+			{"type": "web_search"},
+		},
+		"max_output_tokens": 1400,
+	}
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return ChatResult{Error: fmt.Sprintf("marshal error: %v", err)}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GrokResponsesAPIURL, bytes.NewReader(data))
+	if err != nil {
+		return ChatResult{Error: fmt.Sprintf("request error: %v", err)}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	respInterface, cbErr := c.cb.Execute(func() (interface{}, error) {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 500 {
+			defer resp.Body.Close()
+			return nil, fmt.Errorf("server error: %d", resp.StatusCode)
+		}
+		return resp, nil
+	})
+
+	if cbErr != nil {
+		if cbErr == gobreaker.ErrOpenState {
+			return ChatResult{Error: "De AI server is tijdelijk onbereikbaar wegens overbelasting. Probeer het later opnieuw."}
+		}
+		return ChatResult{Error: fmt.Sprintf("API error: %v", cbErr)}
+	}
+
+	resp := respInterface.(*http.Response)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ChatResult{Error: fmt.Sprintf("Grok search %d: %s", resp.StatusCode, truncate(string(body), 300))}
+	}
+
+	var grokResp ResponsesAPIResponse
+	if err := json.Unmarshal(body, &grokResp); err != nil {
+		return ChatResult{Error: fmt.Sprintf("parse error: %v", err)}
+	}
+	if grokResp.Error != nil {
+		return ChatResult{Error: grokResp.Error.Message}
+	}
+
+	answer := strings.TrimSpace(grokResp.OutputText)
+	if answer == "" {
+		answer = extractResponsesText(grokResp)
+	}
+	if answer == "" {
+		return ChatResult{Error: "Geen web-search antwoord van Grok"}
+	}
+	if len(grokResp.Citations) > 0 {
+		answer += "\n\nBronnen: " + strings.Join(grokResp.Citations, ", ")
+	}
+
+	slog.Info("[Grok Web Search] OK",
+		"duration", time.Since(start).Round(time.Millisecond),
+		"tokens", grokResp.Usage.TotalTokens,
+	)
+	return ChatResult{
+		OK:       true,
+		Antwoord: answer,
+		Tokens:   &grokResp.Usage,
+	}
+}
+
+func extractResponsesText(resp ResponsesAPIResponse) string {
+	var parts []string
+	for _, output := range resp.Output {
+		if output.Type != "message" && output.Type != "" {
+			continue
+		}
+		for _, content := range output.Content {
+			if content.Text != "" {
+				parts = append(parts, content.Text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
 // ToolExecutor is called by the chat loop to execute tool calls.
 type ToolExecutor interface {
 	Execute(ctx context.Context, toolName string, argsJSON string) string
@@ -244,8 +394,8 @@ type ToolExecutor interface {
 
 // ToolDefinition is the OpenAI-compatible function definition for Grok.
 type ToolDefinition struct {
-	Type     string         `json:"type"`
-	Function ToolFunction   `json:"function"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
 }
 
 type ToolFunction struct {

@@ -40,8 +40,10 @@ type Config struct {
 	BridgeStatusPollEnabled    bool
 
 	// AI APIs
-	GrokAPIKey string
-	GroqAPIKey string
+	GrokAPIKey          string
+	GrokModel           string
+	GrokReasoningEffort string
+	GroqAPIKey          string
 
 	// Cron Feature Flags
 	GmailEnabled          bool
@@ -98,9 +100,11 @@ func Load() *Config {
 		BridgeAPIKey:               envOr("BRIDGE_API_KEY", envOr("APP_SECRET_KEY", "change-me")),
 		BridgeStatusPollEnabled:    envBoolOr("BRIDGE_STATUS_POLL_ENABLED", true),
 
-		GrokAPIKey:   envOr("GROK_API_KEY", ""),
-		GroqAPIKey:   envOr("GROQ_API_KEY", ""),
-		WizDeviceIPs: envOr("WIZ_DEVICE_IPS", ""),
+		GrokAPIKey:          envOr("GROK_API_KEY", ""),
+		GrokModel:           envOr("GROK_MODEL", "grok-4.3"),
+		GrokReasoningEffort: envOr("GROK_REASONING_EFFORT", "low"),
+		GroqAPIKey:          envOr("GROQ_API_KEY", ""),
+		WizDeviceIPs:        envOr("WIZ_DEVICE_IPS", ""),
 
 		GmailEnabled:          envBoolOr("GMAIL_SYNC_ENABLED", false),
 		GoogleCalendarEnabled: envBoolOr("GOOGLE_CALENDAR_SYNC_ENABLED", false),

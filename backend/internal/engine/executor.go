@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
@@ -60,23 +61,94 @@ func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
 	return string(b)
 }
 
+func parseToolDateRange(argsJSON string, fallbackToday bool) (startIso, eindIso string, hasRange bool, err error) {
+	var args struct {
+		StartIso string `json:"startIso"`
+		EindIso  string `json:"eindIso"`
+	}
+	if strings.TrimSpace(argsJSON) == "" {
+		argsJSON = "{}"
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", "", false, fmt.Errorf("invalid arguments: %v", err)
+	}
+
+	if args.StartIso == "" && args.EindIso == "" {
+		if !fallbackToday {
+			return "", "", false, nil
+		}
+		today := todayAmsterdamISO()
+		return today, today, true, nil
+	}
+	if args.StartIso == "" {
+		args.StartIso = args.EindIso
+	}
+	if args.EindIso == "" {
+		args.EindIso = args.StartIso
+	}
+
+	start, err := time.Parse("2006-01-02", args.StartIso)
+	if err != nil {
+		return "", "", false, fmt.Errorf("ongeldige startIso: %s", args.StartIso)
+	}
+	end, err := time.Parse("2006-01-02", args.EindIso)
+	if err != nil {
+		return "", "", false, fmt.Errorf("ongeldige eindIso: %s", args.EindIso)
+	}
+	if end.Before(start) {
+		args.StartIso, args.EindIso = args.EindIso, args.StartIso
+	}
+	return args.StartIso, args.EindIso, true, nil
+}
+
+func todayAmsterdamISO() string {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	return time.Now().In(loc).Format("2006-01-02")
+}
+
+func visibleSchedules(events []model.Schedule) []model.Schedule {
+	visible := make([]model.Schedule, 0, len(events))
+	for _, event := range events {
+		if event.Status == "VERWIJDERD" {
+			continue
+		}
+		visible = append(visible, event)
+	}
+	return visible
+}
+
+func visiblePersonalEvents(events []model.PersonalEvent) []model.PersonalEvent {
+	visible := make([]model.PersonalEvent, 0, len(events))
+	for _, event := range events {
+		switch event.Status {
+		case store.PersonalEventStatusDeleted, store.PersonalEventStatusPendingDelete:
+			continue
+		}
+		visible = append(visible, event)
+	}
+	return visible
+}
+
 func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
 	events, err := e.scheduleStore.List(ctx, e.userID)
 	if err != nil {
 		return e.jsonResponse(nil, err)
 	}
-	
+
 	type WeekStats struct {
 		Weeknr      string  `json:"weeknr"`
 		ActualHours float64 `json:"actualHours"`
 		Delta       float64 `json:"delta"`
 	}
-	
+
 	type MonthData struct {
 		Hours  float64
 		Shifts int
 	}
-	
+
 	weekMap := make(map[string]float64)
 	monthMap := make(map[string]*MonthData)
 
@@ -107,7 +179,7 @@ func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
 			Delta:       delta,
 		})
 	}
-	
+
 	var monthly []map[string]interface{}
 	for m, data := range monthMap {
 		monthly = append(monthly, map[string]interface{}{
@@ -116,7 +188,7 @@ func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
 			"shifts": data.Shifts,
 		})
 	}
-	
+
 	res := map[string]interface{}{
 		"contractUren": 16,
 		"totalDelta":   totalDelta,
@@ -160,15 +232,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	// ── ROOSTER ──────────────────────────────────────────────────────
 	case "dienstenOpvragen":
-		var args struct {
-			StartIso string `json:"startIso"`
-			EindIso  string `json:"eindIso"`
-		}
 		var events []model.Schedule
 		var err error
-		
-		if errParse := e.parseArgs(argsJSON, &args); errParse == nil && args.StartIso != "" && args.EindIso != "" {
-			events, err = e.scheduleStore.ListRange(ctx, e.userID, args.StartIso, args.EindIso)
+
+		startIso, eindIso, hasRange, errParse := parseToolDateRange(argsJSON, false)
+		if errParse != nil {
+			return e.jsonResponse(nil, errParse)
+		}
+		if hasRange {
+			events, err = e.scheduleStore.ListRange(ctx, e.userID, startIso, eindIso)
 		} else {
 			// Fallback if no date range is provided
 			events, err = e.scheduleStore.ListUpcoming(ctx, e.userID, 15)
@@ -178,11 +250,10 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 
+		events = visibleSchedules(events)
 		var total float64
 		for _, ev := range events {
-			if ev.Status != "VERWIJDERD" {
-				total += ev.Duur
-			}
+			total += ev.Duur
 		}
 
 		return e.jsonResponse(map[string]any{
@@ -267,8 +338,54 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		return string(b)
 
 	// ── AGENDA ───────────────────────────────────────────────────────
+	case "planningOpvragen":
+		startIso, eindIso, _, errParse := parseToolDateRange(argsJSON, true)
+		if errParse != nil {
+			return e.jsonResponse(nil, errParse)
+		}
+
+		diensten, dienstErr := e.scheduleStore.ListRange(ctx, e.userID, startIso, eindIso)
+		if dienstErr != nil {
+			return e.jsonResponse(nil, dienstErr)
+		}
+		afspraken, afspraakErr := e.personalEvStore.ListRange(ctx, e.userID, startIso, eindIso)
+		if afspraakErr != nil {
+			return e.jsonResponse(nil, afspraakErr)
+		}
+
+		diensten = visibleSchedules(diensten)
+		afspraken = visiblePersonalEvents(afspraken)
+
+		var totaalUur float64
+		for _, dienst := range diensten {
+			totaalUur += dienst.Duur
+		}
+
+		return e.jsonResponse(map[string]any{
+			"periode": map[string]string{
+				"startIso": startIso,
+				"eindIso":  eindIso,
+			},
+			"diensten":        diensten,
+			"afspraken":       afspraken,
+			"aantalDiensten":  len(diensten),
+			"aantalAfspraken": len(afspraken),
+			"totaalUur":       totaalUur,
+		}, nil)
+
 	case "afsprakenOpvragen":
-		events, err := e.personalEvStore.ListUpcoming(ctx, e.userID, 10) // MVP limit
+		startIso, eindIso, hasRange, errParse := parseToolDateRange(argsJSON, false)
+		if errParse != nil {
+			return e.jsonResponse(nil, errParse)
+		}
+		var events []model.PersonalEvent
+		var err error
+		if hasRange {
+			events, err = e.personalEvStore.ListRange(ctx, e.userID, startIso, eindIso)
+		} else {
+			events, err = e.personalEvStore.ListUpcoming(ctx, e.userID, 10)
+		}
+		events = visiblePersonalEvents(events)
 		return e.jsonResponse(events, err)
 
 	// ── HABITS ───────────────────────────────────────────────────────

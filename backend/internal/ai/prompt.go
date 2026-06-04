@@ -57,9 +57,10 @@ wijzigen.
 ## TOOL GEBRUIK (VERPLICHT)
 - WANNEER DE GEBRUIKER VRAAGT OM EEN EMAIL TE "LEZEN", "OPENEN", "VOORLEZEN" OF "BEKIJKEN":
   → Je MOET de leesEmail tool aanroepen met het gmailId uit de Live Data hierboven.
+- Als de gebruiker vraagt wat er vandaag/morgen/deze week "op de planning" staat → gebruik planningOpvragen. Dit combineert werkdiensten en persoonlijke afspraken.
 - Als de gebruiker diensten/rooster vraagt → gebruik dienstenOpvragen en VERMELD ALTIJD het 'totaalUur' in je antwoord.
 - Als de gebruiker vraagt over zijn 16-uren contract, plus/min uren, of urensaldo → gebruik contractAnalyseOpvragen
-- Als de gebruiker agenda/afspraken/planning vraagt → gebruik afsprakenOpvragen
+- Als de gebruiker alleen agenda/afspraken vraagt → gebruik afsprakenOpvragen
 - Als de gebruiker over LaventeCare vraagt → gebruik laventecareCockpit of laventecareKennisZoeken
 - Als de gebruiker salaris vraagt → gebruik salarisOpvragen
 

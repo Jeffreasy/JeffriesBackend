@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/telegram"
@@ -127,6 +130,8 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 			"telegramMode":             "long_polling",
 			"telegramWebApp":           configuredValue(h.cfg.TelegramWebAppURL),
 			"grok":                     configuredValue(h.cfg.GrokAPIKey),
+			"grokModel":                h.cfg.GrokModel,
+			"grokReasoningEffort":      h.cfg.GrokReasoningEffort,
 			"groq":                     configuredValue(h.cfg.GroqAPIKey),
 			"googleOAuth":              googleOAuthConfigured(h.cfg),
 			"googleCalendar":           googleOAuthConfigured(h.cfg),
@@ -212,6 +217,9 @@ func (h *SettingsHandler) TelegramStatus(w http.ResponseWriter, r *http.Request)
 		"webAppUrl":                h.cfg.TelegramWebAppURL,
 		"backgroundEngineEnabled":  h.cfg.StartBackgroundEngine,
 		"telegramPollerConfigured": h.cfg.StartBackgroundEngine && h.cfg.TelegramBotEnabled && configuredValue(h.cfg.TelegramBotToken),
+		"grokConfigured":           configuredValue(h.cfg.GrokAPIKey),
+		"grokModel":                h.cfg.GrokModel,
+		"grokReasoningEffort":      h.cfg.GrokReasoningEffort,
 		"voiceConfigured":          configuredValue(h.cfg.GroqAPIKey),
 	}
 
@@ -266,6 +274,188 @@ func (h *SettingsHandler) TelegramStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	JSON(w, http.StatusOK, resp)
+}
+
+type aiDiagnosticCheck struct {
+	OK        bool    `json:"ok"`
+	Status    string  `json:"status"`
+	Label     string  `json:"label"`
+	Detail    string  `json:"detail,omitempty"`
+	LatencyMS int64   `json:"latencyMs,omitempty"`
+	Error     *string `json:"error,omitempty"`
+}
+
+// AIDiagnostics returns AI runtime checks and agent/tool capabilities.
+// @Summary Get AI diagnostics
+// @Description Returns Grok/Groq connectivity status and HomeBot tool capabilities without exposing secrets.
+// @Tags Settings
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /settings/ai/diagnostics [get]
+func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
+	defer cancel()
+
+	checks := map[string]aiDiagnosticCheck{
+		"grokChat":      h.checkGrokChat(ctx),
+		"grokWebSearch": h.checkGrokWebSearch(ctx),
+		"groqVoice":     h.checkGroqVoice(ctx),
+	}
+
+	ok := true
+	for _, check := range checks {
+		if check.Status == "error" {
+			ok = false
+			break
+		}
+	}
+
+	resp := map[string]any{
+		"ok":          ok,
+		"generatedAt": time.Now().UTC().Format(time.RFC3339),
+		"config": map[string]any{
+			"grokConfigured":      configuredValue(h.cfg.GrokAPIKey),
+			"grokModel":           h.cfg.GrokModel,
+			"grokReasoningEffort": h.cfg.GrokReasoningEffort,
+			"groqConfigured":      configuredValue(h.cfg.GroqAPIKey),
+			"telegramConfigured":  h.cfg.TelegramBotEnabled && h.telegram != nil,
+		},
+		"checks":       checks,
+		"capabilities": aiCapabilitySummary(),
+		"agents":       aiAgentCapabilities(),
+	}
+
+	JSON(w, http.StatusOK, resp)
+}
+
+func (h *SettingsHandler) checkGrokChat(ctx context.Context) aiDiagnosticCheck {
+	if !configuredValue(h.cfg.GrokAPIKey) {
+		return skippedCheck("Grok chat", "GROK_API_KEY ontbreekt")
+	}
+
+	start := time.Now()
+	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
+	result := client.Chat(ctx, "Je bent een statuscheck. Antwoord exact met: OK", "statuscheck", nil, nil, nil)
+	latency := time.Since(start).Milliseconds()
+	if !result.OK {
+		return errorCheck("Grok chat", result.Error, latency)
+	}
+	if !strings.Contains(strings.ToLower(result.Antwoord), "ok") {
+		return warningCheck("Grok chat", "Antwoord ontvangen, maar niet de verwachte statuscheck tekst", latency)
+	}
+	return successCheck("Grok chat", "Chat completions werkt", latency)
+}
+
+func (h *SettingsHandler) checkGrokWebSearch(ctx context.Context) aiDiagnosticCheck {
+	if !configuredValue(h.cfg.GrokAPIKey) {
+		return skippedCheck("Grok web-search", "GROK_API_KEY ontbreekt")
+	}
+
+	start := time.Now()
+	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
+	result := client.SearchWeb(ctx, "Statuscheck: controleer via web_search of actueel zoeken beschikbaar is. Antwoord kort met OK.")
+	latency := time.Since(start).Milliseconds()
+	if !result.OK {
+		return errorCheck("Grok web-search", result.Error, latency)
+	}
+	return successCheck("Grok web-search", "Responses API web_search werkt", latency)
+}
+
+func (h *SettingsHandler) checkGroqVoice(ctx context.Context) aiDiagnosticCheck {
+	if !configuredValue(h.cfg.GroqAPIKey) {
+		return skippedCheck("Groq voice", "GROQ_API_KEY ontbreekt")
+	}
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.groq.com/openai/v1/models", nil)
+	if err != nil {
+		return errorCheck("Groq voice", err.Error(), time.Since(start).Milliseconds())
+	}
+	req.Header.Set("Authorization", "Bearer "+h.cfg.GroqAPIKey)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return errorCheck("Groq voice", err.Error(), latency)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return errorCheck("Groq voice", "Groq models endpoint "+http.StatusText(resp.StatusCode)+": "+truncateText(string(body), 180), latency)
+	}
+	return successCheck("Groq voice", "API key geldig, Whisper kan gebruikt worden", latency)
+}
+
+func aiCapabilitySummary() map[string]int {
+	mutating := 0
+	confirmation := 0
+	for _, tool := range ai.AllTools {
+		if ai.IsMutatingTool(tool.Function.Name) {
+			mutating++
+		}
+		if ai.RequiresConfirmation(tool.Function.Name) {
+			confirmation++
+		}
+	}
+	return map[string]int{
+		"agents":            len(ai.Registry),
+		"tools":             len(ai.AllTools),
+		"mutatingTools":     mutating,
+		"confirmationTools": confirmation,
+	}
+}
+
+func aiAgentCapabilities() []map[string]any {
+	agents := make([]map[string]any, 0, len(ai.Registry))
+	for _, agent := range ai.Registry {
+		tools := ai.GetToolsForAgent(agent.ID, ai.AllTools)
+		toolNames := make([]string, 0, len(tools))
+		mutating := 0
+		confirmation := 0
+		for _, tool := range tools {
+			name := tool.Function.Name
+			toolNames = append(toolNames, name)
+			if ai.IsMutatingTool(name) {
+				mutating++
+			}
+			if ai.RequiresConfirmation(name) {
+				confirmation++
+			}
+		}
+		agents = append(agents, map[string]any{
+			"id":                agent.ID,
+			"naam":              agent.Naam,
+			"emoji":             agent.Emoji,
+			"description":       agent.Beschrijving,
+			"tools":             len(tools),
+			"mutatingTools":     mutating,
+			"confirmationTools": confirmation,
+			"toolNames":         toolNames,
+		})
+	}
+	return agents
+}
+
+func successCheck(label, detail string, latencyMS int64) aiDiagnosticCheck {
+	return aiDiagnosticCheck{OK: true, Status: "success", Label: label, Detail: detail, LatencyMS: latencyMS}
+}
+
+func warningCheck(label, detail string, latencyMS int64) aiDiagnosticCheck {
+	return aiDiagnosticCheck{OK: true, Status: "warning", Label: label, Detail: detail, LatencyMS: latencyMS}
+}
+
+func skippedCheck(label, detail string) aiDiagnosticCheck {
+	return aiDiagnosticCheck{OK: false, Status: "skipped", Label: label, Detail: detail}
+}
+
+func errorCheck(label, message string, latencyMS int64) aiDiagnosticCheck {
+	if strings.TrimSpace(message) == "" {
+		message = "Onbekende fout"
+	}
+	err := truncateText(message, 260)
+	return aiDiagnosticCheck{OK: false, Status: "error", Label: label, LatencyMS: latencyMS, Error: &err}
 }
 
 func configuredValue(value string) bool {
@@ -331,4 +521,12 @@ func hostFromURL(value string) any {
 		value = strings.TrimPrefix(value, "http://")
 	}
 	return strings.Split(value, "/")[0]
+}
+
+func truncateText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }

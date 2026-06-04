@@ -44,8 +44,8 @@ func GetAgent(id string) *Agent {
 // Policies governs which agent can use which tool and confirmation requirements.
 var Policies = map[string]ToolPolicy{
 	// Email reads
-	"leesEmail":          {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"zoekEmails":         {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"leesEmail":  {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"zoekEmails": {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
@@ -56,11 +56,12 @@ var Policies = map[string]ToolPolicy{
 	"bulkVerwijder":      {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"inboxOpruimen":      {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Smart home
-	"lampBedien":         {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"lampBedien": {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: false},
 	// Schedule reads
-	"dienstenOpvragen":   {Agents: []string{"rooster", "finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"planningOpvragen":        {Agents: []string{"agenda", "rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"dienstenOpvragen":        {Agents: []string{"agenda", "rooster", "finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"contractAnalyseOpvragen": {Agents: []string{"rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"salarisOpvragen":    {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"salarisOpvragen":         {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Finance reads
 	"saldoOpvragen":      {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"transactiesZoeken":  {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -86,14 +87,14 @@ var Policies = map[string]ToolPolicy{
 	"notitiesVandaag":       {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
-	"habitAanmaken":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"habitVoltooien": {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"habitIncident":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"habitAanmaken":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"habitVoltooien":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"habitIncident":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"habitsOverzicht": {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"habitStreaks":    {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"habitBadges":    {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"habitRapport":   {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"habitNotitie":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"habitBadges":     {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"habitRapport":    {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"habitNotitie":    {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
 	// LaventeCare reads
 	"laventecareCockpit":           {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareKennisZoeken":      {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -101,16 +102,16 @@ var Policies = map[string]ToolPolicy{
 	"laventecareProjectenOpvragen": {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareActiesOpvragen":    {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// LaventeCare writes
-	"laventecareLeadMaken":            {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareLeadBijwerken":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareLeadNaarProject":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareProjectMaken":         {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareProjectBijwerken":     {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareActieMaken":           {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareActieAfronden":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareBesluitMaken":         {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareChangeRequestMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareSlaIncidentMaken":     {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadBijwerken":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadNaarProject":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareProjectMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareProjectBijwerken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareActieMaken":         {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareActieAfronden":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 }
 
 // IsToolAllowed checks if the given agent may use the tool.

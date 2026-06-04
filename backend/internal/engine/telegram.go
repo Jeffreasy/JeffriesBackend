@@ -298,7 +298,21 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		return
 	}
 
-	grokClient := ai.NewGrokClient(grokKey)
+	grokClient := ai.NewGrokClientWithOptions(grokKey, e.cfg.GrokModel, e.cfg.GrokReasoningEffort)
+	if hasExternalNewsIntent(strings.ToLower(text)) {
+		agentID := "brain"
+		result := grokClient.SearchWeb(ctx, text)
+		reply := ""
+		if result.OK && result.Antwoord != "" {
+			reply = normalizeAssistantText(result.Antwoord)
+		} else {
+			reply = "❌ " + result.Error
+		}
+		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+		_ = client.SendMessage(chatID, reply)
+		return
+	}
+
 	tools := ai.GetToolsForAgent(agentID, ai.AllTools)
 	prompt := ai.BuildSystemPrompt(agent, map[string]any{"status": "Go backend"}, tools)
 
@@ -337,14 +351,43 @@ func routeFreeText(text string) string {
 	}
 
 	lower := strings.ToLower(text)
+	if hasPlanningQuestion(lower) {
+		return "agenda"
+	}
 	if hasAgendaIntent(lower) {
 		return "agenda"
 	}
 	return "brain"
 }
 
+func hasPlanningQuestion(lower string) bool {
+	if strings.Contains(lower, "op de planning") || strings.Contains(lower, "dagplanning") {
+		return true
+	}
+	for _, dayWord := range []string{"vandaag", "morgen", "overmorgen", "deze week"} {
+		if strings.Contains(lower, dayWord) && (strings.Contains(lower, "staat er") || strings.Contains(lower, "heb ik")) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasAgendaIntent(lower string) bool {
 	for _, kw := range []string{"agenda", "afspraak", "afspraken", "calendar", "kalender", "gepland", "planning"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExternalNewsIntent(lower string) bool {
+	for _, blocker := range []string{"nieuwsbrief", "newsletter", "emails", "mail"} {
+		if strings.Contains(lower, blocker) {
+			return false
+		}
+	}
+	for _, kw := range []string{"nieuws", "actualiteit", "actualiteiten", "headlines", "breaking news", "laatste ontwikkelingen"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}
@@ -557,13 +600,26 @@ func normalizeAssistantText(text string) string {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
 		if t, ok := parsed["telegramText"].(string); ok {
-			return t
+			return stripTelegramPlainText(t)
 		}
 		if t, ok := parsed["antwoord"].(string); ok {
-			return t
+			return stripTelegramPlainText(t)
 		}
 	}
-	return text
+	return stripTelegramPlainText(text)
+}
+
+var markdownLinkRe = regexp.MustCompile(`\[(.*?)\]\((https?://[^)]+)\)`)
+
+func stripTelegramPlainText(text string) string {
+	text = markdownLinkRe.ReplaceAllString(text, "$1 ($2)")
+	for _, token := range []string{"**", "__", "`"} {
+		text = strings.ReplaceAll(text, token, "")
+	}
+	for _, prefix := range []string{"### ", "## ", "# "} {
+		text = strings.ReplaceAll(text, prefix, "")
+	}
+	return strings.TrimSpace(text)
 }
 
 func buildWelcomeText() string {

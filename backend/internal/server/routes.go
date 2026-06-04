@@ -202,6 +202,7 @@ func registerRoutes(
 				r.Get("/overview", settingsH.Overview)
 				r.Get("/backup", settingsH.Backup)
 				r.Get("/telegram/status", settingsH.TelegramStatus)
+				r.Get("/ai/diagnostics", settingsH.AIDiagnostics)
 			})
 
 			// Sync

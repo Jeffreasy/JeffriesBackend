@@ -137,6 +137,27 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "planningOpvragen",
+			Description: "Haalt de gecombineerde planning op: werkdiensten plus persoonlijke agenda-afspraken voor een dag of periode.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"startIso": {
+						"type": "string",
+						"description": "Start datum (YYYY-MM-DD). Laat leeg voor vandaag."
+					},
+					"eindIso": {
+						"type": "string",
+						"description": "Eind datum (YYYY-MM-DD). Laat leeg voor dezelfde dag als startIso."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "afsprakenOpvragen",
 			Description: "Haalt Google Calendar afspraken op.",
 			Parameters: json.RawMessage(`{
@@ -255,7 +276,7 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
-	
+
 	// ── SMART HOME ─────────────────────────────────────────────────────
 	{
 		Type: "function",
