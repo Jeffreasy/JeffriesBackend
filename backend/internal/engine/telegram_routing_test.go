@@ -109,6 +109,51 @@ func TestExpandTelegramCommand(t *testing.T) {
 	}
 }
 
+func TestParseTelegramFinancePeriodDefaultsToCurrentMonth(t *testing.T) {
+	now := time.Date(2026, time.June, 5, 12, 0, 0, 0, time.UTC)
+	period := parseTelegramFinancePeriod("/finance", now)
+
+	if period.Label != "juni 2026 (standaard maand)" {
+		t.Fatalf("Label = %q", period.Label)
+	}
+	if period.DatumVan != "2026-06-01" || period.DatumTot != "2026-06-30" {
+		t.Fatalf("range = %s..%s", period.DatumVan, period.DatumTot)
+	}
+	if period.AllTime {
+		t.Fatal("default period should not be all-time")
+	}
+}
+
+func TestParseTelegramFinancePeriodSupportsExplicitScopes(t *testing.T) {
+	now := time.Date(2026, time.June, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		text string
+		from string
+		to   string
+		all  bool
+	}{
+		{text: "/finance vorige maand", from: "2026-05-01", to: "2026-05-31"},
+		{text: "/finance 2018", from: "2018-01-01", to: "2018-12-31"},
+		{text: "/finance 2026", from: "2026-01-01", to: "2026-12-31"},
+		{text: "/finance 2026-06", from: "2026-06-01", to: "2026-06-30"},
+		{text: "/finance juni 2026", from: "2026-06-01", to: "2026-06-30"},
+		{text: "/finance alles", all: true},
+	}
+
+	for _, tt := range tests {
+		period := parseTelegramFinancePeriod(tt.text, now)
+		if period.AllTime != tt.all {
+			t.Fatalf("%s AllTime = %v, want %v", tt.text, period.AllTime, tt.all)
+		}
+		if tt.all {
+			continue
+		}
+		if period.DatumVan != tt.from || period.DatumTot != tt.to {
+			t.Fatalf("%s range = %s..%s, want %s..%s", tt.text, period.DatumVan, period.DatumTot, tt.from, tt.to)
+		}
+	}
+}
+
 func TestExpandNotesAICommandPrefersLiveNotesSnapshot(t *testing.T) {
 	expanded, agentHint, ok := expandTelegramCommand("/noteai")
 	if !ok {

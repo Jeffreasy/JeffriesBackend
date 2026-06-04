@@ -250,7 +250,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "saldoOpvragen",
-			Description: "Haalt actuele totaalsaldo en rekeningbalansen op.",
+			Description: "Haalt actuele totaalsaldo op plus een standaard maand-snapshot voor finance status.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {},
@@ -283,7 +283,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "uitgavenOverzicht",
-			Description: "Geeft een uitgavenoverzicht met topcategorieën, merchants en kasstroom. Jaar, maand en rekening zijn optioneel.",
+			Description: "Geeft een uitgavenoverzicht met topcategorieën, merchants en kasstroom. Zonder jaar/maand gebruikt de backend de huidige maand.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {

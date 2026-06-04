@@ -280,28 +280,59 @@ func (e *Engine) handleHabitStatus(ctx context.Context, client *tg.Client, chatI
 	_ = client.SendMessageWithKeyboard(chatID, b.String(), buildMainMenu())
 }
 
-func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, chatID int64) {
+type telegramFinancePeriod struct {
+	Label    string
+	DatumVan string
+	DatumTot string
+	AllTime  bool
+	Default  bool
+}
+
+func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, chatID int64, text string) {
 	_ = client.SendTyping(chatID)
 
 	transactionStore := store.NewTransactionStore(e.db)
 	userID := e.cfg.HomeappUserID
+	period := parseTelegramFinancePeriod(text, time.Now().In(amsterdamLocation()))
+
 	stats, err := transactionStore.GetStats(ctx, userID)
 	if err != nil {
 		_ = client.SendMessage(chatID, "❌ Finance status ophalen mislukt.")
 		return
 	}
 
-	txs, totalOutgoing, txErr := transactionStore.ListFiltered(ctx, userID, store.TransactionFilter{
+	var firstDate, lastDate string
+	_ = e.db.Pool.QueryRow(ctx, `
+		SELECT COALESCE(MIN(datum)::text, ''), COALESCE(MAX(datum)::text, '')
+		FROM transactions WHERE user_id = $1
+	`, userID).Scan(&firstDate, &lastDate)
+
+	periodFilter := store.TransactionFilter{
 		ExcludeIntern: true,
-		Richting:      "uit",
-		Limit:         5000,
-	})
+		Limit:         20000,
+	}
+	if !period.AllTime {
+		periodFilter.DatumVan = period.DatumVan
+		periodFilter.DatumTot = period.DatumTot
+	}
+	periodTxs, totalPeriod, periodErr := transactionStore.ListFiltered(ctx, userID, periodFilter)
+	if periodErr != nil {
+		_ = client.SendMessage(chatID, "❌ Finance periode ophalen mislukt: "+truncateRunes(periodErr.Error(), 180))
+		return
+	}
+
+	outgoingFilter := periodFilter
+	outgoingFilter.Richting = "uit"
+	txs, totalOutgoing, txErr := transactionStore.ListFiltered(ctx, userID, outgoingFilter)
 	if txErr != nil {
 		_ = client.SendMessage(chatID, "❌ Finance breakdown ophalen mislukt: "+truncateRunes(txErr.Error(), 180))
 		return
 	}
 
-	summary := summarizeFinanceTransactions(txs)
+	summary := summarizeFinanceTransactions(periodTxs)
+	periodIncome := floatFromSummary(summary, "inkomsten")
+	periodExpenses := floatFromSummary(summary, "uitgaven")
+	periodNet := floatFromSummary(summary, "netto")
 	topCategories := topFinanceBreakdowns(txs, "categorie", 5)
 	topMerchants := topFinanceBreakdowns(txs, "merchant", 5)
 	uncategorized := uncategorizedFinanceTransactions(txs, 5)
@@ -309,18 +340,33 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	var b strings.Builder
 	fmt.Fprintf(&b, "💰 Finance cockpit\n\n")
 	fmt.Fprintf(&b, "Status\n")
-	fmt.Fprintf(&b, "• Saldo: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
-	fmt.Fprintf(&b, "• Inkomsten: %s\n", formatEuroTelegram(floatFromSummary(stats, "inkomsten")))
-	fmt.Fprintf(&b, "• Uitgaven: %s\n", formatEuroTelegram(math.Abs(floatFromSummary(stats, "uitgaven"))))
-	fmt.Fprintf(&b, "• Netto: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
-	fmt.Fprintf(&b, "• Transacties: %d\n\n", intFromSummary(stats, "totaal"))
-
-	fmt.Fprintf(&b, "Uitgaande transacties\n")
-	fmt.Fprintf(&b, "• Geanalyseerd: %d", len(txs))
-	if totalOutgoing > len(txs) {
-		fmt.Fprintf(&b, " van %d", totalOutgoing)
+	fmt.Fprintf(&b, "• Huidig saldo: %s\n", formatEuroTelegram(floatFromSummary(stats, "saldo")))
+	fmt.Fprintf(&b, "• Dataset: %d transacties", intFromSummary(stats, "totaal"))
+	if firstDate != "" && lastDate != "" {
+		fmt.Fprintf(&b, " (%s t/m %s)", firstDate, lastDate)
 	}
-	fmt.Fprintf(&b, "\n• Totaal uitgaand: %s\n\n", formatEuroTelegram(floatFromSummary(summary, "uitgaven")))
+	fmt.Fprintf(&b, "\n\n")
+
+	fmt.Fprintf(&b, "Periode: %s\n", period.Label)
+	if !period.AllTime {
+		fmt.Fprintf(&b, "• Range: %s t/m %s\n", period.DatumVan, period.DatumTot)
+	}
+	fmt.Fprintf(&b, "• Inkomsten: %s\n", formatEuroTelegram(periodIncome))
+	fmt.Fprintf(&b, "• Uitgaven: %s\n", formatEuroTelegram(periodExpenses))
+	fmt.Fprintf(&b, "• Netto: %s\n", formatEuroTelegram(periodNet))
+	fmt.Fprintf(&b, "• Transacties: %d", totalPeriod)
+	if totalPeriod > len(periodTxs) {
+		fmt.Fprintf(&b, " · sample %d", len(periodTxs))
+	}
+	fmt.Fprintf(&b, "\n\n")
+
+	fmt.Fprintf(&b, "Uitgaven in periode\n")
+	fmt.Fprintf(&b, "• Uitgaand totaal: %s\n", formatEuroTelegram(periodExpenses))
+	fmt.Fprintf(&b, "• Uitgaande transacties: %d", totalOutgoing)
+	if totalOutgoing > len(txs) {
+		fmt.Fprintf(&b, " · sample %d", len(txs))
+	}
+	fmt.Fprintf(&b, "\n\n")
 
 	appendFinanceBreakdown(&b, "Top categorieën", topCategories)
 	appendFinanceBreakdown(&b, "Top tegenpartijen", topMerchants)
@@ -333,16 +379,144 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	} else {
 		fmt.Fprintf(&b, "\nOngelabeld\nGeen ongelabelde transacties in de geanalyseerde set.\n")
 	}
+	fmt.Fprintf(&b, "\n\nScopes: /finance · /finance vorige maand · /finance 2026 · /finance alles")
 
 	_ = client.SendMessageWithKeyboard(chatID, b.String(), buildMainMenu())
 }
 
 func telegramLocation() *time.Location {
-	loc, err := time.LoadLocation("Europe/Amsterdam")
-	if err != nil {
-		return time.UTC
+	return amsterdamLocation()
+}
+
+func parseTelegramFinancePeriod(text string, now time.Time) telegramFinancePeriod {
+	if now.IsZero() {
+		now = time.Now().In(amsterdamLocation())
 	}
-	return loc
+	raw := strings.TrimSpace(text)
+	lower := strings.ToLower(raw)
+	if lower == "/finance" {
+		return telegramFinanceMonthPeriod(now, true)
+	}
+	if strings.HasPrefix(lower, "/finance") {
+		raw = strings.TrimSpace(raw[len("/finance"):])
+		lower = strings.TrimSpace(lower[len("/finance"):])
+	}
+	if lower == "" || lower == "maand" || lower == "deze maand" || lower == "huidige maand" {
+		return telegramFinanceMonthPeriod(now, true)
+	}
+	if containsAny(lower, "alles", "alltime", "lifetime", "totaal", "alle jaren") {
+		return telegramFinancePeriod{Label: "alles (2018-heden)", AllTime: true}
+	}
+	if strings.Contains(lower, "vorige maand") || strings.Contains(lower, "last month") {
+		return telegramFinanceMonthPeriod(now.AddDate(0, -1, 0), false)
+	}
+	if lower == "jaar" || lower == "dit jaar" || lower == "huidig jaar" {
+		return telegramFinanceYearPeriod(now.Year())
+	}
+
+	if match := regexp.MustCompile(`\b(20\d{2})[-/ ](0?[1-9]|1[0-2])\b`).FindStringSubmatch(lower); len(match) == 3 {
+		return telegramFinanceMonthPeriodByParts(match[1], match[2], false)
+	}
+	if match := regexp.MustCompile(`\b(0?[1-9]|1[0-2])[-/ ](20\d{2})\b`).FindStringSubmatch(lower); len(match) == 3 {
+		return telegramFinanceMonthPeriodByParts(match[2], match[1], false)
+	}
+
+	year := now.Year()
+	if match := regexp.MustCompile(`\b(20\d{2})\b`).FindStringSubmatch(lower); len(match) == 2 {
+		if parsed, err := strconv.Atoi(match[1]); err == nil {
+			year = parsed
+		}
+	}
+	if month, ok := parseDutchFinanceMonth(lower); ok {
+		return telegramFinanceMonthPeriod(time.Date(year, month, 1, 0, 0, 0, 0, amsterdamLocation()), false)
+	}
+
+	if match := regexp.MustCompile(`^\s*(20\d{2})\s*$`).FindStringSubmatch(lower); len(match) == 2 {
+		if parsed, err := strconv.Atoi(match[1]); err == nil {
+			return telegramFinanceYearPeriod(parsed)
+		}
+	}
+	if match := regexp.MustCompile(`^\s*(0?[1-9]|1[0-2])\s*$`).FindStringSubmatch(lower); len(match) == 2 {
+		return telegramFinanceMonthPeriodByParts(strconv.Itoa(now.Year()), match[1], false)
+	}
+	return telegramFinanceMonthPeriod(now, true)
+}
+
+func telegramFinanceMonthPeriodByParts(yearValue, monthValue string, isDefault bool) telegramFinancePeriod {
+	year, yearErr := strconv.Atoi(yearValue)
+	month, monthErr := strconv.Atoi(monthValue)
+	if yearErr != nil || monthErr != nil || month < 1 || month > 12 {
+		return telegramFinanceMonthPeriod(time.Now().In(amsterdamLocation()), true)
+	}
+	return telegramFinanceMonthPeriod(time.Date(year, time.Month(month), 1, 0, 0, 0, 0, amsterdamLocation()), isDefault)
+}
+
+func telegramFinanceMonthPeriod(date time.Time, isDefault bool) telegramFinancePeriod {
+	loc := amsterdamLocation()
+	start := time.Date(date.In(loc).Year(), date.In(loc).Month(), 1, 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 1, -1)
+	label := dutchFinanceMonthName(start.Month()) + " " + strconv.Itoa(start.Year())
+	if isDefault {
+		label += " (standaard maand)"
+	}
+	return telegramFinancePeriod{
+		Label:    label,
+		DatumVan: start.Format("2006-01-02"),
+		DatumTot: end.Format("2006-01-02"),
+		Default:  isDefault,
+	}
+}
+
+func telegramFinanceYearPeriod(year int) telegramFinancePeriod {
+	return telegramFinancePeriod{
+		Label:    strconv.Itoa(year),
+		DatumVan: fmt.Sprintf("%04d-01-01", year),
+		DatumTot: fmt.Sprintf("%04d-12-31", year),
+	}
+}
+
+func parseDutchFinanceMonth(lower string) (time.Month, bool) {
+	months := map[string]time.Month{
+		"januari": time.January, "jan": time.January,
+		"februari": time.February, "feb": time.February,
+		"maart": time.March, "mrt": time.March,
+		"april": time.April, "apr": time.April,
+		"mei":  time.May,
+		"juni": time.June, "jun": time.June,
+		"juli": time.July, "jul": time.July,
+		"augustus": time.August, "aug": time.August,
+		"september": time.September, "sep": time.September,
+		"oktober": time.October, "okt": time.October,
+		"november": time.November, "nov": time.November,
+		"december": time.December, "dec": time.December,
+	}
+	for name, month := range months {
+		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(lower) {
+			return month, true
+		}
+	}
+	return time.January, false
+}
+
+func dutchFinanceMonthName(month time.Month) string {
+	names := map[time.Month]string{
+		time.January:   "januari",
+		time.February:  "februari",
+		time.March:     "maart",
+		time.April:     "april",
+		time.May:       "mei",
+		time.June:      "juni",
+		time.July:      "juli",
+		time.August:    "augustus",
+		time.September: "september",
+		time.October:   "oktober",
+		time.November:  "november",
+		time.December:  "december",
+	}
+	if name, ok := names[month]; ok {
+		return name
+	}
+	return strings.ToLower(month.String())
 }
 
 func formatHabitTelegramName(habit model.Habit) string {
@@ -507,8 +681,8 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	case command == "/habits" || command == "/habitrapport" || command == "/streak":
 		e.handleHabitStatus(ctx, client, chatID)
 		return
-	case command == "/finance":
-		e.handleFinanceStatus(ctx, client, chatID)
+	case command == "/finance" || strings.HasPrefix(command, "/finance "):
+		e.handleFinanceStatus(ctx, client, chatID, text)
 		return
 	case command == "/notities":
 		e.handleNotitiesDashboard(ctx, client, chatID)
@@ -888,7 +1062,7 @@ func expandTelegramCommand(text string) (expanded string, agentHint string, ok b
 	case "/rooster":
 		return "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag.", "rooster", true
 	case "/finance":
-		return "Geef een compacte finance status. Gebruik saldoOpvragen als basis, salarisOpvragen alleen voor loonstroken en uitgavenOverzicht voor categorieen/merchants. Noem saldo, cashflow, opvallende uitgaven en eventuele ongelabelde transacties als die beschikbaar zijn.", "finance", true
+		return "Geef een compacte finance status voor de huidige maand. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maandanalyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand. Noem all-time alleen als de gebruiker daarom vraagt.", "finance", true
 	case "/laventecare", "/lc":
 		return "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen en of de documentbasis is geinitialiseerd. Gebruik geen verzonnen CRM-data.", "laventecare", true
 	case "/email", "/inbox":
