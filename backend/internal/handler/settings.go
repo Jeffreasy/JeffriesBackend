@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -320,9 +321,11 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 			"groqConfigured":      configuredValue(h.cfg.GroqAPIKey),
 			"telegramConfigured":  h.cfg.TelegramBotEnabled && h.telegram != nil,
 		},
-		"checks":       checks,
-		"capabilities": aiCapabilitySummary(),
-		"agents":       aiAgentCapabilities(),
+		"checks":          checks,
+		"capabilities":    aiCapabilitySummary(),
+		"governance":      aiGovernanceSummary(),
+		"agents":          aiAgentCapabilities(),
+		"recommendations": aiDiagnosticRecommendations(),
 	}
 
 	JSON(w, http.StatusOK, resp)
@@ -391,6 +394,7 @@ func (h *SettingsHandler) checkGroqVoice(ctx context.Context) aiDiagnosticCheck 
 func aiCapabilitySummary() map[string]int {
 	mutating := 0
 	confirmation := 0
+	exposed := exposedToolSet()
 	for _, tool := range ai.AllTools {
 		if ai.IsMutatingTool(tool.Function.Name) {
 			mutating++
@@ -399,16 +403,39 @@ func aiCapabilitySummary() map[string]int {
 			confirmation++
 		}
 	}
+
+	pendingPolicy := 0
+	pendingMutating := 0
+	pendingConfirmation := 0
+	for name, policy := range ai.Policies {
+		if exposed[name] {
+			continue
+		}
+		pendingPolicy++
+		if policy.Mutates {
+			pendingMutating++
+		}
+		if policy.RequiresConfirmation {
+			pendingConfirmation++
+		}
+	}
+
 	return map[string]int{
-		"agents":            len(ai.Registry),
-		"tools":             len(ai.AllTools),
-		"mutatingTools":     mutating,
-		"confirmationTools": confirmation,
+		"agents":                   len(ai.Registry),
+		"tools":                    len(ai.AllTools),
+		"mutatingTools":            mutating,
+		"confirmationTools":        confirmation,
+		"policyTools":              len(ai.Policies),
+		"pendingPolicyTools":       pendingPolicy,
+		"pendingMutatingTools":     pendingMutating,
+		"pendingConfirmationTools": pendingConfirmation,
+		"readOnlyTools":            len(ai.AllTools) - mutating,
 	}
 }
 
 func aiAgentCapabilities() []map[string]any {
 	agents := make([]map[string]any, 0, len(ai.Registry))
+	exposed := exposedToolSet()
 	for _, agent := range ai.Registry {
 		tools := ai.GetToolsForAgent(agent.ID, ai.AllTools)
 		toolNames := make([]string, 0, len(tools))
@@ -424,18 +451,166 @@ func aiAgentCapabilities() []map[string]any {
 				confirmation++
 			}
 		}
+		sort.Strings(toolNames)
+
+		pendingNames := make([]string, 0)
+		pendingMutating := 0
+		pendingConfirmation := 0
+		for name, policy := range ai.Policies {
+			if exposed[name] || !policyAppliesToAgent(policy, agent.ID) {
+				continue
+			}
+			pendingNames = append(pendingNames, name)
+			if policy.Mutates {
+				pendingMutating++
+			}
+			if policy.RequiresConfirmation {
+				pendingConfirmation++
+			}
+		}
+		sort.Strings(pendingNames)
+
 		agents = append(agents, map[string]any{
-			"id":                agent.ID,
-			"naam":              agent.Naam,
-			"emoji":             agent.Emoji,
-			"description":       agent.Beschrijving,
-			"tools":             len(tools),
-			"mutatingTools":     mutating,
-			"confirmationTools": confirmation,
-			"toolNames":         toolNames,
+			"id":                       agent.ID,
+			"naam":                     agent.Naam,
+			"emoji":                    agent.Emoji,
+			"description":              agent.Beschrijving,
+			"tools":                    len(tools),
+			"mutatingTools":            mutating,
+			"confirmationTools":        confirmation,
+			"toolNames":                toolNames,
+			"liveToolNames":            toolNames,
+			"pendingTools":             len(pendingNames),
+			"pendingMutatingTools":     pendingMutating,
+			"pendingConfirmationTools": pendingConfirmation,
+			"pendingToolNames":         pendingNames,
 		})
 	}
 	return agents
+}
+
+func aiGovernanceSummary() map[string]any {
+	exposed := exposedToolSet()
+	liveNames := sortedExposedToolNames()
+	policyOnlyNames := make([]string, 0)
+	mutatingNames := make([]string, 0)
+	confirmationNames := make([]string, 0)
+
+	for name, policy := range ai.Policies {
+		if policy.Mutates {
+			mutatingNames = append(mutatingNames, name)
+		}
+		if policy.RequiresConfirmation {
+			confirmationNames = append(confirmationNames, name)
+		}
+		if !exposed[name] {
+			policyOnlyNames = append(policyOnlyNames, name)
+		}
+	}
+
+	sort.Strings(policyOnlyNames)
+	sort.Strings(mutatingNames)
+	sort.Strings(confirmationNames)
+
+	coveragePercent := 0
+	if len(ai.Policies) > 0 {
+		coveragePercent = int(float64(len(ai.AllTools)) / float64(len(ai.Policies)) * 100)
+	}
+
+	return map[string]any{
+		"liveToolNames":         liveNames,
+		"policyOnlyToolNames":   policyOnlyNames,
+		"mutatingToolNames":     mutatingNames,
+		"confirmationToolNames": confirmationNames,
+		"coveragePercent":       coveragePercent,
+		"liveTools":             len(ai.AllTools),
+		"policyTools":           len(ai.Policies),
+		"policyOnlyTools":       len(policyOnlyNames),
+	}
+}
+
+func aiDiagnosticRecommendations() []map[string]string {
+	exposed := exposedToolSet()
+	hasPendingConfirmation := false
+	hasPendingAgendaWrite := false
+	hasPendingEmailWrite := false
+	hasPendingCRMWrite := false
+
+	for name, policy := range ai.Policies {
+		if exposed[name] {
+			continue
+		}
+		if policy.RequiresConfirmation {
+			hasPendingConfirmation = true
+		}
+		if strings.HasPrefix(name, "afspraak") {
+			hasPendingAgendaWrite = true
+		}
+		if strings.Contains(strings.ToLower(name), "email") || strings.Contains(strings.ToLower(name), "gelezen") || strings.Contains(strings.ToLower(name), "ster") {
+			hasPendingEmailWrite = true
+		}
+		if strings.HasPrefix(name, "laventecare") && policy.Mutates {
+			hasPendingCRMWrite = true
+		}
+	}
+
+	recommendations := make([]map[string]string, 0, 4)
+	if hasPendingConfirmation {
+		recommendations = append(recommendations, map[string]string{
+			"priority": "hoog",
+			"title":    "Bevestigingslaag voor mutaties",
+			"detail":   "Agenda, email, finance en CRM writes staan in policy, maar blijven bewust buiten live toolcalls totdat approve/reject in Telegram en UI is aangesloten.",
+		})
+	}
+	if hasPendingAgendaWrite {
+		recommendations = append(recommendations, map[string]string{
+			"priority": "hoog",
+			"title":    "Agenda write-flow",
+			"detail":   "Afspraken maken, bewerken en verwijderen kunnen daarna veilig als pending acties met samenvatting en bevestigingscode.",
+		})
+	}
+	if hasPendingEmailWrite {
+		recommendations = append(recommendations, map[string]string{
+			"priority": "middel",
+			"title":    "Email actielaag",
+			"detail":   "Markeren, beantwoorden en opruimen kunnen via dezelfde confirmation queue zodra Gmail mutations zijn afgeschermd.",
+		})
+	}
+	if hasPendingCRMWrite {
+		recommendations = append(recommendations, map[string]string{
+			"priority": "middel",
+			"title":    "LaventeCare mutaties",
+			"detail":   "Leads, projecten en acties zijn nu leesbaar; maken en bijwerken kan daarna gecontroleerd worden toegevoegd.",
+		})
+	}
+
+	return recommendations
+}
+
+func exposedToolSet() map[string]bool {
+	exposed := make(map[string]bool, len(ai.AllTools))
+	for _, tool := range ai.AllTools {
+		exposed[tool.Function.Name] = true
+	}
+	return exposed
+}
+
+func sortedExposedToolNames() []string {
+	names := make([]string, 0, len(ai.AllTools))
+	for _, tool := range ai.AllTools {
+		names = append(names, tool.Function.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func policyAppliesToAgent(policy ai.ToolPolicy, agentID string) bool {
+	for _, allowedAgent := range policy.Agents {
+		if allowedAgent == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 func successCheck(label, detail string, latencyMS int64) aiDiagnosticCheck {
