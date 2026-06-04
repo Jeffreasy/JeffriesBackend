@@ -190,13 +190,25 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	// Built-in commands
 	switch {
 	case text == "/start":
-		_ = client.SendMessageWithKeyboard(chatID, buildWelcomeText(), buildMainMenu())
+		e.handleStart(ctx, client, chatID)
 		return
 	case text == "/help":
 		_ = client.SendMessageWithKeyboard(chatID, buildHelpText(), buildMainMenu())
 		return
 	case text == "/status" || text == "/health":
 		_ = client.SendMessage(chatID, "⚙️ Go backend actief")
+		return
+	case text == "/ai":
+		e.handleAIStatus(ctx, client, chatID)
+		return
+	case text == "/notehelp":
+		_ = client.SendMessageWithKeyboard(chatID, buildNoteHelpText(), buildNotesMenu())
+		return
+	case text == "/voicehelp":
+		_ = client.SendMessageWithKeyboard(chatID, buildVoiceHelpText(), buildMainMenu())
+		return
+	case text == "/lampen":
+		e.handleLampStatus(ctx, client, chatID)
 		return
 	case text == "/notities":
 		e.handleNotitiesDashboard(ctx, client, chatID)
@@ -219,6 +231,12 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	case strings.HasPrefix(text, "note_archive_"):
 		e.handleNoteArchive(ctx, client, chatID, strings.TrimPrefix(text, "note_archive_"))
 		return
+	}
+
+	agentHint := ""
+	if expanded, hint, ok := expandTelegramCommand(text); ok {
+		text = expanded
+		agentHint = hint
 	}
 
 	// Lamp command detection → execute via WiZ UDP
@@ -271,6 +289,9 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	defer stopTyping()
 
 	agentID := routeFreeText(text)
+	if agentHint != "" {
+		agentID = agentHint
+	}
 	agent := ai.GetAgent(agentID)
 	if agent == nil {
 		agent = ai.GetAgent("brain")
@@ -340,6 +361,34 @@ var commandMap = map[string]string{
 	"/triage": "email", "/search": "email", "/notities": "notes",
 	"/noteer": "notes", "/automations": "automations", "/habits": "habits",
 	"/streak": "habits", "/check": "habits",
+}
+
+func expandTelegramCommand(text string) (expanded string, agentHint string, ok bool) {
+	cmd := strings.ToLower(strings.TrimSpace(strings.Split(text, " ")[0]))
+	cmd = strings.Split(cmd, "@")[0]
+
+	switch cmd {
+	case "/briefing", "/brain", "/dashboard":
+		return "Geef mij een compacte dagbriefing voor vandaag. Combineer planning, werkrooster, afspraken, notities, habits, email, lampen en systeemstatus. Sluit af met maximaal drie concrete aandachtspunten.", "brain", true
+	case "/planning":
+		return "Wat staat er vandaag op mijn planning? Combineer werkdiensten en persoonlijke afspraken, en noem conflicten of aandachtspunten.", "agenda", true
+	case "/agenda", "/calendar":
+		return "Geef mijn aankomende agenda-afspraken en combineer ze waar relevant met mijn werkrooster.", "agenda", true
+	case "/rooster":
+		return "Geef mijn aankomende diensten en vermeld het totaal aantal uren in de periode die je ophaalt.", "rooster", true
+	case "/finance":
+		return "Geef een compacte finance status met saldo, salaris en opvallende transacties als die beschikbaar zijn.", "finance", true
+	case "/email", "/inbox":
+		return "Geef een compacte inbox status en noem welke emails aandacht nodig lijken.", "email", true
+	case "/habits", "/streak":
+		return "Geef mijn habit status met actieve habits, streaks, badges en een kort advies voor vandaag.", "habits", true
+	case "/automations":
+		return "Geef de automation en sync status van mijn systeem.", "automations", true
+	case "/news", "/nieuws":
+		return "Wat was het belangrijkste nieuws van de afgelopen 24 uur? Geef een compacte top 5 met bron per punt.", "brain", true
+	}
+
+	return "", "", false
 }
 
 func routeFreeText(text string) string {
@@ -494,6 +543,178 @@ func detectLampCommand(text string) *lampCommand {
 	return nil
 }
 
+// ─── Telegram Start & Status Cards ─────────────────────────────────────────
+
+type telegramStartSnapshot struct {
+	Now             time.Time
+	TodaySchedules  int
+	TodayEvents     int
+	TodayNotes      int
+	ActiveNotes     int
+	ActiveHabits    int
+	TotalDevices    int
+	OnlineDevices   int
+	PendingCommands int
+	NextSchedule    *model.Schedule
+}
+
+func (e *Engine) handleStart(ctx context.Context, client *tg.Client, chatID int64) {
+	_ = client.SendTyping(chatID)
+	snapshot := e.buildStartSnapshot(ctx)
+	text := buildWelcomeText(snapshot)
+	_ = client.SendMessageWithKeyboard(chatID, text, buildMainMenu())
+
+	chatStore := store.NewChatStore(e.db.Pool)
+	agentID := "brain"
+	_ = chatStore.SaveMessage(ctx, chatID, "assistant", text, &agentID)
+}
+
+func (e *Engine) buildStartSnapshot(ctx context.Context) telegramStartSnapshot {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+
+	sCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	defer cancel()
+
+	now := time.Now().In(loc)
+	today := now.Format("2006-01-02")
+	end := now.AddDate(0, 0, 30).Format("2006-01-02")
+	userID := e.cfg.HomeappUserID
+
+	snapshot := telegramStartSnapshot{Now: now}
+
+	scheduleStore := store.NewScheduleStore(e.db)
+	if schedules, err := scheduleStore.ListRange(sCtx, userID, today, today); err == nil {
+		snapshot.TodaySchedules = len(visibleSchedules(schedules))
+	}
+	if upcoming, err := scheduleStore.ListRange(sCtx, userID, today, end); err == nil {
+		for _, schedule := range visibleSchedules(upcoming) {
+			if scheduleStartsAfter(schedule, now, loc) {
+				next := schedule
+				snapshot.NextSchedule = &next
+				break
+			}
+		}
+	}
+
+	eventStore := store.NewPersonalEventStore(e.db)
+	if events, err := eventStore.ListRange(sCtx, userID, today, today); err == nil {
+		snapshot.TodayEvents = len(visiblePersonalEvents(events))
+	}
+
+	noteStore := store.NewNoteStore(e.db)
+	if notes, err := noteStore.List(sCtx, userID); err == nil {
+		for _, note := range notes {
+			if note.IsArchived {
+				continue
+			}
+			snapshot.ActiveNotes++
+			if note.Aangemaakt.In(loc).Format("2006-01-02") == today || note.Gewijzigd.In(loc).Format("2006-01-02") == today {
+				snapshot.TodayNotes++
+			}
+		}
+	}
+
+	habitStore := store.NewHabitStore(e.db)
+	if stats, err := habitStore.Stats(sCtx, userID); err == nil {
+		snapshot.ActiveHabits = stats.ActiveHabits
+	}
+
+	_ = e.db.Pool.QueryRow(sCtx,
+		`SELECT COUNT(*),
+		        COUNT(*) FILTER (WHERE status = 'online')
+		   FROM devices`,
+	).Scan(&snapshot.TotalDevices, &snapshot.OnlineDevices)
+
+	_ = e.db.Pool.QueryRow(sCtx,
+		`SELECT COUNT(*) FROM device_commands WHERE user_id = $1 AND status IN ('pending', 'processing')`,
+		userID,
+	).Scan(&snapshot.PendingCommands)
+
+	return snapshot
+}
+
+func (e *Engine) handleAIStatus(ctx context.Context, client *tg.Client, chatID int64) {
+	mutating, confirmation := countExposedAITools()
+	policyOnly := len(ai.Policies) - len(ai.AllTools)
+	if policyOnly < 0 {
+		policyOnly = 0
+	}
+
+	text := fmt.Sprintf(`🤖 AI status
+
+Model: %s
+Reasoning: %s
+Grok chat: %s
+Web-search: %s
+Groq voice: %s
+
+Agents: %d
+Live tools: %d
+Live mutaties: %d
+Bevestiging live: %d
+Beschermde policy-tools: %d
+
+Gebruik /briefing voor een volledige dagstart of stel direct een natuurlijke vraag.`,
+		emptyFallback(e.cfg.GrokModel, "onbekend"),
+		emptyFallback(e.cfg.GrokReasoningEffort, "default"),
+		configStatus(e.cfg.GrokAPIKey != ""),
+		configStatus(e.cfg.GrokAPIKey != ""),
+		configStatus(e.cfg.GroqAPIKey != ""),
+		len(ai.Registry),
+		len(ai.AllTools),
+		mutating,
+		confirmation,
+		policyOnly,
+	)
+
+	_ = client.SendMessageWithKeyboard(chatID, text, tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "🧠 Dagbriefing", CallbackData: "/briefing"},
+				{Text: "📍 Planning", CallbackData: "/planning"},
+			},
+			{
+				{Text: "🏠 Startmenu", CallbackData: "/start"},
+			},
+		},
+	})
+}
+
+func (e *Engine) handleLampStatus(ctx context.Context, client *tg.Client, chatID int64) {
+	dStore := store.NewDeviceStore(e.db)
+	devices, err := dStore.GetAll(ctx, 0, 100)
+	if err != nil {
+		_ = client.SendMessage(chatID, "⚠️ Lampstatus kon niet worden opgehaald.")
+		return
+	}
+
+	online := 0
+	on := 0
+	names := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if device.Status == "online" {
+			online++
+		}
+		if deviceIsOn(device) {
+			on++
+		}
+		if len(names) < 6 {
+			names = append(names, device.Name)
+		}
+	}
+
+	text := fmt.Sprintf("💡 Lampen\n\nOnline: %d/%d\nAan: %d\nQueue: %s\n", online, len(devices), on, queueModeLabel(e.cfg.QueueLightCommands()))
+	if len(names) > 0 {
+		text += "\nBekend: " + strings.Join(names, ", ")
+	}
+	text += "\n\nDirect bedienen of typ natuurlijk: lampen 50%, scene focus, lampen uit."
+
+	_ = client.SendMessageWithKeyboard(chatID, text, buildLampMenu())
+}
+
 // ─── Native Telegram Dashboards ─────────────────────────────────────────────
 
 func (e *Engine) handleNotitiesDashboard(ctx context.Context, client *tg.Client, chatID int64) {
@@ -622,40 +843,250 @@ func stripTelegramPlainText(text string) string {
 	return strings.TrimSpace(text)
 }
 
-func buildWelcomeText() string {
-	return "👋 Welkom bij Jeffries HomeBot!\n\nJeffries Brain is je centrale cockpit.\nTyp of spreek — ik combineer planning, agenda, mail, notities, habits, lampen en systeemstatus."
+func buildWelcomeText(snapshot telegramStartSnapshot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "👋 Jeffries HomeBot\n")
+	fmt.Fprintf(&b, "AI cockpit actief — %s %02d %s %s\n\n",
+		dutchDayName(snapshot.Now.Weekday()),
+		snapshot.Now.Day(),
+		dutchMonthName(snapshot.Now.Month()),
+		snapshot.Now.Format("15:04"),
+	)
+	fmt.Fprintf(&b, "📍 Vandaag\n")
+	fmt.Fprintf(&b, "• Werk: %s\n", pluralNL(snapshot.TodaySchedules, "dienst", "diensten"))
+	fmt.Fprintf(&b, "• Agenda: %s\n", pluralNL(snapshot.TodayEvents, "afspraak", "afspraken"))
+	fmt.Fprintf(&b, "• Notities: %d vandaag / %d actief\n", snapshot.TodayNotes, snapshot.ActiveNotes)
+	fmt.Fprintf(&b, "• Habits: %d actief\n\n", snapshot.ActiveHabits)
+	fmt.Fprintf(&b, "⏭️ Volgende dienst\n")
+	fmt.Fprintf(&b, "%s\n\n", formatNextSchedule(snapshot.NextSchedule, snapshot.Now))
+	fmt.Fprintf(&b, "🏠 Systeem\n")
+	fmt.Fprintf(&b, "• Lampen: %d/%d online\n", snapshot.OnlineDevices, snapshot.TotalDevices)
+	fmt.Fprintf(&b, "• Bridge queue: %d actief\n", snapshot.PendingCommands)
+	fmt.Fprintf(&b, "• AI: %d agents / %d tools live\n\n", len(ai.Registry), len(ai.AllTools))
+	fmt.Fprintf(&b, "Typ of spreek natuurlijk, bijvoorbeeld:\n")
+	fmt.Fprintf(&b, "• wat staat er vandaag op mijn planning?\n")
+	fmt.Fprintf(&b, "• geef mijn dagbriefing\n")
+	fmt.Fprintf(&b, "• noteer: bel morgen terug")
+	return b.String()
 }
 
 func buildHelpText() string {
-	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain.\n\n/status — systeem health\n/brain — centrale assistent\n/lampen — lamp status\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notities\n/vandaag — notities van vandaag\n/week — weekoverzicht notities\n/noteer [tekst] — snelle notitie\n/habits — habits\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'dim'\n🎙️ Spraakberichten worden automatisch herkend."
+	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/email — inbox\n/notities — notities\n/vandaag — notities van vandaag\n/week — weekoverzicht notities\n/noteer [tekst] — snelle notitie\n/habits — habits\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {
 	return tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
-				{Text: "🧠 Vraag Brain", CallbackData: "/brain wat is mijn status?"},
-				{Text: "💡 Lampen", CallbackData: "/lampen"},
+				{Text: "🧠 Dagbriefing", CallbackData: "/briefing"},
+				{Text: "📍 Planning", CallbackData: "/planning"},
 			},
 			{
 				{Text: "📅 Agenda", CallbackData: "/agenda"},
 				{Text: "📋 Werkrooster", CallbackData: "/rooster"},
 			},
 			{
-				{Text: "💰 Salaris", CallbackData: "/finance"},
-				{Text: "📧 Inbox", CallbackData: "/email"},
+				{Text: "💡 Lampen", CallbackData: "/lampen"},
+				{Text: "🌙 Nacht", CallbackData: "lampen nacht"},
 			},
 			{
 				{Text: "📝 Notities", CallbackData: "/notities"},
-				{Text: "📋 Vandaag", CallbackData: "/vandaag"},
+				{Text: "✍️ Noteer", CallbackData: "/notehelp"},
 			},
 			{
-				{Text: "💡 Lampen Uit", CallbackData: "lampen uit"},
-				{Text: "🌅 Ochtend", CallbackData: "ochtend"},
-				{Text: "🌙 Nacht", CallbackData: "nacht"},
+				{Text: "💰 Finance", CallbackData: "/finance"},
+				{Text: "📧 Inbox", CallbackData: "/email"},
+			},
+			{
+				{Text: "🔎 Nieuws", CallbackData: "/news"},
+				{Text: "🤖 AI status", CallbackData: "/ai"},
+			},
+			{
+				{Text: "🎙️ Spraak", CallbackData: "/voicehelp"},
+				{Text: "❔ Help", CallbackData: "/help"},
 			},
 		},
 	}
+}
+
+func buildLampMenu() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "💡 Aan", CallbackData: "lampen aan"},
+				{Text: "🌑 Uit", CallbackData: "lampen uit"},
+			},
+			{
+				{Text: "🌅 Ochtend", CallbackData: "lampen ochtend"},
+				{Text: "🌙 Nacht", CallbackData: "lampen nacht"},
+			},
+			{
+				{Text: "🎯 Focus", CallbackData: "lampen focus"},
+				{Text: "📺 TV", CallbackData: "lampen tv"},
+			},
+			{
+				{Text: "🏠 Startmenu", CallbackData: "/start"},
+			},
+		},
+	}
+}
+
+func buildNotesMenu() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "📝 Notities", CallbackData: "/notities"},
+				{Text: "📍 Vandaag", CallbackData: "/vandaag"},
+			},
+			{
+				{Text: "🏠 Startmenu", CallbackData: "/start"},
+			},
+		},
+	}
+}
+
+func buildNoteHelpText() string {
+	return "✍️ Snel noteren\n\nGebruik:\n/noteer jouw tekst\n\nVoorbeelden:\n/noteer DKL evaluatie voorbereiden\n/noteer idee: dashboard start sneller maken\n\nLosse ideeën in gewone chat of via spraak kan Brain ook automatisch als notitie opslaan."
+}
+
+func buildVoiceHelpText() string {
+	return "🎙️ Spraak in Telegram\n\nStuur een voice message en ik transcribeer hem met Groq Whisper. Daarna routeert Brain automatisch naar planning, notities, lampen, mail of een andere agent.\n\nVoorbeelden:\n• wat staat er morgen op mijn planning?\n• noteer dat ik HenkeWonen moet terugbellen\n• zet de lampen op nachtstand"
+}
+
+func formatNextSchedule(schedule *model.Schedule, now time.Time) string {
+	if schedule == nil {
+		return "Geen aankomende dienst gevonden."
+	}
+
+	label := relativeDateLabel(schedule.StartDatum, now)
+	title := strings.TrimSpace(schedule.ShiftType)
+	if title == "" {
+		title = strings.TrimSpace(schedule.Titel)
+	}
+	if title == "" {
+		title = "Dienst"
+	}
+
+	timeLabel := schedule.StartTijd
+	if schedule.EindTijd != "" {
+		timeLabel += "–" + schedule.EindTijd
+	}
+	if timeLabel == "" {
+		timeLabel = "hele dag"
+	}
+
+	location := strings.TrimSpace(schedule.Locatie)
+	if location != "" {
+		return fmt.Sprintf("%s — %s (%s) · %s", title, label, timeLabel, location)
+	}
+	return fmt.Sprintf("%s — %s (%s)", title, label, timeLabel)
+}
+
+func scheduleStartsAfter(schedule model.Schedule, now time.Time, loc *time.Location) bool {
+	start, err := parseScheduleDateTime(schedule.StartDatum, schedule.StartTijd, loc)
+	if err != nil {
+		return false
+	}
+	end, err := parseScheduleDateTime(emptyFallback(schedule.EindDatum, schedule.StartDatum), schedule.EindTijd, loc)
+	if err != nil {
+		end = start
+	}
+	if end.Before(start) {
+		end = end.AddDate(0, 0, 1)
+	}
+	return !end.Before(now.Add(-15 * time.Minute))
+}
+
+func parseScheduleDateTime(datePart, timePart string, loc *time.Location) (time.Time, error) {
+	datePart = strings.TrimSpace(datePart)
+	timePart = strings.TrimSpace(timePart)
+	if timePart == "" {
+		return time.ParseInLocation("2006-01-02", datePart, loc)
+	}
+	return time.ParseInLocation("2006-01-02 15:04", datePart+" "+timePart, loc)
+}
+
+func relativeDateLabel(iso string, now time.Time) string {
+	loc := now.Location()
+	date, err := time.ParseInLocation("2006-01-02", iso, loc)
+	if err != nil {
+		return iso
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	target := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	diff := int(target.Sub(today).Hours() / 24)
+	dateLabel := target.Format("02-01-2006")
+	switch diff {
+	case 0:
+		return "vandaag (" + dateLabel + ")"
+	case 1:
+		return "morgen (" + dateLabel + ")"
+	case 2:
+		return "overmorgen (" + dateLabel + ")"
+	default:
+		return dutchDayName(target.Weekday()) + " (" + dateLabel + ")"
+	}
+}
+
+func pluralNL(count int, singular, plural string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %s", count, plural)
+}
+
+func countExposedAITools() (mutating int, confirmation int) {
+	for _, tool := range ai.AllTools {
+		name := tool.Function.Name
+		if ai.IsMutatingTool(name) {
+			mutating++
+		}
+		if ai.RequiresConfirmation(name) {
+			confirmation++
+		}
+	}
+	return mutating, confirmation
+}
+
+func configStatus(ok bool) string {
+	if ok {
+		return "actief"
+	}
+	return "niet ingesteld"
+}
+
+func emptyFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func queueModeLabel(queued bool) string {
+	if queued {
+		return "Render queue"
+	}
+	return "direct"
+}
+
+func deviceIsOn(device model.Device) bool {
+	if device.CurrentState == nil {
+		return false
+	}
+	for _, key := range []string{"on", "state"} {
+		value, ok := device.CurrentState[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed
+		case string:
+			lower := strings.ToLower(strings.TrimSpace(typed))
+			return lower == "true" || lower == "on" || lower == "aan"
+		}
+	}
+	return false
 }
 
 func (e *Engine) handleVandaagNotities(ctx context.Context, client *tg.Client, chatID int64) {
