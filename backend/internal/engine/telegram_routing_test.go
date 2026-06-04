@@ -62,6 +62,8 @@ func TestExpandTelegramCommand(t *testing.T) {
 	}{
 		{input: "/briefing", agentHint: "brain", contains: "dagbriefing"},
 		{input: "/planning", agentHint: "agenda", contains: "planning"},
+		{input: "/agenda", agentHint: "agenda", contains: "afsprakenopvragen"},
+		{input: "/rooster", agentHint: "rooster", contains: "dienstenopvragen"},
 		{input: "/news", agentHint: "brain", contains: "nieuws"},
 		{input: "/noteai", agentHint: "notes", contains: "notities"},
 		{input: "/notetriage", agentHint: "notes", contains: "triage"},

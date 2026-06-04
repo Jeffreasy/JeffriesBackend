@@ -592,9 +592,9 @@ func expandTelegramCommand(text string) (expanded string, agentHint string, ok b
 	case "/planning":
 		return "Wat staat er vandaag op mijn planning? Combineer werkdiensten en persoonlijke afspraken, en noem conflicten of aandachtspunten.", "agenda", true
 	case "/agenda", "/calendar":
-		return "Geef mijn aankomende agenda-afspraken en combineer ze waar relevant met mijn werkrooster.", "agenda", true
+		return "Geef mijn aankomende persoonlijke agenda-afspraken. Gebruik afsprakenOpvragen en combineer met planningOpvragen wanneer diensten relevant zijn. Maak duidelijk onderscheid tussen afspraken, diensten en wachtrij-items.", "agenda", true
 	case "/rooster":
-		return "Geef mijn aankomende diensten en vermeld het totaal aantal uren in de periode die je ophaalt.", "rooster", true
+		return "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag.", "rooster", true
 	case "/finance":
 		return "Geef een compacte finance status met saldo, salaris en opvallende transacties als die beschikbaar zijn.", "finance", true
 	case "/email", "/inbox":

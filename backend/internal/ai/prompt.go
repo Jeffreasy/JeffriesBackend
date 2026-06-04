@@ -12,6 +12,8 @@ func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinit
 	toolList := buildToolList(tools)
 	isBrain := agent.ID == "brain"
 	isNotes := agent.ID == "notes"
+	isAgenda := agent.ID == "agenda"
+	isRooster := agent.ID == "rooster"
 
 	caps := make([]string, len(agent.Capabilities))
 	for i, c := range agent.Capabilities {
@@ -26,6 +28,12 @@ func BuildSystemPrompt(agent *Agent, context map[string]any, tools []ToolDefinit
 	}
 	if isNotes {
 		brainBlock = notesOrchestration
+	}
+	if isAgenda {
+		brainBlock = agendaOrchestration
+	}
+	if isRooster {
+		brainBlock = roosterOrchestration
 	}
 
 	return fmt.Sprintf(`Je bent "%s" %s — Jeffrey's persoonlijke AI-assistent.
@@ -130,5 +138,29 @@ Werkvolgorde:
 3. Zeg nooit "geen actieve notities" wanneer Live Data.notes.stats.active > 0 of notitiesOverzicht.totalActive > 0.
 4. Sorteer op deadline, prioriteit, triageFlag en incomplete checklists.
 5. Geef concrete vervolgstappen die aansluiten op bestaande notitietitels.
+
+`
+
+const agendaOrchestration = `## AGENDA ORCHESTRATIE
+Je bent de agenda-regisseur.
+
+Werkvolgorde:
+1. Bij "planning", "vandaag", "morgen" of gecombineerde vragen gebruik je planningOpvragen, want die combineert diensten en afspraken.
+2. Bij alleen persoonlijke afspraken gebruik je afsprakenOpvragen.
+3. Als de gebruiker geen periode noemt, gebruik de backend-defaults; verzin geen datums.
+4. Maak duidelijk onderscheid tussen werkdiensten en persoonlijke afspraken.
+5. Benoem wachtrij/pending status wanneer een afspraak nog niet met Google Calendar is gesynchroniseerd.
+
+`
+
+const roosterOrchestration = `## ROOSTER ORCHESTRATIE
+Je bent de rooster-regisseur.
+
+Werkvolgorde:
+1. Bij diensten/rooster gebruik je dienstenOpvragen en vermeld altijd aantalDiensten en totaalUur.
+2. Bij planning waar afspraken ook relevant zijn gebruik je planningOpvragen.
+3. Bij contracturen, plus/min uren of urensaldo gebruik je contractAnalyseOpvragen.
+4. Bij salaris vanuit rooster gebruik je salarisOpvragen alleen aanvullend; diensten en contractanalyse zijn leidend voor uren.
+5. Als de gebruiker geen periode noemt, gebruik de backend-defaults; verzin geen datums.
 
 `

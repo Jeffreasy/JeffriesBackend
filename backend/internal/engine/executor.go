@@ -113,7 +113,8 @@ func parseToolDateRange(argsJSON string, fallbackToday bool) (startIso, eindIso 
 		StartIso string `json:"startIso"`
 		EindIso  string `json:"eindIso"`
 	}
-	if strings.TrimSpace(argsJSON) == "" {
+	argsJSON = strings.TrimSpace(argsJSON)
+	if argsJSON == "" || argsJSON == "null" {
 		argsJSON = "{}"
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -154,6 +155,16 @@ func todayAmsterdamISO() string {
 		loc = time.UTC
 	}
 	return time.Now().In(loc).Format("2006-01-02")
+}
+
+func toolPeriodLabel(startIso, eindIso string, hasRange bool) string {
+	if !hasRange {
+		return "eerstvolgend"
+	}
+	if startIso == eindIso {
+		return startIso
+	}
+	return startIso + " t/m " + eindIso
 }
 
 func parseOptionalNoteDeadline(value string) (*time.Time, error) {
@@ -752,8 +763,12 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 
 		return e.jsonResponse(map[string]any{
-			"diensten":  events,
-			"totaalUur": total,
+			"scope":          "werkrooster",
+			"periode":        toolPeriodLabel(startIso, eindIso, hasRange),
+			"aantalDiensten": len(events),
+			"diensten":       events,
+			"totaalUur":      total,
+			"instruction":    "Vermeld totaalUur altijd wanneer je diensten samenvat. Zonder opgegeven periode zijn dit de eerstvolgende diensten.",
 		}, nil)
 
 	case "contractAnalyseOpvragen":
@@ -1040,7 +1055,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			events, err = e.personalEvStore.ListUpcoming(ctx, e.userID, 10)
 		}
 		events = visiblePersonalEvents(events)
-		return e.jsonResponse(events, err)
+		return e.jsonResponse(map[string]any{
+			"scope":           "persoonlijke agenda-afspraken",
+			"periode":         toolPeriodLabel(startIso, eindIso, hasRange),
+			"aantalAfspraken": len(events),
+			"afspraken":       events,
+			"instruction":     "Dit zijn persoonlijke afspraken, niet de diensten. Gebruik planningOpvragen wanneer diensten en afspraken samen nodig zijn.",
+		}, err)
 
 	case "afspraakMaken":
 		var args struct {

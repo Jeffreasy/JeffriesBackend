@@ -48,7 +48,11 @@ func (s *ScheduleStore) ListByDate(ctx context.Context, userID, date string) ([]
 
 // ListUpcoming returns future diensten starting from today.
 func (s *ScheduleStore) ListUpcoming(ctx context.Context, userID string, limit int) ([]model.Schedule, error) {
-	today := time.Now().Format("2006-01-02")
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	today := time.Now().In(loc).Format("2006-01-02")
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, event_id, titel, start_datum::text, start_tijd,
 		        eind_datum::text, eind_tijd, werktijd, locatie, team, shift_type,

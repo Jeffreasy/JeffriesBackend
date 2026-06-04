@@ -30,3 +30,16 @@ func TestParseArgsParsesProvidedToolArguments(t *testing.T) {
 		t.Fatalf("Limit = %d, want 7", args.Limit)
 	}
 }
+
+func TestParseToolDateRangeAcceptsNullArguments(t *testing.T) {
+	start, end, hasRange, err := parseToolDateRange("null", true)
+	if err != nil {
+		t.Fatalf("parseToolDateRange() error = %v", err)
+	}
+	if !hasRange {
+		t.Fatal("expected fallback today range")
+	}
+	if start == "" || end == "" || start != end {
+		t.Fatalf("unexpected fallback range: start=%q end=%q", start, end)
+	}
+}

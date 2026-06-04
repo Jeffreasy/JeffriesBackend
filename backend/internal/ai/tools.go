@@ -196,7 +196,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "dienstenOpvragen",
-			Description: "Haalt het dienstrooster op voor een specifieke periode.",
+			Description: "Haalt het dienstrooster op. Zonder datums gebruikt de backend automatisch de eerstvolgende diensten.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -209,7 +209,7 @@ var AllTools = []ToolDefinition{
 						"description": "Eind datum (YYYY-MM-DD)."
 					}
 				},
-				"required": ["startIso", "eindIso"]
+				"required": []
 			}`),
 		},
 	},
@@ -229,7 +229,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "salarisOpvragen",
-			Description: "Haalt een samenvatting of details van de loonstroken op.",
+			Description: "Haalt een samenvatting of details van de loonstroken op. Jaar en periode zijn optioneel.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -242,7 +242,7 @@ var AllTools = []ToolDefinition{
 						"description": "Periode of maand (1-12)."
 					}
 				},
-				"required": ["jaar"]
+				"required": []
 			}`),
 		},
 	},
@@ -336,7 +336,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "afsprakenOpvragen",
-			Description: "Haalt Google Calendar afspraken op.",
+			Description: "Haalt Google Calendar afspraken op. Zonder datums gebruikt de backend automatisch de eerstvolgende afspraken.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -349,7 +349,7 @@ var AllTools = []ToolDefinition{
 						"description": "Eind datum (YYYY-MM-DD)."
 					}
 				},
-				"required": ["startIso", "eindIso"]
+				"required": []
 			}`),
 		},
 	},
