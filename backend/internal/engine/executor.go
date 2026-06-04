@@ -111,6 +111,30 @@ func todayAmsterdamISO() string {
 	return time.Now().In(loc).Format("2006-01-02")
 }
 
+func parseOptionalNoteDeadline(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02 15:04",
+		"2006-01-02",
+		"02-01-2006 15:04",
+		"02-01-2006",
+	} {
+		parsed, err := time.ParseInLocation(layout, value, loc)
+		if err == nil {
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("ongeldige deadline: %s", value)
+}
+
 func visibleSchedules(events []model.Schedule) []model.Schedule {
 	visible := make([]model.Schedule, 0, len(events))
 	for _, event := range events {
@@ -451,7 +475,10 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		notes, err := e.noteStore.Search(ctx, e.userID, args.Query, 5) // Hard cap op 5
-		return e.jsonResponse(notes, err)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(activeNotes(notes), nil)
 
 	case "notitiesOverzicht":
 		var args struct {
@@ -499,17 +526,36 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "notitieAanmaken":
 		var args struct {
-			Titel  string   `json:"titel"`
-			Inhoud string   `json:"inhoud"`
-			Tags   []string `json:"tags"`
+			Titel      string   `json:"titel"`
+			Inhoud     string   `json:"inhoud"`
+			Tags       []string `json:"tags"`
+			Prioriteit string   `json:"prioriteit"`
+			Symbol     string   `json:"symbol"`
+			Deadline   string   `json:"deadline"`
+			TriageFlag *bool    `json:"triage_flag"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		deadline, err := parseOptionalNoteDeadline(args.Deadline)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		title := strings.TrimSpace(args.Titel)
+		if title == "" {
+			title = cleanNoteTitle(args.Inhoud)
+		}
+		if title == "" {
+			title = "Nieuwe notitie"
+		}
 		n, err := e.noteStore.Create(ctx, e.userID, model.Note{
-			Titel:  &args.Titel,
-			Inhoud: args.Inhoud,
-			Tags:   args.Tags,
+			Titel:      &title,
+			Inhoud:     args.Inhoud,
+			Tags:       args.Tags,
+			Prioriteit: strPtr(args.Prioriteit),
+			Symbol:     strPtr(args.Symbol),
+			Deadline:   deadline,
+			TriageFlag: args.TriageFlag,
 		})
 		if err != nil {
 			return e.jsonResponse(nil, err)
@@ -526,7 +572,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		todayStr := time.Now().In(loc).Format("2006-01-02")
 		var todayNotes []model.Note
 		for _, n := range notes {
-			if !n.IsArchived && n.Aangemaakt.In(loc).Format("2006-01-02") == todayStr {
+			if !n.IsArchived && (n.Aangemaakt.In(loc).Format("2006-01-02") == todayStr || n.Gewijzigd.In(loc).Format("2006-01-02") == todayStr) {
 				todayNotes = append(todayNotes, n)
 			}
 		}

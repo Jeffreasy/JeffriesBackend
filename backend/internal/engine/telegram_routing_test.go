@@ -3,14 +3,24 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	tg "github.com/Jeffreasy/JeffriesBackend/internal/telegram"
+	"github.com/google/uuid"
 )
 
 func TestRouteFreeTextPlanningGoesToAgenda(t *testing.T) {
 	got := routeFreeText("wat staat er vandaag op mijn planning?")
 	if got != "agenda" {
 		t.Fatalf("routeFreeText() = %q, want agenda", got)
+	}
+}
+
+func TestRouteFreeTextNoteIntentGoesToNotes(t *testing.T) {
+	got := routeFreeText("onthoud dat ik HenkeWonen morgen moet terugbellen")
+	if got != "notes" {
+		t.Fatalf("routeFreeText() = %q, want notes", got)
 	}
 }
 
@@ -53,6 +63,9 @@ func TestExpandTelegramCommand(t *testing.T) {
 		{input: "/briefing", agentHint: "brain", contains: "dagbriefing"},
 		{input: "/planning", agentHint: "agenda", contains: "planning"},
 		{input: "/news", agentHint: "brain", contains: "nieuws"},
+		{input: "/noteai", agentHint: "notes", contains: "notities"},
+		{input: "/notetriage", agentHint: "notes", contains: "triage"},
+		{input: "/notesamenvatting", agentHint: "notes", contains: "samen"},
 	}
 
 	for _, tt := range tests {
@@ -77,6 +90,9 @@ func TestTelegramMenusUseShortCallbackData(t *testing.T) {
 		{name: "main", rows: buildMainMenu().InlineKeyboard},
 		{name: "lamp", rows: buildLampMenu().InlineKeyboard},
 		{name: "notes", rows: buildNotesMenu().InlineKeyboard},
+		{name: "note-dashboard", rows: buildNotesDashboardKeyboard([]model.Note{
+			{ID: uuid.MustParse("65360cd0-0a6f-4a52-a5af-5486f6e2d1f7")},
+		}).InlineKeyboard},
 	} {
 		for _, row := range menu.rows {
 			for _, button := range row {
@@ -85,5 +101,47 @@ func TestTelegramMenusUseShortCallbackData(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestChecklistProgress(t *testing.T) {
+	checked, total := checklistProgress("- [x] klaar\n- [ ] open\n✅ gedaan\nlosse regel")
+	if checked != 2 || total != 3 {
+		t.Fatalf("checklistProgress() = %d/%d, want 2/3", checked, total)
+	}
+}
+
+func TestParseNoteCaptureEnrichesTelegramNote(t *testing.T) {
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, loc)
+	capture := parseNoteCapture("Bel HenkeWonen morgen 11:00 #werk !hoog", now, loc)
+
+	if capture.Title != "Bel HenkeWonen morgen 11:00" {
+		t.Fatalf("Title = %q", capture.Title)
+	}
+	if capture.Priority == nil || *capture.Priority != "hoog" {
+		t.Fatalf("Priority = %v, want hoog", capture.Priority)
+	}
+	if capture.Symbol == nil || *capture.Symbol != "warning" {
+		t.Fatalf("Symbol = %v, want warning", capture.Symbol)
+	}
+	if capture.TriageFlag == nil || !*capture.TriageFlag {
+		t.Fatal("expected triage flag")
+	}
+	if capture.Deadline == nil || capture.Deadline.In(loc).Format("2006-01-02 15:04") != "2026-06-05 11:00" {
+		t.Fatalf("Deadline = %v, want 2026-06-05 11:00", capture.Deadline)
+	}
+	if !hasTag(capture.Tags, "werk") {
+		t.Fatalf("Tags = %v, want werk", capture.Tags)
+	}
+}
+
+func TestParseOptionalNoteDeadline(t *testing.T) {
+	parsed, err := parseOptionalNoteDeadline("05-06-2026 11:45")
+	if err != nil {
+		t.Fatalf("parseOptionalNoteDeadline() error = %v", err)
+	}
+	if parsed == nil || parsed.Format("2006-01-02 15:04") != "2026-06-05 11:45" {
+		t.Fatalf("parsed = %v, want 2026-06-05 11:45", parsed)
 	}
 }

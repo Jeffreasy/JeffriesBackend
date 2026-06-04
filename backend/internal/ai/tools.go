@@ -258,6 +258,23 @@ var AllTools = []ToolDefinition{
 						"type": "array",
 						"items": {"type": "string"},
 						"description": "Lijst van tags (zonder #), bijv. ['idee', 'werk', 'huis']."
+					},
+					"prioriteit": {
+						"type": "string",
+						"enum": ["laag", "normaal", "hoog"],
+						"description": "Optionele prioriteit wanneer de gebruiker urgentie aangeeft."
+					},
+					"symbol": {
+						"type": "string",
+						"description": "Optioneel frontend-symbool, bijv. note, check, calendar, warning, work, finance, habit, shield, sparkles of light."
+					},
+					"deadline": {
+						"type": "string",
+						"description": "Optionele deadline als ISO datum/tijd of yyyy-mm-dd wanneer de gebruiker een datum noemt."
+					},
+					"triage_flag": {
+						"type": "boolean",
+						"description": "Zet op true wanneer de notitie vandaag aandacht nodig heeft, urgent is of een open actie bevat."
 					}
 				},
 				"required": ["titel", "inhoud"]
