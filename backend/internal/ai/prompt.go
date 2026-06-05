@@ -123,7 +123,10 @@ func buildToolList(tools []ToolDefinition) string {
 }
 
 func todayCET() string {
-	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
 	return time.Now().In(loc).Format("2006-01-02")
 }
 

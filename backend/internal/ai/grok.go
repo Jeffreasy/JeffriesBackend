@@ -244,7 +244,16 @@ func (c *GrokClient) Chat(
 		// Execute tool calls
 		for _, tc := range msg.ToolCalls {
 			toolStart := time.Now()
-			result := executor.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			var result string
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("tool execution panic", "tool", tc.Function.Name, "recover", r)
+						result = fmt.Sprintf(`{"error": "Fout bij uitvoeren van tool: interne panic: %v"}`, r)
+					}
+				}()
+				result = executor.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			}()
 			toolDur := time.Since(toolStart)
 			toolsUsed = append(toolsUsed, fmt.Sprintf("%s(%dms)", tc.Function.Name, toolDur.Milliseconds()))
 
