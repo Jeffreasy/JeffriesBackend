@@ -55,10 +55,37 @@ func TestExternalNewsIntent(t *testing.T) {
 }
 
 func TestStripTelegramPlainText(t *testing.T) {
-	got := stripTelegramPlainText("**Kop**\n[Bron](https://example.com)")
-	want := "Kop\nBron (https://example.com)"
-	if got != want {
-		t.Fatalf("stripTelegramPlainText() = %q, want %q", got, want)
+	// Test bold and link conversion
+	got1 := stripTelegramPlainText("**Kop**\n[Bron](https://example.com)")
+	want1 := "Kop\nBron (https://example.com)"
+	if got1 != want1 {
+		t.Errorf("stripTelegramPlainText() = %q, want %q", got1, want1)
+	}
+
+	// Test headers (ensuring no sub-hash bugs)
+	got2 := stripTelegramPlainText("#### Sub-sectie\n# Hoofdkop")
+	want2 := "Sub-sectie\nHoofdkop"
+	if got2 != want2 {
+		t.Errorf("stripTelegramPlainText() with headers = %q, want %q", got2, want2)
+	}
+
+	// Test bullet lists (asterisks should not be stripped if they are list items)
+	got3 := stripTelegramPlainText("* Bullet 1\n* Bullet 2 met *italic* en _underscore_")
+	want3 := "* Bullet 1\n* Bullet 2 met italic en underscore"
+	if got3 != want3 {
+		t.Errorf("stripTelegramPlainText() with bullets = %q, want %q", got3, want3)
+	}
+}
+
+func TestRelativeDateLabelDST(t *testing.T) {
+	// Mock a DST transition day in spring: Sunday 2026-03-29 clocks go forward.
+	// We'll test from Saturday 2026-03-28 to Sunday 2026-03-29.
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	nowSaturday := time.Date(2026, 3, 28, 12, 0, 0, 0, loc)
+
+	got := relativeDateLabel("2026-03-29", nowSaturday)
+	if !strings.HasPrefix(got, "morgen") {
+		t.Fatalf("relativeDateLabel on spring DST transition weekend got %q, want starting with 'morgen'", got)
 	}
 }
 
@@ -232,5 +259,18 @@ func TestParseOptionalNoteDeadline(t *testing.T) {
 	}
 	if parsed == nil || parsed.Format("2006-01-02 15:04") != "2026-06-05 11:45" {
 		t.Fatalf("parsed = %v, want 2026-06-05 11:45", parsed)
+	}
+}
+
+func TestFormatNoteDeadlineDST(t *testing.T) {
+	// Mock a DST transition day in spring: Sunday 2026-03-29 clocks go forward.
+	// We'll test from Saturday 2026-03-28 to Sunday 2026-03-29.
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	nowSaturday := time.Date(2026, 3, 28, 12, 0, 0, 0, loc)
+	deadlineSunday := time.Date(2026, 3, 29, 15, 0, 0, 0, loc)
+
+	got := formatNoteDeadline(deadlineSunday, nowSaturday, loc)
+	if got != "morgen" {
+		t.Fatalf("formatNoteDeadline on spring DST transition weekend got %q, want 'morgen'", got)
 	}
 }

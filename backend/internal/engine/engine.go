@@ -78,7 +78,7 @@ func (e *Engine) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	if e.cfg.EngineCronsEnabled {
-		RegisterHomeappCrons(e.cron, e.db, CronConfig{
+		RegisterHomeappCrons(e.cron, e, CronConfig{
 			TelegramBotToken:      e.cfg.TelegramBotToken,
 			TelegramChatID:        e.cfg.TelegramChatID,
 			GmailEnabled:          e.cfg.GmailEnabled,

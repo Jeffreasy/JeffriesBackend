@@ -13,15 +13,13 @@ import (
 
 // StartCleaner starts a background task that periodically cleans up old database logs and temp files.
 func StartCleaner(ctx context.Context, db *store.DB) {
-	// Start immediately and then every 24 hours
 	slog.Info("starting background cleaner service", "interval", "24h")
 	
-	// Perform an initial cleanup right away
-	performCleanup(ctx, db)
-
 	ticker := time.NewTicker(24 * time.Hour)
 	go func() {
 		defer ticker.Stop()
+		// Perform the initial cleanup inside the goroutine so startup is non-blocking
+		performCleanup(ctx, db)
 		for {
 			select {
 			case <-ctx.Done():
@@ -54,7 +52,11 @@ func performCleanup(ctx context.Context, db *store.DB) {
 }
 
 func cleanTempDir() {
-	tmpDir := os.TempDir()
+	tmpDir := filepath.Join(os.TempDir(), "jeffries_homeapp")
+	if _, err := os.Stat(tmpDir); os.IsNotExist(err) {
+		return
+	}
+
 	cutoff := time.Now().Add(-24 * time.Hour)
 	deletedFiles := 0
 

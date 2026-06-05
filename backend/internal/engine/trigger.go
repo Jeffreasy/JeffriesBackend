@@ -44,10 +44,30 @@ func ShouldFire(auto map[string]any, now time.Time, todayShiftTypes map[string]b
 	// Check Convex lastFiredAt — prevent double fire after restart
 	autoID, _ := auto["_id"].(string)
 	if autoID != "" {
-		if lastFiredStr, _ := auto["lastFiredAt"].(string); lastFiredStr != "" {
-			if lastFired, err := time.Parse(time.RFC3339, strings.Replace(lastFiredStr, "Z", "+00:00", 1)); err == nil {
+		if val, exists := auto["lastFiredAt"]; exists && val != nil {
+			var lastFired time.Time
+			var parsed bool
+
+			switch v := val.(type) {
+			case string:
+				if t, err := time.Parse(time.RFC3339, strings.Replace(v, "Z", "+00:00", 1)); err == nil {
+					lastFired = t
+					parsed = true
+				}
+			case int64:
+				lastFired = time.UnixMilli(v)
+				parsed = true
+			case float64:
+				lastFired = time.UnixMilli(int64(v))
+				parsed = true
+			case int:
+				lastFired = time.UnixMilli(int64(v))
+				parsed = true
+			}
+
+			if parsed {
 				nowUTC := now.UTC()
-				if nowUTC.Sub(lastFired).Seconds() < MinFireInterval {
+				if nowUTC.Sub(lastFired.UTC()).Seconds() < MinFireInterval {
 					return false
 				}
 			}

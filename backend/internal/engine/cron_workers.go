@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,12 +15,12 @@ import (
 )
 
 // RegisterHomeappCrons adds all migrated Convex cron jobs to the scheduler.
-func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
+func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 
 	s.Register(CronJob{
 		Name:     "schedule-weekly-check",
 		Interval: 1 * time.Hour, // Evaluates hourly, but logic only executes on Sunday 19:00
-		RunFunc:  cronScheduleWeeklyCheck(db, cfg),
+		RunFunc:  cronScheduleWeeklyCheck(e.db, cfg),
 	})
 	// ── Simple DB-only crons ─────────────────────────────────────────────────
 
@@ -35,7 +37,7 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 		Name:     "purge-deleted-emails",
 		Interval: 24 * time.Hour,
 		RunFunc: func(ctx context.Context) error {
-			emailStore := store.NewEmailStore(db)
+			emailStore := store.NewEmailStore(e.db)
 			purged, err := emailStore.PurgeDeleted(ctx, cfg.UserID, 7*24*time.Hour)
 			if err != nil {
 				return err
@@ -67,13 +69,13 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "telegram-scheduled-briefing",
 			Interval: 15 * time.Minute,
-			RunFunc:  cronTelegramBriefing(cfg),
+			RunFunc:  cronTelegramBriefing(e, cfg),
 		})
 
 		s.Register(CronJob{
 			Name:     "telegram-health-alerts",
 			Interval: 1 * time.Hour,
-			RunFunc:  cronTelegramHealthAlert(cfg),
+			RunFunc:  cronTelegramHealthAlert(e, cfg),
 		})
 	}
 
@@ -82,7 +84,7 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "sync-gmail",
 			Interval: 5 * time.Minute,
-			RunFunc:  cronGmailSync(oauthClient, db, cfg),
+			RunFunc:  cronGmailSync(oauthClient, e.db, cfg),
 		})
 	}
 
@@ -91,19 +93,19 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "sync-schedule-daily",
 			Interval: 24 * time.Hour,
-			RunFunc:  cronScheduleSync(oauthClient, db, cfg),
+			RunFunc:  cronScheduleSync(oauthClient, e.db, cfg),
 		})
 
 		s.Register(CronJob{
 			Name:     "sync-personal-events",
 			Interval: 1 * time.Hour,
-			RunFunc:  cronPersonalEventsSync(oauthClient, db, cfg),
+			RunFunc:  cronPersonalEventsSync(oauthClient, e.db, cfg),
 		})
 
 		s.Register(CronJob{
 			Name:     "process-pending-calendar",
 			Interval: 5 * time.Minute,
-			RunFunc:  cronPendingCalendar(oauthClient, db, cfg),
+			RunFunc:  cronPendingCalendar(oauthClient, e.db, cfg),
 		})
 	}
 
@@ -112,7 +114,7 @@ func RegisterHomeappCrons(s *CronScheduler, db *store.DB, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "sync-todoist-daily",
 			Interval: 24 * time.Hour,
-			RunFunc:  cronTodoistSync(db, cfg),
+			RunFunc:  cronTodoistSync(e.db, cfg),
 		})
 	}
 }
@@ -437,31 +439,123 @@ func cronTodoistSync(db *store.DB, cfg CronConfig) func(ctx context.Context) err
 
 // ── Telegram cron implementations ────────────────────────────────────────────
 
-func cronTelegramBriefing(cfg CronConfig) func(ctx context.Context) error {
+func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		now := time.Now().In(amsterdam)
-		hour := now.Hour()
 
-		if hour < 6 || hour > 9 {
+		// 1. Check user preferences for BriefingTime
+		prefStore := store.NewPreferencesStore(e.db.Pool)
+		prefs, err := prefStore.Get(ctx, cfg.UserID)
+		if err != nil {
+			slog.Warn("cronTelegramBriefing: failed to get user preferences", "error", err)
 			return nil
 		}
 
-		slog.Info("📬 telegram briefing check", "time", now.Format("15:04"))
-		// TODO: build briefing message from schedule + events
+		briefingTime := "08:00"
+		if prefs.BriefingTime != nil && *prefs.BriefingTime != "" {
+			briefingTime = *prefs.BriefingTime
+		}
+
+		// Parse BriefingTime hour and minute (format "HH:MM")
+		parts := strings.Split(briefingTime, ":")
+		if len(parts) != 2 {
+			slog.Warn("cronTelegramBriefing: invalid briefing_time format", "time", briefingTime)
+			return nil
+		}
+		targetHour, _ := strconv.Atoi(parts[0])
+		targetMinute, _ := strconv.Atoi(parts[1])
+
+		// Calculate difference in minutes
+		targetMinutes := targetHour*60 + targetMinute
+		currentMinutes := now.Hour()*60 + now.Minute()
+
+		// Since the cron runs every 15 minutes, we trigger if current time is within [targetMinutes, targetMinutes + 14]
+		// and we haven't sent a briefing yet today.
+		if currentMinutes < targetMinutes || currentMinutes >= targetMinutes+15 {
+			return nil
+		}
+
+		chatIDStr := cfg.TelegramChatID
+		if chatIDStr == "" {
+			return nil
+		}
+		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+		if err != nil {
+			slog.Warn("cronTelegramBriefing: invalid chat ID", "error", err)
+			return nil
+		}
+
+		// 2. Check if briefing was already sent today (start of today in Amsterdam)
+		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, amsterdam)
+
+		var alreadySent bool
+		err = e.db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM chat_messages
+				WHERE chat_id = $1 AND role = 'assistant' AND agent_id = 'brain'
+				  AND (content LIKE '%briefing%' OR content LIKE '%Briefing%')
+				  AND created_at >= $2
+			)`,
+			chatID, startOfToday,
+		).Scan(&alreadySent)
+		if err != nil {
+			slog.Warn("cronTelegramBriefing: failed to check chat history", "error", err)
+			return nil
+		}
+
+		if alreadySent {
+			slog.Debug("cronTelegramBriefing: briefing already sent today")
+			return nil
+		}
+
+		slog.Info("📬 cronTelegramBriefing: sending scheduled briefing", "time", now.Format("15:04"))
+
+		// 3. Trigger Grok AI to generate the briefing
+		briefingQuery := "Geef mij een compacte dagbriefing voor vandaag. Combineer planning, werkrooster, afspraken, notities, habits, email, lampen en systeemstatus. Sluit af met maximaal drie concrete aandachtspunten."
+
+		// Save the user intent message in history first to keep context clean
+		chatStore := store.NewChatStore(e.db.Pool)
+		_ = chatStore.SaveMessage(ctx, chatID, "user", briefingQuery, nil)
+
+		_, err = e.ProcessAIPrompt(ctx, chatID, briefingQuery, "brain", false)
+		if err != nil {
+			slog.Error("cronTelegramBriefing: failed to process briefing prompt", "error", err)
+			return err
+		}
+
 		return nil
 	}
 }
 
-func cronTelegramHealthAlert(cfg CronConfig) func(ctx context.Context) error {
+func cronTelegramHealthAlert(e *Engine, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		now := time.Now().In(amsterdam)
 		hour := now.Hour()
 
+		// Only check during day hours (7:00 to 22:00) to respect rest
 		if hour >= 23 || hour < 7 {
 			return nil
 		}
 
 		slog.Debug("🏥 health alert check", "time", now.Format("15:04"))
+
+		// Check for open pending actions that require confirmation
+		pendingStore := store.NewPendingStore(e.db.Pool)
+		actions, err := pendingStore.ListPending(ctx, cfg.UserID)
+		if err == nil && len(actions) > 0 {
+			var b strings.Builder
+			b.WriteString("🔔 Herinnering: Je hebt nog openstaande acties die wachten op bevestiging:\n")
+			for _, action := range actions {
+				b.WriteString(fmt.Sprintf("• %s (code: %s)\n", action.Summary, action.Code))
+			}
+			b.WriteString("\nGebruik /approve [code] of /bevestigingen om ze te verwerken.")
+
+			err = e.SendProactiveNotification(ctx, b.String())
+			if err != nil {
+				slog.Warn("cronTelegramHealthAlert: failed to send reminder", "error", err)
+			}
+		}
+
 		return nil
 	}
 }

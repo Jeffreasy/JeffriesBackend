@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
@@ -172,35 +173,42 @@ func (b *CloudBridge) pollCloudDeviceStatus(ctx context.Context) {
 		return
 	}
 
+	var wg sync.WaitGroup
 	for _, device := range devices {
 		if device.ID == "" || device.IPAddress == "" {
 			continue
 		}
 
-		state, err := b.wiz.GetState(device.IPAddress)
-		status := "online"
-		var currentState map[string]any
-		if err != nil {
-			status = "offline"
-		} else {
-			currentState = map[string]any{
-				"on":         state.On,
-				"brightness": state.Brightness,
-				"color_temp": state.ColorTemp,
-				"r":          state.R,
-				"g":          state.G,
-				"b":          state.B,
+		wg.Add(1)
+		go func(dev cloudDevice) {
+			defer wg.Done()
+			
+			state, err := b.wiz.GetState(dev.IPAddress)
+			status := "online"
+			var currentState map[string]any
+			if err != nil {
+				status = "offline"
+			} else {
+				currentState = map[string]any{
+					"on":         state.On,
+					"brightness": state.Brightness,
+					"color_temp": state.ColorTemp,
+					"r":          state.R,
+					"g":          state.G,
+					"b":          state.B,
+				}
 			}
-		}
 
-		err = b.doJSON(ctx, http.MethodPost, "/bridge/devices/"+device.ID+"/status", cloudStatusRequest{
-			Status:       status,
-			CurrentState: currentState,
-		}, nil)
-		if err != nil {
-			slog.Warn("cloud device status update failed", "device", device.Name, "ip", device.IPAddress, "error", err)
-		}
+			err = b.doJSON(ctx, http.MethodPost, "/bridge/devices/"+dev.ID+"/status", cloudStatusRequest{
+				Status:       status,
+				CurrentState: currentState,
+			}, nil)
+			if err != nil {
+				slog.Warn("cloud device status update failed", "device", dev.Name, "ip", dev.IPAddress, "error", err)
+			}
+		}(device)
 	}
+	wg.Wait()
 	slog.Info("✅ cloud status poll done", "count", len(devices))
 }
 

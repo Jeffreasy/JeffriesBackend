@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
@@ -88,21 +89,31 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 
 	wizParams := commandToWizParams(command)
 
-	// Send to all target devices
-	var success, failed int
+	// Send to all target devices concurrently
+	var wg sync.WaitGroup
+	var successCount, failedCount int
+	var mu sync.Mutex
+
 	for _, di := range infos {
-		_, wizErr := e.wiz.SendCommand(di.IP, "setPilot", wizParams)
-		if wizErr != nil {
-			slog.Warn("WiZ command failed", "ip", di.IP, "error", wizErr, "cmdID", cmd.ID)
-			failed++
-		} else {
-			slog.Info("WiZ command OK", "ip", di.IP, "cmdID", cmd.ID)
-			success++
-		}
+		wg.Add(1)
+		go func(info deviceInfo) {
+			defer wg.Done()
+			_, wizErr := e.wiz.SendCommand(info.IP, "setPilot", wizParams)
+			mu.Lock()
+			defer mu.Unlock()
+			if wizErr != nil {
+				slog.Warn("WiZ command failed", "ip", info.IP, "error", wizErr, "cmdID", cmd.ID)
+				failedCount++
+			} else {
+				slog.Info("WiZ command OK", "ip", info.IP, "cmdID", cmd.ID)
+				successCount++
+			}
+		}(di)
 	}
+	wg.Wait()
 
 	status := store.DeviceCommandStatusDone
-	if success == 0 && failed > 0 {
+	if successCount == 0 && failedCount > 0 {
 		status = store.DeviceCommandStatusFailed
 	}
 	if err := e.cmdStore.MarkDone(ctx, cmd.ID, status); err != nil {
@@ -230,8 +241,10 @@ func commandToWizParams(command map[string]any) map[string]any {
 
 // sleepCtx sleeps for the given duration or until the context is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-	case <-time.After(d):
+	case <-timer.C:
 	}
 }

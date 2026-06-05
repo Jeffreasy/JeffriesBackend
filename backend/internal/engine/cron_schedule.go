@@ -16,8 +16,35 @@ func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Cont
 	return func(ctx context.Context) error {
 		now := time.Now().In(amsterdam)
 		
-		// Run only on Sunday between 19:00 and 20:00
-		if now.Weekday() != time.Sunday || now.Hour() != 19 {
+		// Run only on Sunday evening between 19:00 and 22:00
+		if now.Weekday() != time.Sunday || now.Hour() < 19 || now.Hour() > 22 {
+			return nil
+		}
+
+		chatIDStr := cfg.TelegramChatID
+		if chatIDStr == "" {
+			return nil
+		}
+		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+		if err != nil {
+			slog.Warn("cronScheduleWeeklyCheck: invalid chat ID", "error", err)
+			return nil
+		}
+
+		// Check if the weekly check has already been sent today
+		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, amsterdam)
+		var alreadySent bool
+		err = db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM chat_messages
+				WHERE chat_id = $1 AND role = 'assistant'
+				  AND (content LIKE '%Rooster Waarschuwing%' OR content LIKE '%Rooster Info%' OR content LIKE '%Rooster Perfect%')
+				  AND created_at >= $2
+			)`,
+			chatID, startOfToday,
+		).Scan(&alreadySent)
+		if err == nil && alreadySent {
+			slog.Debug("cronScheduleWeeklyCheck: weekly schedule warning already sent today")
 			return nil
 		}
 
@@ -64,8 +91,7 @@ func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Cont
 		}
 
 		// Send to Telegram
-		if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
-			chatID, _ := strconv.ParseInt(cfg.TelegramChatID, 10, 64)
+		if cfg.TelegramBotToken != "" {
 			client := tg.NewClient(cfg.TelegramBotToken)
 			err = client.SendMessage(chatID, message)
 			if err != nil {
@@ -73,6 +99,10 @@ func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Cont
 				return err
 			}
 			slog.Info("📤 cronScheduleWeeklyCheck sent telegram alert", "hours", totalHours)
+
+			// Save to chat history for context and deduplication
+			chatStore := store.NewChatStore(db.Pool)
+			_ = chatStore.SaveMessage(ctx, chatID, "assistant", message, nil)
 		}
 
 		return nil
