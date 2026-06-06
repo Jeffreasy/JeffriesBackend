@@ -250,10 +250,11 @@ func cronScheduleSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) 
 	return func(ctx context.Context) error {
 		slog.Info("📅 sync-schedule: starting")
 
-		diensten, err := google.SyncSchedule(ctx, client, cfg.UserID, cfg.SDBCalendarID)
+		scheduleSync, err := google.SyncScheduleDetailed(ctx, client, cfg.UserID, cfg.SDBCalendarID)
 		if err != nil {
 			return err
 		}
+		diensten := scheduleSync.Diensten
 
 		// Convert to store format and bulk upsert
 		schedStore := store.NewScheduleStore(db)
@@ -285,7 +286,19 @@ func cronScheduleSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) 
 			return err
 		}
 
-		slog.Info("📅 sync-schedule: done", "parsed", len(diensten), "upserted", count)
+		pruned, err := schedStore.PruneMissingInDateRange(
+			ctx,
+			cfg.UserID,
+			scheduleSync.PruneStartDatum,
+			scheduleSync.PruneEindDatum,
+			scheduleSync.FetchedEventIDs,
+		)
+		if err != nil {
+			return err
+		}
+		_ = schedStore.UpsertMeta(ctx, cfg.UserID, "Google Calendar Sync", len(items))
+
+		slog.Info("📅 sync-schedule: done", "parsed", len(diensten), "upserted", count, "pruned", pruned)
 		return nil
 	}
 }
@@ -301,10 +314,11 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 			calendarIDs = splitCalendarIDs(cfg.PersonalCalendarIDs)
 		}
 
-		events, err := google.SyncPersonalEvents(ctx, client, cfg.UserID, calendarIDs, cfg.SDBCalendarID)
+		personalSync, err := google.SyncPersonalEventsDetailed(ctx, client, cfg.UserID, calendarIDs, cfg.SDBCalendarID)
 		if err != nil {
 			return err
 		}
+		events := personalSync.Events
 
 		evStore := store.NewPersonalEventStore(db)
 		upserted := 0
@@ -338,7 +352,19 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 			upserted++
 		}
 
-		slog.Info("📅 sync-personal-events: done", "parsed", len(events), "upserted", upserted)
+		pruned, err := evStore.MarkMissingSyncedInDateRange(
+			ctx,
+			cfg.UserID,
+			personalSync.PruneStartDatum,
+			personalSync.PruneEindDatum,
+			personalSync.FetchedEventIDs,
+			personalSync.SyncedKalenders,
+		)
+		if err != nil {
+			return err
+		}
+
+		slog.Info("📅 sync-personal-events: done", "parsed", len(events), "upserted", upserted, "pruned", pruned)
 		return nil
 	}
 }

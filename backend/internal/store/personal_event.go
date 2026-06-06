@@ -192,6 +192,46 @@ func (s *PersonalEventStore) UpdateStatus(ctx context.Context, userID, eventID, 
 	return err
 }
 
+// MarkMissingSyncedInDateRange marks synced Google Calendar events as deleted
+// when they are no longer returned by Google for the synced calendar scope.
+func (s *PersonalEventStore) MarkMissingSyncedInDateRange(ctx context.Context, userID, startIso, eindIso string, keepEventIDs, syncedKalenders []string) (int, error) {
+	if userID == "" || startIso == "" || eindIso == "" || len(syncedKalenders) == 0 {
+		return 0, nil
+	}
+
+	baseWhere := `user_id = $1
+	    AND start_datum >= $2
+	    AND start_datum <= $3
+	    AND kalender = ANY($4)
+	    AND status NOT IN ($5, $6, $7, $8)`
+
+	args := []any{
+		userID,
+		startIso,
+		eindIso,
+		syncedKalenders,
+		PersonalEventStatusDeleted,
+		PersonalEventStatusPendingCreate,
+		PersonalEventStatusPendingUpdate,
+		PersonalEventStatusPendingDelete,
+	}
+
+	sql := `UPDATE personal_events
+		   SET status = $5
+		 WHERE ` + baseWhere
+
+	if len(keepEventIDs) > 0 {
+		sql += ` AND NOT (event_id = ANY($9))`
+		args = append(args, keepEventIDs)
+	}
+
+	tag, err := s.db.Pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (s *PersonalEventStore) ReplaceEventIDAndStatus(ctx context.Context, userID, oldEventID, newEventID, status string) error {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {

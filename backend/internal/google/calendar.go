@@ -66,6 +66,16 @@ type ScheduleDienst struct {
 	Heledag      bool    `json:"heledag"`
 }
 
+// ScheduleSyncResult carries parsed shifts plus the raw Google event IDs
+// fetched in the active sync window. The raw IDs are used to remove stale
+// schedule rows when events are deleted from Google Calendar.
+type ScheduleSyncResult struct {
+	Diensten        []ScheduleDienst `json:"diensten"`
+	FetchedEventIDs []string         `json:"fetched_event_ids"`
+	PruneStartDatum string           `json:"prune_start_datum"`
+	PruneEindDatum  string           `json:"prune_eind_datum"`
+}
+
 // PersonalEventSync represents a parsed personal event for PostgreSQL.
 type PersonalEventSync struct {
 	UserID       string `json:"user_id"`
@@ -81,6 +91,16 @@ type PersonalEventSync struct {
 	Symbol       string `json:"symbol"`
 	Status       string `json:"status"`
 	Kalender     string `json:"kalender"`
+}
+
+// PersonalEventsSyncResult carries synced personal events plus the source
+// calendar scope used to mark locally stale Google Calendar rows as deleted.
+type PersonalEventsSyncResult struct {
+	Events          []PersonalEventSync `json:"events"`
+	FetchedEventIDs []string            `json:"fetched_event_ids"`
+	SyncedKalenders []string            `json:"synced_kalenders"`
+	PruneStartDatum string              `json:"prune_start_datum"`
+	PruneEindDatum  string              `json:"prune_eind_datum"`
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -111,6 +131,16 @@ func init() {
 
 // SyncSchedule fetches work shifts from Google Calendar and returns parsed diensten.
 func SyncSchedule(ctx context.Context, client *OAuthClient, userID, calendarID string) ([]ScheduleDienst, error) {
+	result, err := SyncScheduleDetailed(ctx, client, userID, calendarID)
+	if err != nil {
+		return nil, err
+	}
+	return result.Diensten, nil
+}
+
+// SyncScheduleDetailed fetches work shifts and the raw Google event IDs needed
+// to reconcile deleted Google Calendar events from the local schedule table.
+func SyncScheduleDetailed(ctx context.Context, client *OAuthClient, userID, calendarID string) (*ScheduleSyncResult, error) {
 	now := time.Now().In(amsterdam)
 	timeMin := now.AddDate(0, 0, -syncDaysBack)
 	timeMax := now.AddDate(0, 0, syncDaysForward)
@@ -121,7 +151,12 @@ func SyncSchedule(ctx context.Context, client *OAuthClient, userID, calendarID s
 	}
 
 	var diensten []ScheduleDienst
+	fetchedEventIDs := make([]string, 0, len(events))
 	for _, ev := range events {
+		if eventID := calendarEventStableID(ev); eventID != "" {
+			fetchedEventIDs = append(fetchedEventIDs, eventID)
+		}
+
 		titleL := strings.ToLower(ev.Summary)
 		descL := strings.ToLower(ev.Description)
 
@@ -154,11 +189,26 @@ func SyncSchedule(ctx context.Context, client *OAuthClient, userID, calendarID s
 	}
 
 	slog.Info("📅 schedule sync parsed", "events", len(events), "diensten", len(diensten))
-	return diensten, nil
+	return &ScheduleSyncResult{
+		Diensten:        diensten,
+		FetchedEventIDs: fetchedEventIDs,
+		PruneStartDatum: now.Format("2006-01-02"),
+		PruneEindDatum:  timeMax.In(amsterdam).Format("2006-01-02"),
+	}, nil
 }
 
 // SyncPersonalEvents fetches personal calendar events and returns them.
 func SyncPersonalEvents(ctx context.Context, client *OAuthClient, userID string, calendarIDs []string, sdbCalendarID string) ([]PersonalEventSync, error) {
+	result, err := SyncPersonalEventsDetailed(ctx, client, userID, calendarIDs, sdbCalendarID)
+	if err != nil {
+		return nil, err
+	}
+	return result.Events, nil
+}
+
+// SyncPersonalEventsDetailed fetches personal calendar events and the event IDs
+// needed to reconcile local rows that were deleted remotely.
+func SyncPersonalEventsDetailed(ctx context.Context, client *OAuthClient, userID string, calendarIDs []string, sdbCalendarID string) (*PersonalEventsSyncResult, error) {
 	now := time.Now().In(amsterdam)
 	timeMin := now.AddDate(0, 0, -syncDaysBack)
 	timeMax := now.AddDate(0, 0, syncDaysForward)
@@ -168,6 +218,8 @@ func SyncPersonalEvents(ctx context.Context, client *OAuthClient, userID string,
 	}
 
 	var allEvents []PersonalEventSync
+	fetchedEventIDs := []string{}
+	syncedKalenders := []string{}
 	for _, calID := range calendarIDs {
 		if calID == sdbCalendarID {
 			continue
@@ -183,17 +235,25 @@ func SyncPersonalEvents(ctx context.Context, client *OAuthClient, userID string,
 		if calID != "primary" {
 			kalenderName = calID
 		}
+		syncedKalenders = append(syncedKalenders, kalenderName)
 
 		for _, ev := range events {
 			pe := parsePersonalEvent(ev, userID, kalenderName, calID == "primary", now)
 			if pe != nil {
+				fetchedEventIDs = append(fetchedEventIDs, pe.EventID)
 				allEvents = append(allEvents, *pe)
 			}
 		}
 	}
 
 	slog.Info("📅 personal events sync parsed", "events", len(allEvents))
-	return allEvents, nil
+	return &PersonalEventsSyncResult{
+		Events:          allEvents,
+		FetchedEventIDs: fetchedEventIDs,
+		SyncedKalenders: syncedKalenders,
+		PruneStartDatum: now.Format("2006-01-02"),
+		PruneEindDatum:  timeMax.In(amsterdam).Format("2006-01-02"),
+	}, nil
 }
 
 // ─── Calendar API fetching ───────────────────────────────────────────────────
@@ -403,6 +463,26 @@ func calendarEventEndInstant(endDt time.Time, isAllDay bool) time.Time {
 	return endDt
 }
 
+func calendarEventStableID(ev calendarEvent) string {
+	if ev.ID != "" {
+		return ev.ID
+	}
+	if ev.Start == nil {
+		return strings.TrimSpace(ev.Summary)
+	}
+
+	startDate := ev.Start.Date
+	if startDate == "" && ev.Start.DateTime != "" {
+		if startDt, err := time.Parse(time.RFC3339, ev.Start.DateTime); err == nil {
+			startDate = startDt.In(amsterdam).Format("2006-01-02")
+		}
+	}
+	if startDate == "" {
+		return strings.TrimSpace(ev.Summary)
+	}
+	return fmt.Sprintf("%s-%s", ev.Summary, startDate)
+}
+
 func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *ScheduleDienst {
 	if ev.Start == nil || ev.End == nil {
 		return nil
@@ -429,10 +509,7 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 		duur = math.Round(eindDt.Sub(startDt).Hours()*100) / 100
 	}
 
-	eventID := ev.ID
-	if eventID == "" {
-		eventID = fmt.Sprintf("%s-%s", ev.Summary, startDt.Format("2006-01-02"))
-	}
+	eventID := calendarEventStableID(ev)
 
 	status := "Opkomend"
 	eventEnd := calendarEventEndInstant(eindDt, isAllDay)

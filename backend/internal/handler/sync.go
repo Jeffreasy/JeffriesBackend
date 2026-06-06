@@ -54,11 +54,12 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("pending calendar sync failed; continuing with calendar pull", "error", pendingErr)
 	}
 
-	diensten, err := google.SyncSchedule(ctx, client, userID, h.cfg.SDBCalendarID)
+	scheduleSync, err := google.SyncScheduleDetailed(ctx, client, userID, h.cfg.SDBCalendarID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Schedule sync failed: "+err.Error())
 		return
 	}
+	diensten := scheduleSync.Diensten
 
 	// Update schedule in db
 	scheduleStore := store.NewScheduleStore(h.db)
@@ -84,13 +85,30 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 			Heledag:      d.Heledag,
 		})
 	}
+	scheduleUpserted := 0
+	var scheduleWriteErr error
 	if len(scheduleImports) > 0 {
-		_, err := scheduleStore.BulkUpsert(ctx, userID, scheduleImports)
-		if err != nil {
-			slog.Error("Failed to upsert schedule", "error", err)
-		} else {
-			_ = scheduleStore.UpsertMeta(ctx, userID, "Google Calendar Sync", len(scheduleImports))
+		scheduleUpserted, scheduleWriteErr = scheduleStore.BulkUpsert(ctx, userID, scheduleImports)
+		if scheduleWriteErr != nil {
+			slog.Error("Failed to upsert schedule", "error", scheduleWriteErr)
 		}
+	}
+	schedulePruned := 0
+	var pruneErr error
+	if scheduleWriteErr == nil {
+		schedulePruned, pruneErr = scheduleStore.PruneMissingInDateRange(
+			ctx,
+			userID,
+			scheduleSync.PruneStartDatum,
+			scheduleSync.PruneEindDatum,
+			scheduleSync.FetchedEventIDs,
+		)
+		if pruneErr != nil {
+			slog.Warn("Failed to prune stale schedule rows", "error", pruneErr)
+		}
+	}
+	if scheduleWriteErr == nil {
+		_ = scheduleStore.UpsertMeta(ctx, userID, "Google Calendar Sync", len(scheduleImports))
 	}
 
 	calendarIDs := []string{"primary"}
@@ -98,14 +116,16 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		calendarIDs = splitCalendarIDs(h.cfg.PersonalCalendarIDs)
 	}
 
-	personalEvents, err := google.SyncPersonalEvents(ctx, client, userID, calendarIDs, h.cfg.SDBCalendarID)
+	personalSync, err := google.SyncPersonalEventsDetailed(ctx, client, userID, calendarIDs, h.cfg.SDBCalendarID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Personal event sync failed: "+err.Error())
 		return
 	}
+	personalEvents := personalSync.Events
 
 	// Update personal events in db
 	peStore := store.NewPersonalEventStore(h.db)
+	personalWriteFailed := false
 	for _, pe := range personalEvents {
 		startTijd := pe.StartTijd
 		var pStartTijd *string
@@ -153,19 +173,50 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 			Kalender:     pe.Kalender,
 		})
 		if err != nil {
+			personalWriteFailed = true
 			slog.Error("Failed to upsert personal event", "error", err)
+		}
+	}
+	personalPruned := 0
+	var personalPruneErr error
+	if !personalWriteFailed {
+		personalPruned, personalPruneErr = peStore.MarkMissingSyncedInDateRange(
+			ctx,
+			userID,
+			personalSync.PruneStartDatum,
+			personalSync.PruneEindDatum,
+			personalSync.FetchedEventIDs,
+			personalSync.SyncedKalenders,
+		)
+		if personalPruneErr != nil {
+			slog.Warn("Failed to mark stale personal events deleted", "error", personalPruneErr)
 		}
 	}
 
 	result := map[string]any{
 		"ok":               true,
 		"scheduleCount":    len(diensten),
+		"scheduleUpserted": scheduleUpserted,
+		"schedulePruned":   schedulePruned,
 		"personalCount":    len(personalEvents),
+		"personalPruned":   personalPruned,
 		"pendingProcessed": pendingProcessed,
 		"message":          "Kalender sync voltooid",
 	}
 	if pendingErr != nil {
 		result["pendingError"] = pendingErr.Error()
+	}
+	if scheduleWriteErr != nil {
+		result["scheduleWriteError"] = scheduleWriteErr.Error()
+	}
+	if pruneErr != nil {
+		result["schedulePruneError"] = pruneErr.Error()
+	}
+	if personalWriteFailed {
+		result["personalWriteError"] = "Een of meer persoonlijke afspraken konden niet worden opgeslagen."
+	}
+	if personalPruneErr != nil {
+		result["personalPruneError"] = personalPruneErr.Error()
 	}
 	JSON(w, http.StatusOK, result)
 }

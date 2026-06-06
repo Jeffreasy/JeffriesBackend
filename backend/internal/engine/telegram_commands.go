@@ -237,12 +237,14 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 
 	var (
 		wg sync.WaitGroup
-		
+
 		scheduleErr error
 		personalErr error
-		
+
 		schedules      []google.ScheduleDienst
 		personalEvents []google.PersonalEventSync
+		schedulePruned int
+		personalPruned int
 		gmailMsg       string
 	)
 
@@ -289,8 +291,10 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 		}
 
 		// 2. Sync Google Calendar shifts
-		schedules, scheduleErr = google.SyncSchedule(ctx, oauthClient, userID, e.cfg.SDBCalendarID)
-		if scheduleErr == nil && len(schedules) > 0 {
+		scheduleSync, err := google.SyncScheduleDetailed(ctx, oauthClient, userID, e.cfg.SDBCalendarID)
+		scheduleErr = err
+		if scheduleErr == nil {
+			schedules = scheduleSync.Diensten
 			scheduleStore := store.NewScheduleStore(e.db)
 			var scheduleImports []model.ScheduleImport
 			for _, d := range schedules {
@@ -314,8 +318,21 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 					Heledag:      d.Heledag,
 				})
 			}
-			_, _ = scheduleStore.BulkUpsert(ctx, userID, scheduleImports)
-			_ = scheduleStore.UpsertMeta(ctx, userID, "Telegram Sync", len(scheduleImports))
+			if _, err := scheduleStore.BulkUpsert(ctx, userID, scheduleImports); err != nil {
+				scheduleErr = err
+			}
+			if scheduleErr == nil {
+				schedulePruned, scheduleErr = scheduleStore.PruneMissingInDateRange(
+					ctx,
+					userID,
+					scheduleSync.PruneStartDatum,
+					scheduleSync.PruneEindDatum,
+					scheduleSync.FetchedEventIDs,
+				)
+			}
+			if scheduleErr == nil {
+				_ = scheduleStore.UpsertMeta(ctx, userID, "Telegram Sync", len(scheduleImports))
+			}
 		}
 
 		// 3. Sync Personal calendar events
@@ -330,8 +347,10 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 				}
 			}
 		}
-		personalEvents, personalErr = google.SyncPersonalEvents(ctx, oauthClient, userID, calendarIDs, e.cfg.SDBCalendarID)
+		personalSync, err := google.SyncPersonalEventsDetailed(ctx, oauthClient, userID, calendarIDs, e.cfg.SDBCalendarID)
+		personalErr = err
 		if personalErr == nil {
+			personalEvents = personalSync.Events
 			for _, pe := range personalEvents {
 				startTijd := pe.StartTijd
 				var pStartTijd *string
@@ -374,6 +393,17 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 					Status:       pe.Status,
 					Kalender:     pe.Kalender,
 				})
+			}
+			personalPruned, personalErr = peStore.MarkMissingSyncedInDateRange(
+				ctx,
+				userID,
+				personalSync.PruneStartDatum,
+				personalSync.PruneEindDatum,
+				personalSync.FetchedEventIDs,
+				personalSync.SyncedKalenders,
+			)
+			if personalErr != nil {
+				slog.Warn("telegram personal events prune failed", "error", personalErr)
 			}
 		}
 	}()
@@ -465,7 +495,14 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	if scheduleErr != nil {
 		fmt.Fprintf(&b, "❌ Kalender sync mislukt: %v\n", scheduleErr)
 	} else {
-		fmt.Fprintf(&b, "📅 Kalender: %d diensten, %d persoonlijke afspraken gesynchroniseerd.\n", len(schedules), len(personalEvents))
+		fmt.Fprintf(&b, "📅 Kalender: %d diensten, %d persoonlijke afspraken gesynchroniseerd", len(schedules), len(personalEvents))
+		if schedulePruned > 0 {
+			fmt.Fprintf(&b, " (%d stale dienst(en) verwijderd)", schedulePruned)
+		}
+		if personalPruned > 0 {
+			fmt.Fprintf(&b, " (%d stale afspraak/afspraken gemarkeerd)", personalPruned)
+		}
+		b.WriteString(".\n")
 	}
 	if gmailMsg != "" {
 		fmt.Fprintf(&b, "📧 %s\n", gmailMsg)

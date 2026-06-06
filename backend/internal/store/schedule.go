@@ -126,6 +126,41 @@ func (s *ScheduleStore) BulkUpsert(ctx context.Context, userID string, items []m
 	return count, nil
 }
 
+// PruneMissingInDateRange deletes local schedule rows that no longer exist in
+// the successfully fetched Google Calendar window.
+func (s *ScheduleStore) PruneMissingInDateRange(ctx context.Context, userID, startIso, eindIso string, keepEventIDs []string) (int, error) {
+	if userID == "" || startIso == "" || eindIso == "" {
+		return 0, nil
+	}
+
+	if len(keepEventIDs) == 0 {
+		tag, err := s.db.Pool.Exec(ctx,
+			`DELETE FROM schedule
+			  WHERE user_id = $1
+			    AND start_datum >= $2
+			    AND start_datum <= $3`,
+			userID, startIso, eindIso,
+		)
+		if err != nil {
+			return 0, err
+		}
+		return int(tag.RowsAffected()), nil
+	}
+
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM schedule
+		  WHERE user_id = $1
+		    AND start_datum >= $2
+		    AND start_datum <= $3
+		    AND NOT (event_id = ANY($4))`,
+		userID, startIso, eindIso, keepEventIDs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // GetMeta returns the schedule import metadata for a user.
 func (s *ScheduleStore) GetMeta(ctx context.Context, userID string) (*model.ScheduleMeta, error) {
 	var m model.ScheduleMeta
