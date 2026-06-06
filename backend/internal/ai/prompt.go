@@ -200,7 +200,7 @@ Werkvolgorde:
 1. Bij status, cockpit, CRM, leads, projecten, acties of LaventeCare vragen gebruik je laventecareCockpit als eerste bron.
 2. Gebruik laventecareLeadsOpvragen, laventecareProjectenOpvragen en laventecareActiesOpvragen voor detaillijsten.
 3. Gebruik laventecareKennisZoeken alleen met een concrete zoekterm. Als de documentbasis leeg is, benoem dat en adviseer initialiseren via de UI.
-4. Mutaties zoals leads, projecten en acties maken of bijwerken staan alleen klaar na server-side bevestiging.
+4. Mutaties zoals leads, projecten, acties, besluiten, change requests en SLA-incidenten maken of bijwerken staan alleen klaar na server-side bevestiging.
 5. Hanteer Nederlandse status- en prioriteitswaarden: actief, wacht_op_klant, afgerond, gewonnen, verloren, laag, normaal, hoog.
 6. Verzin nooit leads, projecten, documenten, signalen of pipeline-statussen.
 

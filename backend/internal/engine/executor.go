@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"reflect"
 	"sort"
@@ -293,6 +294,18 @@ func parseUUIDs(values []string) ([]uuid.UUID, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func parseOptionalUUID(value string) (*uuid.UUID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
 }
 
 func parseToolDateRange(argsJSON string, fallbackToday bool) (startIso, eindIso string, hasRange bool, err error) {
@@ -882,7 +895,7 @@ func (e *HomeBotExecutor) executeContractAnalyse(ctx context.Context) string {
 }
 
 func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON string) string {
-	fmt.Printf("[EXECUTOR] Tool: %s, Args: %s\n", toolName, argsJSON)
+	slog.Info("AI tool execute", "tool", toolName)
 	switch toolName {
 
 	// ── EMAIL ────────────────────────────────────────────────────────
@@ -2584,6 +2597,104 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		return e.jsonResponse(map[string]any{"ok": true, "actionId": id.String(), "status": status}, nil)
+
+	case "laventecareBesluitMaken":
+		var args struct {
+			ProjectID string  `json:"project_id"`
+			Titel     string  `json:"titel"`
+			Besluit   string  `json:"besluit"`
+			Reden     string  `json:"reden"`
+			Impact    *string `json:"impact"`
+			Status    string  `json:"status"`
+			Datum     string  `json:"datum"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Titel) == "" || strings.TrimSpace(args.Besluit) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel en besluit verplicht"))
+		}
+		if strings.TrimSpace(args.Reden) == "" {
+			args.Reden = "Niet gespecificeerd"
+		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		decision, err := e.laventeCareStore.CreateDecision(ctx, e.userID, model.LCDecision{
+			ProjectID: projectID,
+			Titel:     args.Titel,
+			Besluit:   args.Besluit,
+			Reden:     args.Reden,
+			Impact:    args.Impact,
+			Status:    args.Status,
+			Datum:     args.Datum,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "decision": decision}, err)
+
+	case "laventecareChangeRequestMaken":
+		var args struct {
+			ProjectID      string  `json:"project_id"`
+			Titel          string  `json:"titel"`
+			Impact         string  `json:"impact"`
+			PlanningImpact *string `json:"planning_impact"`
+			BudgetImpact   *string `json:"budget_impact"`
+			Status         string  `json:"status"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Titel) == "" || strings.TrimSpace(args.Impact) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel en impact verplicht"))
+		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		change, err := e.laventeCareStore.CreateChangeRequest(ctx, e.userID, model.LCChangeRequest{
+			ProjectID:      projectID,
+			Titel:          args.Titel,
+			Impact:         args.Impact,
+			PlanningImpact: args.PlanningImpact,
+			BudgetImpact:   args.BudgetImpact,
+			Status:         args.Status,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "changeRequest": change}, err)
+
+	case "laventecareSlaIncidentMaken":
+		var args struct {
+			ProjectID       string  `json:"project_id"`
+			Titel           string  `json:"titel"`
+			Prioriteit      string  `json:"prioriteit"`
+			Status          string  `json:"status"`
+			Kanaal          string  `json:"kanaal"`
+			ReactieDeadline string  `json:"reactie_deadline"`
+			Samenvatting    *string `json:"samenvatting"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Titel) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel verplicht"))
+		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		deadline, err := parseOptionalNoteDeadline(args.ReactieDeadline)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		incident, err := e.laventeCareStore.CreateSlaIncident(ctx, e.userID, model.LCSlaIncident{
+			ProjectID:       projectID,
+			Titel:           args.Titel,
+			Prioriteit:      args.Prioriteit,
+			Status:          args.Status,
+			Kanaal:          args.Kanaal,
+			ReactieDeadline: deadline,
+			Samenvatting:    args.Samenvatting,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "slaIncident": incident}, err)
 
 	// ── SMART HOME ───────────────────────────────────────────────────
 	case "lampBedien":

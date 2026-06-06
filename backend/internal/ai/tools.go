@@ -1011,6 +1011,65 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareBesluitMaken",
+			Description: "Legt een LaventeCare besluit vast in de decision log. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"project_id": {"type": "string", "description": "Optionele project UUID."},
+					"titel": {"type": "string"},
+					"besluit": {"type": "string"},
+					"reden": {"type": "string"},
+					"impact": {"type": "string"},
+					"status": {"type": "string", "description": "Default: genomen."},
+					"datum": {"type": "string", "description": "YYYY-MM-DD, default vandaag."}
+				},
+				"required": ["titel", "besluit"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareChangeRequestMaken",
+			Description: "Maakt een LaventeCare change request. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"project_id": {"type": "string", "description": "Optionele project UUID."},
+					"titel": {"type": "string"},
+					"impact": {"type": "string"},
+					"planning_impact": {"type": "string"},
+					"budget_impact": {"type": "string"},
+					"status": {"type": "string", "description": "Default: nieuw."}
+				},
+				"required": ["titel", "impact"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareSlaIncidentMaken",
+			Description: "Registreert een LaventeCare SLA-incident. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"project_id": {"type": "string", "description": "Optionele project UUID."},
+					"titel": {"type": "string"},
+					"prioriteit": {"type": "string", "description": "Bijv. P1, P2, P3 of P4. Default P3."},
+					"status": {"type": "string", "description": "Default: open."},
+					"kanaal": {"type": "string", "description": "Default: telegram."},
+					"reactie_deadline": {"type": "string", "description": "Optioneel RFC3339, YYYY-MM-DD HH:MM of YYYY-MM-DD."},
+					"samenvatting": {"type": "string"}
+				},
+				"required": ["titel"]
+			}`),
+		},
+	},
 
 	// ── SMART HOME ─────────────────────────────────────────────────────
 	{

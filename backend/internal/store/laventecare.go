@@ -558,6 +558,39 @@ func (s *LaventeCareStore) listSlaIncidents(ctx context.Context, userID string, 
 	})
 }
 
+func (s *LaventeCareStore) CreateSlaIncident(ctx context.Context, userID string, input model.LCSlaIncident) (*model.LCSlaIncident, error) {
+	now := time.Now().UTC()
+	input.ID = uuid.New()
+	input.UserID = userID
+	input.CreatedAt = now
+	input.UpdatedAt = now
+	if input.GemeldOp.IsZero() {
+		input.GemeldOp = now
+	}
+	if strings.TrimSpace(input.Prioriteit) == "" {
+		input.Prioriteit = "P3"
+	}
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "open"
+	}
+	if strings.TrimSpace(input.Kanaal) == "" {
+		input.Kanaal = "telegram"
+	}
+
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_sla_incidents (id, user_id, project_id, titel, prioriteit,
+		        status, kanaal, gemeld_op, reactie_deadline, samenvatting,
+		        created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+		input.ID, input.UserID, input.ProjectID, input.Titel, input.Prioriteit,
+		input.Status, input.Kanaal, input.GemeldOp, input.ReactieDeadline,
+		input.Samenvatting, input.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &input, nil
+}
+
 func (s *LaventeCareStore) listChangeRequests(ctx context.Context, userID string, limit int) ([]model.LCChangeRequest, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, project_id, titel, impact, planning_impact,
@@ -576,6 +609,28 @@ func (s *LaventeCareStore) listChangeRequests(ctx context.Context, userID string
 	})
 }
 
+func (s *LaventeCareStore) CreateChangeRequest(ctx context.Context, userID string, input model.LCChangeRequest) (*model.LCChangeRequest, error) {
+	now := time.Now().UTC()
+	input.ID = uuid.New()
+	input.UserID = userID
+	input.CreatedAt = now
+	input.UpdatedAt = now
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "nieuw"
+	}
+
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_change_requests (id, user_id, project_id, titel, impact,
+		        planning_impact, budget_impact, status, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+		input.ID, input.UserID, input.ProjectID, input.Titel, input.Impact,
+		input.PlanningImpact, input.BudgetImpact, input.Status, input.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &input, nil
+}
+
 func (s *LaventeCareStore) listDecisions(ctx context.Context, userID string, limit int) ([]model.LCDecision, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, project_id, titel, besluit, reden, impact, status, datum, created_at
@@ -591,6 +646,30 @@ func (s *LaventeCareStore) listDecisions(ctx context.Context, userID string, lim
 			&d.Reden, &d.Impact, &d.Status, &d.Datum, &d.CreatedAt)
 		return d, err
 	})
+}
+
+func (s *LaventeCareStore) CreateDecision(ctx context.Context, userID string, input model.LCDecision) (*model.LCDecision, error) {
+	now := time.Now().UTC()
+	input.ID = uuid.New()
+	input.UserID = userID
+	input.CreatedAt = now
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "genomen"
+	}
+	if strings.TrimSpace(input.Datum) == "" {
+		input.Datum = now.Format("2006-01-02")
+	}
+
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_decisions (id, user_id, project_id, titel, besluit, reden,
+		        impact, status, datum, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		input.ID, input.UserID, input.ProjectID, input.Titel, input.Besluit,
+		input.Reden, input.Impact, input.Status, input.Datum, input.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &input, nil
 }
 
 // ─── Row scanners ────────────────────────────────────────────────────────────

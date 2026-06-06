@@ -193,6 +193,12 @@ func summarizePendingTool(toolName, argsJSON string) string {
 		return cleanSummary("LaventeCare actie maken", value("title"))
 	case "laventecareActieAfronden":
 		return cleanSummary("LaventeCare actie afronden", value("id"), value("status"))
+	case "laventecareBesluitMaken":
+		return cleanSummary("LaventeCare besluit vastleggen", value("titel"), value("datum"))
+	case "laventecareChangeRequestMaken":
+		return cleanSummary("LaventeCare change request maken", value("titel"), value("impact"))
+	case "laventecareSlaIncidentMaken":
+		return cleanSummary("LaventeCare SLA-incident registreren", value("titel"), value("prioriteit"))
 	default:
 		return cleanSummary("AI-mutatie bevestigen", toolName)
 	}
