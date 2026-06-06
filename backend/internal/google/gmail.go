@@ -116,7 +116,7 @@ func SyncGmail(ctx context.Context, client *OAuthClient, userID, historyID strin
 func incrementalGmailSync(ctx context.Context, client *OAuthClient, userID, historyID string) (*GmailSyncResult, []ParsedEmail, string, error) {
 	params := url.Values{
 		"startHistoryId": {historyID},
-		"historyTypes":   {"messageAdded,labelAdded,labelRemoved"},
+		"historyTypes":   {"messageAdded", "labelAdded", "labelRemoved"},
 	}
 
 	var histResp gmailHistoryResponse

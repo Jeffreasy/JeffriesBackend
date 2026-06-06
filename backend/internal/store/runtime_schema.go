@@ -17,7 +17,47 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureNoteRevisionSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure note revision schema: %w", err)
 	}
+	if err := ensureBrainPreferencesSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure brain preferences schema: %w", err)
+	}
 	return nil
+}
+
+func ensureBrainPreferencesSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+ALTER TABLE brain_preferences ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE brain_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE brain_preferences ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE brain_preferences ALTER COLUMN updated_at SET DEFAULT now();
+
+CREATE OR REPLACE FUNCTION homeapp_jsonb_to_text_array(value JSONB)
+RETURNS TEXT[] LANGUAGE SQL IMMUTABLE AS $$
+    SELECT COALESCE(array_agg(elem), ARRAY[]::TEXT[])
+      FROM jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::JSONB END
+      ) AS elem
+$$;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_name = 'brain_preferences'
+           AND column_name = 'focus_areas'
+           AND udt_name = 'jsonb'
+    ) THEN
+        ALTER TABLE brain_preferences ALTER COLUMN focus_areas DROP DEFAULT;
+        ALTER TABLE brain_preferences
+            ALTER COLUMN focus_areas TYPE TEXT[]
+            USING homeapp_jsonb_to_text_array(focus_areas);
+        ALTER TABLE brain_preferences ALTER COLUMN focus_areas SET DEFAULT '{}';
+    END IF;
+END $$;
+
+DROP FUNCTION IF EXISTS homeapp_jsonb_to_text_array(JSONB);
+`)
+	return err
 }
 
 func ensureNoteRevisionSchema(ctx context.Context, db *DB) error {
