@@ -1591,8 +1591,8 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 
-		active := make([]model.Note, 0, limit)
-		totalActive := 0
+		items := make([]model.Note, 0, limit)
+		totalOpen := 0
 		totalPinned := 0
 		totalCompleted := 0
 		totalArchived := 0
@@ -1601,15 +1601,16 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 				totalArchived++
 				continue
 			}
-			totalActive++
+			if note.IsCompleted {
+				totalCompleted++
+				continue
+			}
+			totalOpen++
 			if note.IsPinned {
 				totalPinned++
 			}
-			if note.IsCompleted {
-				totalCompleted++
-			}
-			if len(active) < limit {
-				active = append(active, note)
+			if len(items) < limit {
+				items = append(items, note)
 			}
 		}
 
@@ -1626,12 +1627,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 
 		return e.jsonResponse(map[string]any{
-			"totalActive":    totalActive,
-			"totalPinned":    totalPinned,
-			"totalCompleted": totalCompleted,
-			"totalArchived":  totalArchived,
-			"limit":          limit,
-			"hasActive":      totalActive > 0,
+			"totalActive":       totalOpen,
+			"totalOpen":         totalOpen,
+			"totalInCollection": totalOpen + totalCompleted,
+			"totalPinned":       totalPinned,
+			"totalCompleted":    totalCompleted,
+			"totalArchived":     totalArchived,
+			"limit":             limit,
+			"hasActive":         totalOpen > 0,
 			"stats": map[string]any{
 				"active":    stats.Active,
 				"today":     stats.Today,
@@ -1641,7 +1644,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 				"topTags":   stats.TopTags,
 			},
 			"focus":       focus,
-			"items":       active,
+			"items":       items,
 			"instruction": "Als totalActive groter is dan 0, zeg nooit dat er geen actieve notities zijn. Gebruik focus voor prioriteit, deadline, checklist en triage.",
 		}, nil)
 
@@ -1683,6 +1686,155 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		return fmt.Sprintf(`{"success": true, "note_id": "%s"}`, n.ID)
 
+	case "notitiePinnen":
+		var args struct {
+			ID     string `json:"id"`
+			Pinned *bool  `json:"pinned"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(strings.TrimSpace(args.ID))
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id"))
+		}
+		current, err := e.noteStore.GetForUser(ctx, e.userID, id)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		nextPinned := !current.IsPinned
+		if args.Pinned != nil {
+			nextPinned = *args.Pinned
+		}
+		updated, err := e.noteStore.UpdateForUser(ctx, e.userID, id, map[string]any{"is_pinned": nextPinned})
+		loc, _ := time.LoadLocation("Europe/Amsterdam")
+		if loc == nil {
+			loc = time.UTC
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "note": noteAIItem(updated, time.Now().In(loc), loc)}, err)
+
+	case "notitieBewerken":
+		var args struct {
+			ID          string   `json:"id"`
+			Titel       *string  `json:"titel"`
+			Inhoud      *string  `json:"inhoud"`
+			Tags        []string `json:"tags"`
+			Prioriteit  *string  `json:"prioriteit"`
+			Symbol      *string  `json:"symbol"`
+			Deadline    *string  `json:"deadline"`
+			TriageFlag  *bool    `json:"triage_flag"`
+			IsCompleted *bool    `json:"is_completed"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(strings.TrimSpace(args.ID))
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id"))
+		}
+		fields := map[string]any{}
+		if args.Titel != nil {
+			fields["titel"] = strings.TrimSpace(*args.Titel)
+		}
+		if args.Inhoud != nil {
+			fields["inhoud"] = strings.TrimRight(*args.Inhoud, "\r\n\t ")
+		}
+		if args.Tags != nil {
+			fields["tags"] = args.Tags
+		}
+		if args.Prioriteit != nil {
+			priority := strings.TrimSpace(strings.ToLower(*args.Prioriteit))
+			if priority != "" && priority != "laag" && priority != "normaal" && priority != "hoog" {
+				return e.jsonResponse(nil, fmt.Errorf("prioriteit moet laag, normaal of hoog zijn"))
+			}
+			fields["prioriteit"] = priority
+		}
+		if args.Symbol != nil {
+			symbol := strings.TrimSpace(*args.Symbol)
+			if symbol == "" {
+				fields["symbol"] = nil
+			} else {
+				fields["symbol"] = symbol
+			}
+		}
+		if args.Deadline != nil {
+			deadline, err := parseOptionalNoteDeadline(*args.Deadline)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			fields["deadline"] = deadline
+		}
+		if args.TriageFlag != nil {
+			fields["triage_flag"] = *args.TriageFlag
+		}
+		if args.IsCompleted != nil {
+			fields["is_completed"] = *args.IsCompleted
+			if *args.IsCompleted {
+				fields["completed_at"] = time.Now()
+				fields["triage_flag"] = false
+			} else {
+				fields["completed_at"] = nil
+			}
+		}
+		if len(fields) == 0 {
+			return e.jsonResponse(nil, fmt.Errorf("geen wijzigingen opgegeven"))
+		}
+		updated, err := e.noteStore.UpdateForUser(ctx, e.userID, id, fields)
+		loc, _ := time.LoadLocation("Europe/Amsterdam")
+		if loc == nil {
+			loc = time.UTC
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "note": noteAIItem(updated, time.Now().In(loc), loc)}, err)
+
+	case "notitieArchiveren":
+		var args struct {
+			ID       string `json:"id"`
+			Archived *bool  `json:"archived"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(strings.TrimSpace(args.ID))
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id"))
+		}
+		nextArchived := true
+		if args.Archived != nil {
+			nextArchived = *args.Archived
+		}
+		updated, err := e.noteStore.UpdateForUser(ctx, e.userID, id, map[string]any{"is_archived": nextArchived})
+		loc, _ := time.LoadLocation("Europe/Amsterdam")
+		if loc == nil {
+			loc = time.UTC
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "archived": nextArchived, "note": noteAIItem(updated, time.Now().In(loc), loc)}, err)
+
+	case "bulkArchiveerNotities":
+		var args struct {
+			IDs []string `json:"ids"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if len(args.IDs) == 0 {
+			return e.jsonResponse(nil, fmt.Errorf("ids verplicht"))
+		}
+		if len(args.IDs) > 20 {
+			args.IDs = args.IDs[:20]
+		}
+		archived := 0
+		for _, rawID := range args.IDs {
+			id, err := uuid.Parse(strings.TrimSpace(rawID))
+			if err != nil {
+				return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id: %s", rawID))
+			}
+			if _, err := e.noteStore.UpdateForUser(ctx, e.userID, id, map[string]any{"is_archived": true}); err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			archived++
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "archived": archived}, nil)
+
 	case "notitiesVandaag":
 		notes, err := e.noteStore.List(ctx, e.userID)
 		if err != nil {
@@ -1703,14 +1855,16 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 
 		active := activeNotes(notes)
+		open := openNotes(notes)
 		stats := buildNoteStats(active, now, loc)
 		return e.jsonResponse(map[string]any{
 			"scope":       "notities aangemaakt of gewijzigd vandaag",
 			"date":        todayStr,
 			"count":       len(todayNotes),
 			"items":       todayNotes,
-			"totalActive": len(active),
-			"hasActive":   len(active) > 0,
+			"totalActive": len(open),
+			"totalOpen":   len(open),
+			"hasActive":   len(open) > 0,
 			"stats": map[string]any{
 				"active":    stats.Active,
 				"today":     stats.Today,

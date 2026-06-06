@@ -112,6 +112,15 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
 		return
 	}
+	linkedEventID, err := h.store.NormalizeLinkedEventID(r.Context(), userID, body.LinkedEventID)
+	if err != nil {
+		if errors.Is(err, store.ErrLinkedEventNotFound) {
+			Error(w, http.StatusBadRequest, "linked event not found")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	n := model.Note{
 		Titel:         body.Titel,
@@ -119,7 +128,7 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Tags:          body.Tags,
 		Kleur:         body.Kleur,
 		Deadline:      deadline,
-		LinkedEventID: body.LinkedEventID,
+		LinkedEventID: linkedEventID,
 		Prioriteit:    body.Prioriteit,
 		Symbol:        body.Symbol,
 	}
@@ -214,11 +223,16 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.LinkedEventID != nil {
-		if *body.LinkedEventID == "" {
-			fields["linked_event_id"] = nil
-		} else {
-			fields["linked_event_id"] = *body.LinkedEventID
+		linkedEventID, err := h.store.NormalizeLinkedEventID(r.Context(), userID, body.LinkedEventID)
+		if err != nil {
+			if errors.Is(err, store.ErrLinkedEventNotFound) {
+				Error(w, http.StatusBadRequest, "linked event not found")
+				return
+			}
+			Error(w, http.StatusInternalServerError, err.Error())
+			return
 		}
+		fields["linked_event_id"] = linkedEventID
 	}
 
 	if body.Deadline != nil {

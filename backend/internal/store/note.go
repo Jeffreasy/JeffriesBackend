@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -22,6 +23,7 @@ func NewNoteStore(db *DB) *NoteStore { return &NoteStore{db: db} }
 var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
 var ErrNoteNotFound = pgx.ErrNoRows
+var ErrLinkedEventNotFound = errors.New("linked event not found")
 
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived, is_completed, completed_at,
 	deadline, linked_event_id, prioriteit, symbol, triage_flag, aangemaakt, gewijzigd`
@@ -114,6 +116,40 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		return created, err
 	}
 	return created, nil
+}
+
+// NormalizeLinkedEventID trims and validates note agenda links against known
+// personal events or roster schedule entries. Legacy pending placeholders are
+// treated as no link so they do not keep polluting the note graph.
+func (s *NoteStore) NormalizeLinkedEventID(ctx context.Context, userID string, value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	eventID := strings.TrimSpace(*value)
+	if eventID == "" || isPendingLinkedEventID(eventID) {
+		return nil, nil
+	}
+
+	var exists bool
+	err := s.db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM personal_events WHERE user_id = $1 AND event_id = $2
+			UNION ALL
+			SELECT 1 FROM schedule WHERE user_id = $1 AND event_id = $2
+		)
+	`, userID, eventID).Scan(&exists)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrLinkedEventNotFound
+	}
+	return &eventID, nil
+}
+
+func isPendingLinkedEventID(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return strings.Contains(value, "::pending::") || strings.HasPrefix(value, "pending:")
 }
 
 // Update patches a note with the given fields.
@@ -456,10 +492,24 @@ func (s *NoteStore) Search(ctx context.Context, userID, query string, limit int)
 		limit = 20
 	}
 	rows, err := s.db.Pool.Query(ctx, fmt.Sprintf(`
-		SELECT %s FROM notes
+		WITH q AS (
+			SELECT plainto_tsquery('dutch', $2) AS tsq,
+			       '%%' || lower($2) || '%%' AS likeq
+		)
+		SELECT %s FROM notes, q
 		WHERE user_id = $1
-		  AND to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud) @@ plainto_tsquery('dutch', $2)
-		ORDER BY gewijzigd DESC
+		  AND NOT is_archived
+		  AND (
+			  to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud) @@ q.tsq
+			  OR lower(COALESCE(prioriteit,'')) LIKE q.likeq
+			  OR lower(COALESCE(symbol,'')) LIKE q.likeq
+			  OR EXISTS (
+				  SELECT 1
+				  FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag
+				  WHERE lower(tag) LIKE q.likeq
+			  )
+		  )
+		ORDER BY is_pinned DESC, gewijzigd DESC
 		LIMIT $3
 	`, noteCols), userID, query, limit)
 	if err != nil {

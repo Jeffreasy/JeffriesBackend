@@ -594,6 +594,72 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "notitiePinnen",
+			Description: "Zet een bestaande notitie vast of haalt de pin eraf. Gebruik een id uit notitiesOverzicht of Live Data.notes.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Notitie-id."},
+					"pinned": {"type": "boolean", "description": "Optioneel: true om vast te zetten, false om los te maken. Zonder waarde wordt gewisseld."}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "notitieBewerken",
+			Description: "Bewerkt een bestaande notitie. Deze mutatie loopt via bevestiging voordat hij wordt uitgevoerd.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Notitie-id."},
+					"titel": {"type": "string"},
+					"inhoud": {"type": "string", "description": "Nieuwe volledige inhoud wanneer de inhoud vervangen moet worden."},
+					"tags": {"type": "array", "items": {"type": "string"}},
+					"prioriteit": {"type": "string", "enum": ["laag", "normaal", "hoog"]},
+					"symbol": {"type": "string"},
+					"deadline": {"type": "string", "description": "ISO datum/tijd, yyyy-mm-dd, dd-mm-yyyy of leeg om te wissen."},
+					"triage_flag": {"type": "boolean"},
+					"is_completed": {"type": "boolean"}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "notitieArchiveren",
+			Description: "Archiveert of herstelt een bestaande notitie. Deze mutatie loopt via bevestiging voordat hij wordt uitgevoerd.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Notitie-id."},
+					"archived": {"type": "boolean", "description": "Optioneel: true archiveert, false zet terug."}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "bulkArchiveerNotities",
+			Description: "Archiveert meerdere notities tegelijk. Deze mutatie loopt via bevestiging voordat hij wordt uitgevoerd.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"ids": {"type": "array", "items": {"type": "string"}, "description": "Maximaal 20 notitie-id's."}
+				},
+				"required": ["ids"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "habitAanmaken",
 			Description: "Maakt een nieuwe habit met verstandige defaults. Deze mutatie wordt direct uitgevoerd.",
 			Parameters: json.RawMessage(`{

@@ -103,9 +103,19 @@ func activeNotes(notes []model.Note) []model.Note {
 	return active
 }
 
+func openNotes(notes []model.Note) []model.Note {
+	open := make([]model.Note, 0, len(notes))
+	for _, note := range notes {
+		if !note.IsArchived && !note.IsCompleted {
+			open = append(open, note)
+		}
+	}
+	return open
+}
+
 func buildNoteStats(notes []model.Note, now time.Time, loc *time.Location) noteStats {
 	today := now.In(loc).Format("2006-01-02")
-	stats := noteStats{Active: len(notes)}
+	stats := noteStats{}
 	tagCounts := make(map[string]int)
 
 	for _, note := range notes {
@@ -117,7 +127,9 @@ func buildNoteStats(notes []model.Note, now time.Time, loc *time.Location) noteS
 		}
 		if note.IsCompleted {
 			stats.Completed++
+			continue
 		}
+		stats.Active++
 		if noteNeedsAttention(note, now, loc) {
 			stats.Attention++
 		}
