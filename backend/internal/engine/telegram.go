@@ -33,8 +33,11 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 		default:
 		}
 
-		updates, err := client.GetUpdates(offset, 25)
+		updates, err := client.GetUpdatesContext(ctx, offset, 10)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			slog.Error("telegram getUpdates failed", "error", err, "backoff", backoff)
 			sleepCtx(ctx, backoff)
 			backoff *= 2
@@ -55,12 +58,18 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
+			if ctx.Err() != nil {
+				return
+			}
 			go func(u tg.Update) {
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Error("telegram processUpdate panic", "recover", r)
 					}
 				}()
+				if ctx.Err() != nil {
+					return
+				}
 				e.processUpdate(ctx, client, u)
 			}(update)
 		}
@@ -70,6 +79,10 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 }
 
 func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg.Update) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	// Handle Callback Queries (Button Clicks)
 	if cb := update.CallbackQuery; cb != nil {
 		if cb.Message == nil || cb.Message.Chat == nil {

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,6 +167,11 @@ func (c *Client) DeleteWebhook(dropPending bool) error {
 
 // GetUpdates long-polls for new messages.
 func (c *Client) GetUpdates(offset int64, timeout int) ([]Update, error) {
+	return c.GetUpdatesContext(context.Background(), offset, timeout)
+}
+
+// GetUpdatesContext long-polls for new messages and aborts when ctx is cancelled.
+func (c *Client) GetUpdatesContext(ctx context.Context, offset int64, timeout int) ([]Update, error) {
 	// Use a longer timeout for the HTTP client during long-polling
 	client := &http.Client{Timeout: time.Duration(timeout+5) * time.Second}
 	data, _ := json.Marshal(map[string]any{
@@ -173,7 +179,13 @@ func (c *Client) GetUpdates(offset int64, timeout int) ([]Update, error) {
 		"timeout":         timeout,
 		"allowed_updates": []string{"message", "callback_query"},
 	})
-	resp, err := client.Do(mustReq("POST", c.apiURL("getUpdates"), data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL("getUpdates"), bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
