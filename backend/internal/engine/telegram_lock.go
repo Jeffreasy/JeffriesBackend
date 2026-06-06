@@ -24,6 +24,10 @@ func (e *Engine) loopTelegramWithLock(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			if isClosedPoolError(err) {
+				slog.Warn("telegram poller stopping because database pool is closed")
+				return
+			}
 			slog.Warn("telegram poller lock check failed", "error", err)
 		} else if acquired {
 			slog.Info("telegram poller lock acquired")

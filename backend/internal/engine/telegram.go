@@ -52,6 +52,9 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 
 		if len(updates) > 0 {
 			slog.Info("📩 telegram updates received", "count", len(updates))
+			if e.databasePoolClosed(ctx) {
+				return
+			}
 		}
 
 		for _, update := range updates {

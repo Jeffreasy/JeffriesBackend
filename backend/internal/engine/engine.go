@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,27 @@ func init() {
 		amsterdam = time.UTC
 		slog.Warn("failed to load Europe/Amsterdam timezone, using UTC")
 	}
+}
+
+func isClosedPoolError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "closed pool")
+}
+
+func (e *Engine) databasePoolClosed(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if e == nil || e.db == nil || e.db.Pool == nil {
+		return false
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	if err := e.db.Ping(pingCtx); isClosedPoolError(err) {
+		slog.Warn("database pool closed; stopping engine work")
+		return true
+	}
+	return false
 }
 
 // Engine is the server-side automation engine — fully PostgreSQL-driven.
@@ -150,6 +172,10 @@ func (e *Engine) loopAutomations(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := e.tick(ctx); err != nil {
+				if isClosedPoolError(err) {
+					slog.Warn("automation loop stopping because database pool is closed")
+					return
+				}
 				slog.Warn("automation tick error", "error", err)
 			}
 		}
