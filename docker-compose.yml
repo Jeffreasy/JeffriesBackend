@@ -108,10 +108,19 @@ services:
       - BRIDGE_API_URL=${BRIDGE_API_URL:-}
       - BRIDGE_API_KEY=${BRIDGE_API_KEY:-change-me}
       - BRIDGE_STATUS_POLL_ENABLED=${BRIDGE_STATUS_POLL_ENABLED:-true}
+      # Local Docker is bridge-only. Render owns Telegram, AI crons and Google sync.
+      - TELEGRAM_BOT_ENABLED=false
+      - TELEGRAM_BOT_TOKEN=
+      - TELEGRAM_CHAT_ID=
+      - START_BACKGROUND_ENGINE=false
+      - ENGINE_CRONS_ENABLED=false
+      - ENGINE_AUTOMATIONS_ENABLED=false
+      - ENGINE_COMMAND_POLLER_ENABLED=false
+      - GMAIL_SYNC_ENABLED=false
+      - GOOGLE_CALENDAR_SYNC_ENABLED=false
+      - TODOIST_SYNC_ENABLED=false
       - GROK_API_KEY=${GROK_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     depends_on:
       postgres:
         condition: service_healthy
