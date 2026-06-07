@@ -24,6 +24,8 @@ This backend exposes a Go/chi REST API for the Homeapp frontend. The API runs on
 | Device command queue migration | `backend/migrations/009_device_command_claiming.up.sql` |
 | Note/event symbols migration | `backend/migrations/010_symbols.up.sql` |
 | Note revision history migration | `backend/migrations/011_note_revisions.up.sql` |
+| LaventeCare workstreams migration | `backend/migrations/015_laventecare_workstreams.up.sql` |
+| LaventeCare customer dossiers migration | `backend/migrations/016_laventecare_customer_dossiers.up.sql` |
 
 When route behavior and Swagger disagree, fix the handler annotation or route mount and regenerate Swagger. Do not treat generated docs as the only source of truth.
 
@@ -54,7 +56,7 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 | Privacy | `GET /privacy`, `PUT /privacy` |
 | Notes | `GET/POST /notes`, `GET /notes/search`, `GET /notes/tags`, `GET/PATCH/DELETE /notes/{id}`, `GET /notes/{id}/backlinks`, `GET /notes/{id}/revisions`, `POST /notes/{id}/revisions/{revisionID}/restore` |
 | Habits | `GET/POST /habits`, `GET /habits/for-date`, `GET /habits/stats`, `GET /habits/heatmap`, `GET /habits/badges`, `GET/PATCH/DELETE /habits/{id}`, habit action posts |
-| LaventeCare | cockpit, documents, leads, projects, actions, signal conversion, document seeding |
+| LaventeCare | `GET /laventecare/cockpit`, `GET/POST /laventecare/companies`, `PATCH /laventecare/companies/{id}`, `GET/POST /laventecare/contacts`, `PATCH /laventecare/contacts/{id}`, leads, workstreams/opdrachten, projects, actions, signal conversion, dossier documents, document seeding |
 | Settings | `GET /settings/overview`, `GET /settings/backup`, `GET /settings/telegram/status` |
 | Sync | `GET /sync/status`, `POST /sync/calendar`, `POST /sync/gmail` |
 
@@ -85,6 +87,13 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 - Completion is separate from archive: completed notes remain queryable and usable in journals.
 - `PATCH /notes/{id}` with `isCompleted: true|false` updates `is_completed`; the server manages `completed_at`.
 - Completion-only updates do not create a note revision.
+
+## LaventeCare Customer Dossiers
+
+- `lc_companies` is the first layer for existing customers, prospects, partners, and suppliers.
+- Leads, projects, workstreams, actions, and generated dossier documents can all carry `company_id`.
+- `lc_contacts` stores reusable people per company, with one optional primary contact per company.
+- The cockpit includes `companies`, `contacts`, and summary counts so frontend, Telegram, and AI tools can reason from the customer base instead of loose names.
 
 ## Render And WiZ Command Flow
 

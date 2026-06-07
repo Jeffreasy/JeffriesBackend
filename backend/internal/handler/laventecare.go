@@ -39,6 +39,195 @@ func (h *LaventeCareHandler) Cockpit(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, cockpit)
 }
 
+// ListCompanies returns LaventeCare companies/customer dossiers.
+// @Summary List Companies
+// @Description Returns LaventeCare customer/company dossiers
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(30)
+// @Param q query string false "Search by name or website"
+// @Success 200 {array} model.LCCompany
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/companies [get]
+func (h *LaventeCareHandler) ListCompanies(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	query := r.URL.Query().Get("q")
+	companies, err := h.store.ListCompanies(r.Context(), h.userID, limit, query)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, companies)
+}
+
+// CreateCompany creates a LaventeCare customer/company dossier.
+// @Summary Create Company
+// @Description Creates a reusable customer/company dossier
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCCompanyCreate true "Company Details"
+// @Success 201 {object} model.LCCompany
+// @Failure 400 {string} string "Invalid request body or missing name"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/companies [post]
+func (h *LaventeCareHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
+	var input model.LCCompanyCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Naam == "" {
+		Error(w, http.StatusBadRequest, "Naam is verplicht")
+		return
+	}
+
+	company, err := h.store.CreateCompany(r.Context(), h.userID, input)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, company)
+}
+
+// UpdateCompany modifies a LaventeCare customer/company dossier.
+// @Summary Update Company
+// @Description Updates a reusable customer/company dossier
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Company ID (UUID)"
+// @Param request body model.LCCompanyUpdate true "Company Update"
+// @Success 200 {object} map[string]string "status ok"
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Company not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/companies/{id} [patch]
+func (h *LaventeCareHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid company ID")
+		return
+	}
+	var input model.LCCompanyUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := h.store.UpdateCompany(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListContacts returns LaventeCare contacts.
+// @Summary List Contacts
+// @Description Returns contacts, optionally filtered by company
+// @Tags LaventeCare
+// @Produce json
+// @Param companyId query string false "Company ID (UUID)"
+// @Param limit query int false "Limit count" default(30)
+// @Success 200 {array} model.LCContact
+// @Failure 400 {string} string "Invalid companyId"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/contacts [get]
+func (h *LaventeCareHandler) ListContacts(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	var companyID *uuid.UUID
+	if raw := r.URL.Query().Get("companyId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid companyId")
+			return
+		}
+		companyID = &id
+	}
+	contacts, err := h.store.ListContacts(r.Context(), h.userID, companyID, limit)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, contacts)
+}
+
+// CreateContact creates a LaventeCare contact.
+// @Summary Create Contact
+// @Description Creates a reusable contact for a customer/company
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCContactCreate true "Contact Details"
+// @Success 201 {object} model.LCContact
+// @Failure 400 {string} string "Invalid request body or missing name"
+// @Failure 404 {string} string "Company not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/contacts [post]
+func (h *LaventeCareHandler) CreateContact(w http.ResponseWriter, r *http.Request) {
+	var input model.LCContactCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Naam == "" {
+		Error(w, http.StatusBadRequest, "Naam is verplicht")
+		return
+	}
+	contact, err := h.store.CreateContact(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, contact)
+}
+
+// UpdateContact modifies a LaventeCare contact.
+// @Summary Update Contact
+// @Description Updates a reusable contact
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Contact ID (UUID)"
+// @Param request body model.LCContactUpdate true "Contact Update"
+// @Success 200 {object} map[string]string "status ok"
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Contact not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/contacts/{id} [patch]
+func (h *LaventeCareHandler) UpdateContact(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid contact ID")
+		return
+	}
+	var input model.LCContactUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := h.store.UpdateContact(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Contact niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ListLeads returns all active leads.
 // @Summary List Leads
 // @Description Returns all active CRM leads
@@ -208,9 +397,25 @@ func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Reques
 		Error(w, http.StatusBadRequest, "Naam is verplicht")
 		return
 	}
+	companyID, _, err := h.store.ResolveCompanyReference(
+		r.Context(),
+		h.userID,
+		input.CompanyID,
+		input.CompanyName,
+		input.Website,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	projectToCreate := model.LCProject{
 		Naam:            input.Naam,
+		CompanyID:       companyID,
 		Fase:            input.Fase,
 		Status:          input.Status,
 		WaardeIndicatie: input.WaardeIndicatie,
@@ -263,6 +468,136 @@ func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListWorkstreams returns flexible LaventeCare opdrachten/workstreams.
+// @Summary List Workstreams
+// @Description Returns LaventeCare opdrachten for small and medium workstreams
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(30)
+// @Param includeClosed query bool false "Include closed/completed workstreams"
+// @Success 200 {array} model.LCWorkstream
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/workstreams [get]
+func (h *LaventeCareHandler) ListWorkstreams(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	includeClosed := r.URL.Query().Get("includeClosed") == "true"
+	workstreams, err := h.store.ListWorkstreams(r.Context(), h.userID, limit, includeClosed)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, workstreams)
+}
+
+// CreateWorkstream creates a flexible LaventeCare opdracht/workstream.
+// @Summary Create Workstream
+// @Description Creates a LaventeCare opdracht for flexible small/medium engagements
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCWorkstreamCreate true "Workstream Details"
+// @Success 201 {object} model.LCWorkstream
+// @Failure 400 {string} string "Invalid request body or missing title"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/workstreams [post]
+func (h *LaventeCareHandler) CreateWorkstream(w http.ResponseWriter, r *http.Request) {
+	var input model.LCWorkstreamCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Titel == "" {
+		Error(w, http.StatusBadRequest, "Titel is verplicht")
+		return
+	}
+
+	workstream, err := h.store.CreateWorkstream(r.Context(), h.userID, input)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, workstream)
+}
+
+// UpdateWorkstream modifies a LaventeCare opdracht/workstream.
+// @Summary Update Workstream
+// @Description Modifies a LaventeCare opdracht
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Workstream ID (UUID)"
+// @Param request body model.LCWorkstreamUpdate true "Updated Workstream Details"
+// @Success 200 {object} map[string]string "status ok"
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Workstream not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/workstreams/{id} [patch]
+func (h *LaventeCareHandler) UpdateWorkstream(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid workstream ID")
+		return
+	}
+
+	var input model.LCWorkstreamUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.store.UpdateWorkstream(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Opdracht niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ConvertWorkstreamToProject promotes a LaventeCare opdracht to a project.
+// @Summary Convert Workstream to Project
+// @Description Converts a flexible opdracht into a full delivery project
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Workstream ID (UUID)"
+// @Param request body model.LCConvertWorkstreamToProject true "Conversion Details"
+// @Success 201 {object} model.LCProject
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Workstream not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/workstreams/{id}/convert-project [post]
+func (h *LaventeCareHandler) ConvertWorkstreamToProject(w http.ResponseWriter, r *http.Request) {
+	workstreamID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid workstream ID")
+		return
+	}
+
+	var input model.LCConvertWorkstreamToProject
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	input.WorkstreamID = workstreamID
+
+	project, err := h.store.ConvertWorkstreamToProject(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Opdracht niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, project)
 }
 
 // ListActions returns open action items.
@@ -388,6 +723,8 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 	limit := queryInt(r, "limit", 20)
 	var leadID *uuid.UUID
 	var projectID *uuid.UUID
+	var workstreamID *uuid.UUID
+	var companyID *uuid.UUID
 
 	if raw := r.URL.Query().Get("leadId"); raw != "" {
 		id, err := uuid.Parse(raw)
@@ -407,7 +744,25 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 		projectID = &id
 	}
 
-	docs, err := h.store.ListDossierDocuments(r.Context(), h.userID, limit, leadID, projectID)
+	if raw := r.URL.Query().Get("workstreamId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid workstreamId")
+			return
+		}
+		workstreamID = &id
+	}
+
+	if raw := r.URL.Query().Get("companyId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid companyId")
+			return
+		}
+		companyID = &id
+	}
+
+	docs, err := h.store.ListDossierDocuments(r.Context(), h.userID, limit, leadID, projectID, workstreamID, companyID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return

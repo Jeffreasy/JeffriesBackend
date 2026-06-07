@@ -8,6 +8,83 @@ import (
 
 // ─── LaventeCare CRM ────────────────────────────────────────────────────────
 
+type LCCompany struct {
+	ID               uuid.UUID  `json:"id" db:"id"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	Naam             string     `json:"naam" db:"naam"`
+	Website          *string    `json:"website" db:"website"`
+	Sector           *string    `json:"sector" db:"sector"`
+	Status           string     `json:"status" db:"status"`
+	RelatieType      string     `json:"relatie_type" db:"relatie_type"`
+	Notities         *string    `json:"notities" db:"notities"`
+	LaatsteContact   *time.Time `json:"laatste_contact" db:"laatste_contact"`
+	VolgendeActie    *string    `json:"volgende_actie" db:"volgende_actie"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	Contacts         int        `json:"contacts"`
+	Leads            int        `json:"leads"`
+	Workstreams      int        `json:"workstreams"`
+	Projects         int        `json:"projects"`
+	ActionItems      int        `json:"actionItems"`
+	DossierDocuments int        `json:"dossierDocuments"`
+}
+
+type LCCompanyCreate struct {
+	Naam           string  `json:"naam"`
+	Website        *string `json:"website"`
+	Sector         *string `json:"sector"`
+	Status         string  `json:"status"`
+	RelatieType    string  `json:"relatie_type"`
+	Notities       *string `json:"notities"`
+	LaatsteContact *string `json:"laatste_contact"`
+	VolgendeActie  *string `json:"volgende_actie"`
+}
+
+type LCCompanyUpdate struct {
+	Naam           *string `json:"naam,omitempty"`
+	Website        *string `json:"website,omitempty"`
+	Sector         *string `json:"sector,omitempty"`
+	Status         *string `json:"status,omitempty"`
+	RelatieType    *string `json:"relatie_type,omitempty"`
+	Notities       *string `json:"notities,omitempty"`
+	LaatsteContact *string `json:"laatste_contact,omitempty"`
+	VolgendeActie  *string `json:"volgende_actie,omitempty"`
+}
+
+type LCContact struct {
+	ID        uuid.UUID  `json:"id" db:"id"`
+	UserID    string     `json:"user_id" db:"user_id"`
+	CompanyID *uuid.UUID `json:"company_id" db:"company_id"`
+	Naam      string     `json:"naam" db:"naam"`
+	Email     *string    `json:"email" db:"email"`
+	Telefoon  *string    `json:"telefoon" db:"telefoon"`
+	Rol       *string    `json:"rol" db:"rol"`
+	IsPrimary bool       `json:"is_primary" db:"is_primary"`
+	Notities  *string    `json:"notities" db:"notities"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+type LCContactCreate struct {
+	CompanyID *uuid.UUID `json:"company_id"`
+	Naam      string     `json:"naam"`
+	Email     *string    `json:"email"`
+	Telefoon  *string    `json:"telefoon"`
+	Rol       *string    `json:"rol"`
+	IsPrimary bool       `json:"is_primary"`
+	Notities  *string    `json:"notities"`
+}
+
+type LCContactUpdate struct {
+	CompanyID *uuid.UUID `json:"company_id,omitempty"`
+	Naam      *string    `json:"naam,omitempty"`
+	Email     *string    `json:"email,omitempty"`
+	Telefoon  *string    `json:"telefoon,omitempty"`
+	Rol       *string    `json:"rol,omitempty"`
+	IsPrimary *bool      `json:"is_primary,omitempty"`
+	Notities  *string    `json:"notities,omitempty"`
+}
+
 type LCLead struct {
 	ID                 uuid.UUID  `json:"id" db:"id"`
 	UserID             string     `json:"user_id" db:"user_id"`
@@ -27,25 +104,29 @@ type LCLead struct {
 }
 
 type LCLeadCreate struct {
-	Titel              string  `json:"titel"`
-	CompanyName        *string `json:"company_name"`
-	Website            *string `json:"website"`
-	Bron               string  `json:"bron"`
-	SourceID           *string `json:"source_id"`
-	Pijnpunt           *string `json:"pijnpunt"`
-	Prioriteit         *string `json:"prioriteit"`
-	FitScore           *int    `json:"fit_score"`
-	VolgendeStap       *string `json:"volgende_stap"`
-	VolgendeActieDatum *string `json:"volgende_actie_datum"`
+	Titel              string     `json:"titel"`
+	CompanyID          *uuid.UUID `json:"company_id"`
+	ContactID          *uuid.UUID `json:"contact_id"`
+	CompanyName        *string    `json:"company_name"`
+	Website            *string    `json:"website"`
+	Bron               string     `json:"bron"`
+	SourceID           *string    `json:"source_id"`
+	Pijnpunt           *string    `json:"pijnpunt"`
+	Prioriteit         *string    `json:"prioriteit"`
+	FitScore           *int       `json:"fit_score"`
+	VolgendeStap       *string    `json:"volgende_stap"`
+	VolgendeActieDatum *string    `json:"volgende_actie_datum"`
 }
 
 type LCLeadUpdate struct {
-	Status             *string `json:"status,omitempty"`
-	FitScore           *int    `json:"fit_score,omitempty"`
-	Pijnpunt           *string `json:"pijnpunt,omitempty"`
-	Prioriteit         *string `json:"prioriteit,omitempty"`
-	VolgendeStap       *string `json:"volgende_stap,omitempty"`
-	VolgendeActieDatum *string `json:"volgende_actie_datum,omitempty"`
+	CompanyID          *uuid.UUID `json:"company_id,omitempty"`
+	ContactID          *uuid.UUID `json:"contact_id,omitempty"`
+	Status             *string    `json:"status,omitempty"`
+	FitScore           *int       `json:"fit_score,omitempty"`
+	Pijnpunt           *string    `json:"pijnpunt,omitempty"`
+	Prioriteit         *string    `json:"prioriteit,omitempty"`
+	VolgendeStap       *string    `json:"volgende_stap,omitempty"`
+	VolgendeActieDatum *string    `json:"volgende_actie_datum,omitempty"`
 }
 
 type LCProject struct {
@@ -65,51 +146,128 @@ type LCProject struct {
 }
 
 type LCProjectCreate struct {
-	Naam            string  `json:"naam"`
-	Fase            string  `json:"fase"`
-	Status          string  `json:"status"`
-	WaardeIndicatie *int    `json:"waarde_indicatie"`
-	StartDatum      *string `json:"start_datum"`
-	Deadline        *string `json:"deadline"`
-	Samenvatting    *string `json:"samenvatting"`
+	Naam            string     `json:"naam"`
+	CompanyID       *uuid.UUID `json:"company_id"`
+	CompanyName     *string    `json:"company_name"`
+	Website         *string    `json:"website"`
+	Fase            string     `json:"fase"`
+	Status          string     `json:"status"`
+	WaardeIndicatie *int       `json:"waarde_indicatie"`
+	StartDatum      *string    `json:"start_datum"`
+	Deadline        *string    `json:"deadline"`
+	Samenvatting    *string    `json:"samenvatting"`
 }
 
 type LCProjectUpdate struct {
-	Fase            *string `json:"fase,omitempty"`
-	Status          *string `json:"status,omitempty"`
-	WaardeIndicatie *int    `json:"waarde_indicatie,omitempty"`
-	StartDatum      *string `json:"start_datum,omitempty"`
-	Deadline        *string `json:"deadline,omitempty"`
-	Samenvatting    *string `json:"samenvatting,omitempty"`
+	CompanyID       *uuid.UUID `json:"company_id,omitempty"`
+	Fase            *string    `json:"fase,omitempty"`
+	Status          *string    `json:"status,omitempty"`
+	WaardeIndicatie *int       `json:"waarde_indicatie,omitempty"`
+	StartDatum      *string    `json:"start_datum,omitempty"`
+	Deadline        *string    `json:"deadline,omitempty"`
+	Samenvatting    *string    `json:"samenvatting,omitempty"`
+}
+
+type LCWorkstream struct {
+	ID               uuid.UUID  `json:"id" db:"id"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	CompanyID        *uuid.UUID `json:"company_id" db:"company_id"`
+	LeadID           *uuid.UUID `json:"lead_id" db:"lead_id"`
+	ProjectID        *uuid.UUID `json:"project_id" db:"project_id"`
+	Titel            string     `json:"titel" db:"titel"`
+	Type             string     `json:"type" db:"type"`
+	Status           string     `json:"status" db:"status"`
+	Prioriteit       string     `json:"prioriteit" db:"prioriteit"`
+	KlantNaam        *string    `json:"klant_naam" db:"klant_naam"`
+	Bron             string     `json:"bron" db:"bron"`
+	SourceID         *string    `json:"source_id" db:"source_id"`
+	Doel             *string    `json:"doel" db:"doel"`
+	Scope            *string    `json:"scope" db:"scope"`
+	Deliverable      *string    `json:"deliverable" db:"deliverable"`
+	Bevindingen      *string    `json:"bevindingen" db:"bevindingen"`
+	VolgendeStap     *string    `json:"volgende_stap" db:"volgende_stap"`
+	Deadline         *string    `json:"deadline" db:"deadline"`
+	GeschatteMinuten *int       `json:"geschatte_minuten" db:"geschatte_minuten"`
+	WaardeIndicatie  *int       `json:"waarde_indicatie" db:"waarde_indicatie"`
+	StackTags        []string   `json:"stack_tags" db:"stack_tags"`
+	Tags             []string   `json:"tags" db:"tags"`
+	CompletedAt      *time.Time `json:"completed_at" db:"completed_at"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+type LCWorkstreamCreate struct {
+	Titel            string     `json:"titel"`
+	CompanyID        *uuid.UUID `json:"company_id"`
+	Type             string     `json:"type"`
+	Status           string     `json:"status"`
+	Prioriteit       string     `json:"prioriteit"`
+	KlantNaam        *string    `json:"klant_naam"`
+	Bron             string     `json:"bron"`
+	SourceID         *string    `json:"source_id"`
+	LeadID           *uuid.UUID `json:"lead_id"`
+	ProjectID        *uuid.UUID `json:"project_id"`
+	Doel             *string    `json:"doel"`
+	Scope            *string    `json:"scope"`
+	Deliverable      *string    `json:"deliverable"`
+	Bevindingen      *string    `json:"bevindingen"`
+	VolgendeStap     *string    `json:"volgende_stap"`
+	Deadline         *string    `json:"deadline"`
+	GeschatteMinuten *int       `json:"geschatte_minuten"`
+	WaardeIndicatie  *int       `json:"waarde_indicatie"`
+	StackTags        []string   `json:"stack_tags"`
+	Tags             []string   `json:"tags"`
+}
+
+type LCWorkstreamUpdate struct {
+	CompanyID        *uuid.UUID `json:"company_id,omitempty"`
+	Type             *string    `json:"type,omitempty"`
+	Status           *string    `json:"status,omitempty"`
+	Prioriteit       *string    `json:"prioriteit,omitempty"`
+	KlantNaam        *string    `json:"klant_naam,omitempty"`
+	Doel             *string    `json:"doel,omitempty"`
+	Scope            *string    `json:"scope,omitempty"`
+	Deliverable      *string    `json:"deliverable,omitempty"`
+	Bevindingen      *string    `json:"bevindingen,omitempty"`
+	VolgendeStap     *string    `json:"volgende_stap,omitempty"`
+	Deadline         *string    `json:"deadline,omitempty"`
+	GeschatteMinuten *int       `json:"geschatte_minuten,omitempty"`
+	WaardeIndicatie  *int       `json:"waarde_indicatie,omitempty"`
+	StackTags        []string   `json:"stack_tags,omitempty"`
+	Tags             []string   `json:"tags,omitempty"`
 }
 
 type LCActionItem struct {
-	ID              uuid.UUID  `json:"id" db:"id"`
-	UserID          string     `json:"user_id" db:"user_id"`
-	Source          string     `json:"source" db:"source"`
-	SourceID        *string    `json:"source_id" db:"source_id"`
-	Title           string     `json:"title" db:"title"`
-	Summary         *string    `json:"summary" db:"summary"`
-	ActionType      string     `json:"action_type" db:"action_type"`
-	Status          string     `json:"status" db:"status"`
-	Priority        string     `json:"priority" db:"priority"`
-	DueDate         *string    `json:"due_date" db:"due_date"`
-	LinkedLeadID    *uuid.UUID `json:"linked_lead_id" db:"linked_lead_id"`
-	LinkedProjectID *uuid.UUID `json:"linked_project_id" db:"linked_project_id"`
-	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	ID                 uuid.UUID  `json:"id" db:"id"`
+	UserID             string     `json:"user_id" db:"user_id"`
+	Source             string     `json:"source" db:"source"`
+	SourceID           *string    `json:"source_id" db:"source_id"`
+	Title              string     `json:"title" db:"title"`
+	Summary            *string    `json:"summary" db:"summary"`
+	ActionType         string     `json:"action_type" db:"action_type"`
+	Status             string     `json:"status" db:"status"`
+	Priority           string     `json:"priority" db:"priority"`
+	DueDate            *string    `json:"due_date" db:"due_date"`
+	LinkedLeadID       *uuid.UUID `json:"linked_lead_id" db:"linked_lead_id"`
+	LinkedProjectID    *uuid.UUID `json:"linked_project_id" db:"linked_project_id"`
+	LinkedWorkstreamID *uuid.UUID `json:"linked_workstream_id" db:"linked_workstream_id"`
+	LinkedCompanyID    *uuid.UUID `json:"linked_company_id" db:"linked_company_id"`
+	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 type LCActionCreate struct {
-	Source          string     `json:"source"`
-	SourceID        *string    `json:"source_id"`
-	Title           string     `json:"title"`
-	Summary         *string    `json:"summary"`
-	ActionType      string     `json:"action_type"`
-	Priority        string     `json:"priority"`
-	DueDate         *string    `json:"due_date"`
-	LinkedLeadID    *uuid.UUID `json:"linked_lead_id"`
-	LinkedProjectID *uuid.UUID `json:"linked_project_id"`
+	Source             string     `json:"source"`
+	SourceID           *string    `json:"source_id"`
+	Title              string     `json:"title"`
+	Summary            *string    `json:"summary"`
+	ActionType         string     `json:"action_type"`
+	Priority           string     `json:"priority"`
+	DueDate            *string    `json:"due_date"`
+	LinkedLeadID       *uuid.UUID `json:"linked_lead_id"`
+	LinkedProjectID    *uuid.UUID `json:"linked_project_id"`
+	LinkedWorkstreamID *uuid.UUID `json:"linked_workstream_id"`
+	LinkedCompanyID    *uuid.UUID `json:"linked_company_id"`
 }
 
 type LCDocument struct {
@@ -138,6 +296,8 @@ type LCDossierDocument struct {
 	ContextTitle  *string    `json:"context_title" db:"context_title"`
 	LeadID        *uuid.UUID `json:"lead_id" db:"lead_id"`
 	ProjectID     *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID  *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	CompanyID     *uuid.UUID `json:"company_id" db:"company_id"`
 	PDFURL        string     `json:"pdf_url" db:"pdf_url"`
 	Theme         string     `json:"theme" db:"theme"`
 	Delivery      string     `json:"delivery" db:"delivery"`
@@ -155,6 +315,8 @@ type LCDossierDocumentCreate struct {
 	ContextTitle  *string    `json:"context_title"`
 	LeadID        *uuid.UUID `json:"lead_id"`
 	ProjectID     *uuid.UUID `json:"project_id"`
+	WorkstreamID  *uuid.UUID `json:"workstream_id"`
+	CompanyID     *uuid.UUID `json:"company_id"`
 	PDFURL        string     `json:"pdf_url"`
 	Theme         string     `json:"theme"`
 	Delivery      string     `json:"delivery"`
@@ -204,38 +366,54 @@ type LCSlaIncident struct {
 
 // LCCockpit is the aggregated dashboard response.
 type LCCockpit struct {
-	Summary          LCCockpitSummary    `json:"summary"`
-	ActiveLeads      []LCLead            `json:"activeLeads"`
-	ActiveProjects   []LCProject         `json:"activeProjects"`
-	ActionItems      []LCActionItem      `json:"actionItems"`
-	OpenIncidents    []LCSlaIncident     `json:"openIncidents"`
-	OpenChanges      []LCChangeRequest   `json:"openChanges"`
-	RecentDecisions  []LCDecision        `json:"recentDecisions"`
-	DocumentCatalog  []LCDocument        `json:"documentCatalog"`
-	DossierDocuments []LCDossierDocument `json:"dossierDocuments"`
-	BusinessSignals  []LCBusinessSignal  `json:"businessSignals"`
-	FollowUps        []LCFollowUpSignal  `json:"followUps"`
+	Summary           LCCockpitSummary    `json:"summary"`
+	Companies         []LCCompany         `json:"companies"`
+	Contacts          []LCContact         `json:"contacts"`
+	ActiveLeads       []LCLead            `json:"activeLeads"`
+	ActiveWorkstreams []LCWorkstream      `json:"activeWorkstreams"`
+	ActiveProjects    []LCProject         `json:"activeProjects"`
+	ActionItems       []LCActionItem      `json:"actionItems"`
+	OpenIncidents     []LCSlaIncident     `json:"openIncidents"`
+	OpenChanges       []LCChangeRequest   `json:"openChanges"`
+	RecentDecisions   []LCDecision        `json:"recentDecisions"`
+	DocumentCatalog   []LCDocument        `json:"documentCatalog"`
+	DossierDocuments  []LCDossierDocument `json:"dossierDocuments"`
+	BusinessSignals   []LCBusinessSignal  `json:"businessSignals"`
+	FollowUps         []LCFollowUpSignal  `json:"followUps"`
 }
 
 type LCCockpitSummary struct {
-	Leads            int  `json:"leads"`
-	ActiveLeads      int  `json:"activeLeads"`
-	Projects         int  `json:"projects"`
-	ActiveProjects   int  `json:"activeProjects"`
-	Documents        int  `json:"documents"`
-	OpenIncidents    int  `json:"openIncidents"`
-	OpenChanges      int  `json:"openChanges"`
-	Decisions        int  `json:"decisions"`
-	ActionItems      int  `json:"actionItems"`
-	DossierDocuments int  `json:"dossierDocuments"`
-	DocumentsSeeded  bool `json:"documentsSeeded"`
-	BusinessSignals  int  `json:"businessSignals"`
-	FollowUps        int  `json:"followUps"`
+	Companies         int  `json:"companies"`
+	Contacts          int  `json:"contacts"`
+	Leads             int  `json:"leads"`
+	ActiveLeads       int  `json:"activeLeads"`
+	Workstreams       int  `json:"workstreams"`
+	ActiveWorkstreams int  `json:"activeWorkstreams"`
+	Projects          int  `json:"projects"`
+	ActiveProjects    int  `json:"activeProjects"`
+	Documents         int  `json:"documents"`
+	OpenIncidents     int  `json:"openIncidents"`
+	OpenChanges       int  `json:"openChanges"`
+	Decisions         int  `json:"decisions"`
+	ActionItems       int  `json:"actionItems"`
+	DossierDocuments  int  `json:"dossierDocuments"`
+	DocumentsSeeded   bool `json:"documentsSeeded"`
+	BusinessSignals   int  `json:"businessSignals"`
+	FollowUps         int  `json:"followUps"`
 }
 
 // LCConvertLeadToProject is the request body for converting a lead to a project.
 type LCConvertLeadToProject struct {
 	LeadID       uuid.UUID `json:"lead_id"`
+	Naam         string    `json:"naam"`
+	Fase         *string   `json:"fase"`
+	Status       *string   `json:"status"`
+	Samenvatting *string   `json:"samenvatting"`
+}
+
+// LCConvertWorkstreamToProject is the request body for promoting an opdracht to a project.
+type LCConvertWorkstreamToProject struct {
+	WorkstreamID uuid.UUID `json:"workstream_id"`
 	Naam         string    `json:"naam"`
 	Fase         *string   `json:"fase"`
 	Status       *string   `json:"status"`

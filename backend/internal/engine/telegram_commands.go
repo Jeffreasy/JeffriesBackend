@@ -27,7 +27,7 @@ const (
 	agendaPrompt   = "Geef mijn aankomende persoonlijke agenda-afspraken. Gebruik afsprakenOpvragen en combineer met planningOpvragen wanneer diensten relevant zijn. Maak duidelijk onderscheid tussen afspraken, diensten en wachtrij-items."
 	roosterPrompt  = "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag."
 	financePrompt  = "Geef een compacte finance status voor de huidige maand. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maandanalyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand. Noem all-time alleen als de gebruiker daarom vraagt."
-	lcPrompt       = "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen, aankomende agenda/follow-ups, relevante notities, PDF dossierdocumenten en of de documentbasis is geinitialiseerd. Gebruik planningOpvragen of afsprakenOpvragen voor agenda-context, notitiesZoeken of notitiesOverzicht voor notitie-context, en laventecareDossierDocumentenOpvragen als de gebruiker naar PDFs, offertes, rapportages of dossierhistorie vraagt. Houd CRM, agenda, notities en dossierstukken duidelijk gescheiden. Gebruik geen verzonnen CRM-data."
+	lcPrompt       = "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem klanten/bedrijven, contacten, leads, opdrachten/werkstreams, projecten, actiepunten, signalen, aankomende agenda/follow-ups, relevante notities, PDF dossierdocumenten en of de documentbasis is geinitialiseerd. Gebruik laventecareKlantenOpvragen en laventecareContactenOpvragen bij klantvragen. Gebruik laventecareOpdrachtenOpvragen wanneer kleine of flexibele klussen relevant zijn. Gebruik planningOpvragen of afsprakenOpvragen voor agenda-context, notitiesZoeken of notitiesOverzicht voor notitie-context, en laventecareDossierDocumentenOpvragen als de gebruiker naar PDFs, offertes, rapportages of dossierhistorie vraagt. Houd klanten, CRM, opdrachten, agenda, notities en dossierstukken duidelijk gescheiden. Gebruik geen verzonnen CRM-data."
 	emailPrompt    = "Geef een compacte inbox status en noem welke emails aandacht nodig lijken."
 	habitsPrompt   = "Geef mijn habit status voor vandaag. Gebruik habitRapport als basis en benoem vandaagDue, vandaagCompleted, streaks, badges, incidenten en maximaal drie concrete adviezen."
 	checkPrompt    = "Help mij een habit af te vinken. Gebruik habitRapport om de habits van vandaag te tonen en vraag kort welke habit ik wil voltooien als de naam ontbreekt."
@@ -728,7 +728,7 @@ func hasNoteCaptureIntent(lower string) bool {
 }
 
 func hasLaventeCareIntent(lower string) bool {
-	for _, kw := range []string{"laventecare", "lead", "leads", "crm", "project funnel", "klantproject", "business cockpit", "offerte", "offertes", "rapportage", "rapportages", "klantdossier", "dossierstuk"} {
+	for _, kw := range []string{"laventecare", "lead", "leads", "crm", "opdracht", "opdrachten", "werkstream", "werkstreams", "project funnel", "klantproject", "business cockpit", "offerte", "offertes", "rapportage", "rapportages", "klantdossier", "dossierstuk"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}

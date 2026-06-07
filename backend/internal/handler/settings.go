@@ -632,9 +632,15 @@ func aiDiagnosticRecommendations() []map[string]string {
 			strings.Contains(strings.ToLower(name), "email") ||
 			strings.Contains(strings.ToLower(name), "gelezen") ||
 			strings.Contains(strings.ToLower(name), "ster") ||
+			name == "laventecareKlantMaken" ||
+			name == "laventecareKlantBijwerken" ||
+			name == "laventecareContactMaken" ||
 			name == "laventecareLeadMaken" ||
 			name == "laventecareLeadBijwerken" ||
 			name == "laventecareLeadNaarProject" ||
+			name == "laventecareOpdrachtMaken" ||
+			name == "laventecareOpdrachtBijwerken" ||
+			name == "laventecareOpdrachtNaarProject" ||
 			name == "laventecareProjectMaken" ||
 			name == "laventecareProjectBijwerken" ||
 			name == "laventecareActieMaken" ||
@@ -651,9 +657,15 @@ func aiDiagnosticRecommendations() []map[string]string {
 		if name == "categorieWijzigen" || name == "bulkCategoriseren" {
 			hasPendingFinanceWrite = true
 		}
-		if name == "laventecareLeadMaken" ||
+		if name == "laventecareKlantMaken" ||
+			name == "laventecareKlantBijwerken" ||
+			name == "laventecareContactMaken" ||
+			name == "laventecareLeadMaken" ||
 			name == "laventecareLeadBijwerken" ||
 			name == "laventecareLeadNaarProject" ||
+			name == "laventecareOpdrachtMaken" ||
+			name == "laventecareOpdrachtBijwerken" ||
+			name == "laventecareOpdrachtNaarProject" ||
 			name == "laventecareProjectMaken" ||
 			name == "laventecareProjectBijwerken" ||
 			name == "laventecareActieMaken" ||
@@ -695,7 +707,7 @@ func aiDiagnosticRecommendations() []map[string]string {
 		recommendations = append(recommendations, map[string]string{
 			"priority": "middel",
 			"title":    "LaventeCare mutaties",
-			"detail":   "Leads, projecten en acties zijn nu leesbaar; maken en bijwerken kan daarna gecontroleerd worden toegevoegd.",
+			"detail":   "Klanten, contacten, leads, opdrachten, projecten en acties lopen via dezelfde veilige confirmation queue.",
 		})
 	}
 

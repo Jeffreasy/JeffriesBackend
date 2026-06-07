@@ -179,12 +179,24 @@ func summarizePendingTool(toolName, argsJSON string) string {
 		return cleanSummary("Notitie archiveren", value("id"))
 	case "bulkArchiveerNotities":
 		return cleanSummary("Meerdere notities archiveren", value("ids"))
+	case "laventecareKlantMaken":
+		return cleanSummary("LaventeCare klant maken", value("naam"))
+	case "laventecareKlantBijwerken":
+		return cleanSummary("LaventeCare klant bijwerken", value("id"), value("naam", "status"))
+	case "laventecareContactMaken":
+		return cleanSummary("LaventeCare contact maken", value("naam"), value("company_id"))
 	case "laventecareLeadMaken":
 		return cleanSummary("LaventeCare lead maken", value("titel"))
 	case "laventecareLeadBijwerken":
 		return cleanSummary("LaventeCare lead bijwerken", value("id"), value("status"))
 	case "laventecareLeadNaarProject":
 		return cleanSummary("LaventeCare lead naar project", value("lead_id"), value("naam"))
+	case "laventecareOpdrachtMaken":
+		return cleanSummary("LaventeCare opdracht maken", value("titel"), value("type"))
+	case "laventecareOpdrachtBijwerken":
+		return cleanSummary("LaventeCare opdracht bijwerken", value("id"), value("status"))
+	case "laventecareOpdrachtNaarProject":
+		return cleanSummary("LaventeCare opdracht naar project", value("workstream_id"), value("naam"))
 	case "laventecareProjectMaken":
 		return cleanSummary("LaventeCare project maken", value("naam"))
 	case "laventecareProjectBijwerken":

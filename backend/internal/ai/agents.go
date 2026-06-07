@@ -28,7 +28,7 @@ var Registry = []Agent{
 	{ID: "email", Naam: "Email", Emoji: "📧", Beschrijving: "Gmail inbox beheren — lezen, zoeken, verwijderen, versturen.", Capabilities: []string{"Email lezen", "Email zoeken", "Email versturen", "Inbox opruimen"}},
 	{ID: "notes", Naam: "Notities", Emoji: "📝", Beschrijving: "Dagelijks journal en knowledge base — notities aanmaken, zoeken, pinnen en archiveren.", Capabilities: []string{"Dagnotities", "Notitie maken", "Notities zoeken", "Weekoverzicht", "Pinnen", "Archiveren"}},
 	{ID: "habits", Naam: "Habits", Emoji: "🎯", Beschrijving: "Habits volgen, streaks, badges en rapportage.", Capabilities: []string{"Habit voltooien", "Streaks bekijken", "Badges", "Rapport"}},
-	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis, dossierdocumenten, agenda-context, notities en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren", "PDF dossierhistorie", "Agenda koppeling", "Notitie context"}},
+	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — klanten, contacten, leads, opdrachten, projecten, acties, kennis, dossierdocumenten, agenda-context, notities en SLA.", Capabilities: []string{"Cockpit", "Klantenbasis", "Contacten", "Kennis zoeken", "Leads beheren", "Opdrachten beheren", "Projecten beheren", "Acties beheren", "PDF dossierhistorie", "Agenda koppeling", "Notitie context"}},
 }
 
 // GetAgent returns the agent by ID or nil.
@@ -102,21 +102,30 @@ var Policies = map[string]ToolPolicy{
 	// LaventeCare reads
 	"laventecareCockpit":                   {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareKennisZoeken":              {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareKlantenOpvragen":           {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareContactenOpvragen":         {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareLeadsOpvragen":             {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareOpdrachtenOpvragen":        {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareProjectenOpvragen":         {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareActiesOpvragen":            {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareDossierDocumentenOpvragen": {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// LaventeCare writes
-	"laventecareLeadMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareLeadBijwerken":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareLeadNaarProject":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareProjectMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareProjectBijwerken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareActieMaken":         {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareActieAfronden":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareKlantMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareKlantBijwerken":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareContactMaken":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadMaken":           {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadBijwerken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareLeadNaarProject":     {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareOpdrachtMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareOpdrachtBijwerken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareOpdrachtNaarProject": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareProjectMaken":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareProjectBijwerken":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareActieMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareActieAfronden":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareBesluitMaken":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareChangeRequestMaken":  {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareSlaIncidentMaken":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 }
 
 // IsToolAllowed checks if the given agent may use the tool.

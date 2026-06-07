@@ -20,13 +20,102 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureBrainPreferencesSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure brain preferences schema: %w", err)
 	}
+	if err := ensureLaventeCareCustomerSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure laventecare customer schema: %w", err)
+	}
 	if err := ensureLaventeCareDossierDocumentSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure laventecare dossier document schema: %w", err)
+	}
+	if err := ensureLaventeCareWorkstreamSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure laventecare workstream schema: %w", err)
 	}
 	if err := ensureBusinessContextSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure business context schema: %w", err)
 	}
 	return nil
+}
+
+func ensureLaventeCareCustomerSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS lc_companies (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         TEXT NOT NULL,
+    naam            TEXT NOT NULL,
+    website         TEXT,
+    sector          TEXT,
+    status          TEXT NOT NULL DEFAULT 'prospect',
+    relatie_type    TEXT NOT NULL DEFAULT 'prospect',
+    notities        TEXT,
+    laatste_contact TIMESTAMPTZ,
+    volgende_actie  TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_contacts (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    TEXT NOT NULL,
+    company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    naam       TEXT NOT NULL,
+    email      TEXT,
+    telefoon   TEXT,
+    rol        TEXT,
+    is_primary BOOLEAN NOT NULL DEFAULT false,
+    notities   TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE lc_companies
+    ADD COLUMN IF NOT EXISTS relatie_type TEXT NOT NULL DEFAULT 'prospect',
+    ADD COLUMN IF NOT EXISTS laatste_contact TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS volgende_actie TEXT;
+
+ALTER TABLE lc_contacts
+    ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS notities TEXT;
+
+UPDATE lc_companies
+SET relatie_type = CASE
+    WHEN status IN ('klant', 'partner', 'leverancier', 'prospect') THEN status
+    ELSE 'prospect'
+END
+WHERE relatie_type IS NULL OR relatie_type = '';
+
+CREATE INDEX IF NOT EXISTS idx_lc_companies_user
+    ON lc_companies (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_lc_companies_user_status
+    ON lc_companies (user_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_lc_companies_user_name_lower
+    ON lc_companies (user_id, LOWER(TRIM(naam)));
+
+CREATE INDEX IF NOT EXISTS idx_lc_companies_user_website_lower
+    ON lc_companies (user_id, LOWER(TRIM(website)))
+    WHERE website IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_contacts_user
+    ON lc_contacts (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_lc_contacts_company
+    ON lc_contacts (company_id);
+
+ALTER TABLE lc_leads
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS contact_id UUID REFERENCES lc_contacts(id) ON DELETE SET NULL;
+
+ALTER TABLE lc_projects
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL;
+
+ALTER TABLE lc_action_items
+    ADD COLUMN IF NOT EXISTS linked_company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_actions_company
+    ON lc_action_items (linked_company_id, updated_at DESC)
+    WHERE linked_company_id IS NOT NULL;
+`)
+	return err
 }
 
 func ensureBusinessContextSchema(ctx context.Context, db *DB) error {
@@ -61,6 +150,79 @@ CREATE INDEX IF NOT EXISTS idx_pe_user_business_context
 	return err
 }
 
+func ensureLaventeCareWorkstreamSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS lc_workstreams (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id            TEXT NOT NULL,
+    company_id         UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    lead_id            UUID REFERENCES lc_leads(id) ON DELETE SET NULL,
+    project_id         UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    titel              TEXT NOT NULL,
+    type               TEXT NOT NULL DEFAULT 'advies',
+    status             TEXT NOT NULL DEFAULT 'nieuw',
+    prioriteit         TEXT NOT NULL DEFAULT 'normaal',
+    klant_naam         TEXT,
+    bron               TEXT NOT NULL DEFAULT 'cockpit',
+    source_id          TEXT,
+    doel               TEXT,
+    scope              TEXT,
+    deliverable        TEXT,
+    bevindingen        TEXT,
+    volgende_stap      TEXT,
+    deadline           TEXT,
+    geschatte_minuten  INTEGER,
+    waarde_indicatie   INTEGER,
+    stack_tags         TEXT[] NOT NULL DEFAULT '{}',
+    tags               TEXT[] NOT NULL DEFAULT '{}',
+    completed_at       TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_user
+    ON lc_workstreams (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_user_status
+    ON lc_workstreams (user_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_user_deadline
+    ON lc_workstreams (user_id, deadline)
+    WHERE deadline IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_lead
+    ON lc_workstreams (lead_id, updated_at DESC)
+    WHERE lead_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_project
+    ON lc_workstreams (project_id, updated_at DESC)
+    WHERE project_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_company
+    ON lc_workstreams (company_id, updated_at DESC)
+    WHERE company_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_workstreams_user_source
+    ON lc_workstreams (user_id, bron, source_id)
+    WHERE source_id IS NOT NULL;
+
+ALTER TABLE lc_action_items
+    ADD COLUMN IF NOT EXISTS linked_workstream_id UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_actions_workstream
+    ON lc_action_items (linked_workstream_id, updated_at DESC)
+    WHERE linked_workstream_id IS NOT NULL;
+
+ALTER TABLE lc_dossier_documents
+    ADD COLUMN IF NOT EXISTS workstream_id UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_dossier_docs_workstream
+    ON lc_dossier_documents (workstream_id, created_at DESC)
+    WHERE workstream_id IS NOT NULL;
+`)
+	return err
+}
+
 func ensureLaventeCareDossierDocumentSchema(ctx context.Context, db *DB) error {
 	_, err := db.Pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS lc_dossier_documents (
@@ -74,6 +236,7 @@ CREATE TABLE IF NOT EXISTS lc_dossier_documents (
     context_title  TEXT,
     lead_id        UUID REFERENCES lc_leads(id) ON DELETE SET NULL,
     project_id     UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    company_id     UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
     pdf_url        TEXT NOT NULL,
     theme          TEXT NOT NULL DEFAULT 'screen',
     delivery       TEXT NOT NULL DEFAULT 'inline',
@@ -92,6 +255,13 @@ CREATE INDEX IF NOT EXISTS idx_lc_dossier_docs_lead
 CREATE INDEX IF NOT EXISTS idx_lc_dossier_docs_project
     ON lc_dossier_documents (project_id, created_at DESC)
     WHERE project_id IS NOT NULL;
+
+ALTER TABLE lc_dossier_documents
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_dossier_docs_company
+    ON lc_dossier_documents (company_id, created_at DESC)
+    WHERE company_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_lc_dossier_docs_user_document
     ON lc_dossier_documents (user_id, document_key, created_at DESC);

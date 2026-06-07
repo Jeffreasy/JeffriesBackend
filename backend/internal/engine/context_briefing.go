@@ -260,15 +260,18 @@ func compactLaventeCare(cockpit *model.LCCockpit, limit int) map[string]any {
 		return map[string]any{"available": false}
 	}
 	return map[string]any{
-		"available":       true,
-		"summary":         cockpit.Summary,
-		"activeLeads":     takeBriefingItems(cockpit.ActiveLeads, limit),
-		"activeProjects":  takeBriefingItems(cockpit.ActiveProjects, limit),
-		"actions":         takeBriefingItems(cockpit.ActionItems, limit),
-		"signals":         takeBriefingItems(cockpit.BusinessSignals, limit),
-		"followUps":       takeBriefingItems(cockpit.FollowUps, limit),
-		"dossierRecent":   takeBriefingItems(cockpit.DossierDocuments, limit),
-		"documentsSeeded": cockpit.Summary.DocumentsSeeded,
+		"available":         true,
+		"summary":           cockpit.Summary,
+		"companies":         takeBriefingItems(cockpit.Companies, limit),
+		"contacts":          takeBriefingItems(cockpit.Contacts, limit),
+		"activeLeads":       takeBriefingItems(cockpit.ActiveLeads, limit),
+		"activeWorkstreams": takeBriefingItems(cockpit.ActiveWorkstreams, limit),
+		"activeProjects":    takeBriefingItems(cockpit.ActiveProjects, limit),
+		"actions":           takeBriefingItems(cockpit.ActionItems, limit),
+		"signals":           takeBriefingItems(cockpit.BusinessSignals, limit),
+		"followUps":         takeBriefingItems(cockpit.FollowUps, limit),
+		"dossierRecent":     takeBriefingItems(cockpit.DossierDocuments, limit),
+		"documentsSeeded":   cockpit.Summary.DocumentsSeeded,
 	}
 }
 

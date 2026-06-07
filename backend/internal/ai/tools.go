@@ -484,7 +484,7 @@ var AllTools = []ToolDefinition{
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
 					"symbol": {"type": "string", "description": "Optioneel UI-symbool."},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"], "description": "Optionele zakelijke context voor LaventeCare."},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"], "description": "Optionele zakelijke context voor LaventeCare."},
 					"businessContextId": {"type": "string", "description": "Optioneel lead- of project-id als de afspraak aan een specifiek LaventeCare object hangt."},
 					"businessContextTitle": {"type": "string", "description": "Leesbare naam van de zakelijke context."}
 				},
@@ -510,7 +510,7 @@ var AllTools = []ToolDefinition{
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
 					"symbol": {"type": "string"},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"]},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
 					"businessContextId": {"type": "string"},
 					"businessContextTitle": {"type": "string"}
 				},
@@ -608,8 +608,8 @@ var AllTools = []ToolDefinition{
 					},
 					"businessContextType": {
 						"type": "string",
-						"enum": ["laventecare", "laventecare_lead", "laventecare_project"],
-						"description": "Optionele zakelijke context; gebruik laventecare_* wanneer de notitie over het bedrijf, een lead of project gaat."
+						"enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"],
+						"description": "Optionele zakelijke context; gebruik laventecare_* wanneer de notitie over het bedrijf, een lead, opdracht of project gaat."
 					},
 					"businessContextId": {
 						"type": "string",
@@ -668,7 +668,7 @@ var AllTools = []ToolDefinition{
 					"deadline": {"type": "string", "description": "ISO datum/tijd, yyyy-mm-dd, dd-mm-yyyy of leeg om te wissen."},
 					"triage_flag": {"type": "boolean"},
 					"is_completed": {"type": "boolean"},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"]},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
 					"businessContextId": {"type": "string"},
 					"businessContextTitle": {"type": "string"}
 				},
@@ -874,6 +874,37 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareKlantenOpvragen",
+			Description: "Haalt LaventeCare klanten/bedrijven op als centrale CRM-basis, inclusief aantallen leads, opdrachten, projecten, acties en dossierdocumenten.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {"type": "number", "description": "Aantal klanten (max 30)."},
+					"query": {"type": "string", "description": "Optionele zoekterm op bedrijfsnaam of website."},
+					"q": {"type": "string", "description": "Alias voor query."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareContactenOpvragen",
+			Description: "Haalt LaventeCare contactpersonen op, optioneel gefilterd op company_id.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {"type": "number", "description": "Aantal contacten (max 30)."},
+					"company_id": {"type": "string", "description": "Optionele klant/company UUID."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareLeadsOpvragen",
 			Description: "Haalt recente LaventeCare leads op.",
 			Parameters: json.RawMessage(`{
@@ -908,6 +939,27 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareOpdrachtenOpvragen",
+			Description: "Haalt recente LaventeCare opdrachten/werkstreams op voor flexibele kleine en middelgrote klussen.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal opdrachten (max 30)."
+					},
+					"include_closed": {
+						"type": "boolean",
+						"description": "Ook afgeronde/gearchiveerde opdrachten tonen."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareActiesOpvragen",
 			Description: "Haalt open LaventeCare actie-items op.",
 			Parameters: json.RawMessage(`{
@@ -926,7 +978,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareDossierDocumentenOpvragen",
-			Description: "Haalt recent vastgelegde LaventeCare PDF dossierdocumenten op, optioneel gefilterd op lead of project.",
+			Description: "Haalt recent vastgelegde LaventeCare PDF dossierdocumenten op, optioneel gefilterd op klant, lead, opdracht of project.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -941,9 +993,160 @@ var AllTools = []ToolDefinition{
 					"project_id": {
 						"type": "string",
 						"description": "Optionele project UUID om op te filteren."
+					},
+					"workstream_id": {
+						"type": "string",
+						"description": "Optionele opdracht/workstream UUID om op te filteren."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om op te filteren."
 					}
 				},
 				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareKlantMaken",
+			Description: "Maakt een LaventeCare klant/company dossier. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"naam": {"type": "string"},
+					"website": {"type": "string"},
+					"sector": {"type": "string"},
+					"status": {"type": "string", "description": "Bijv. actief, prospect, inactief."},
+					"relatie_type": {"type": "string", "description": "Bijv. prospect, klant, partner, leverancier."},
+					"notities": {"type": "string"},
+					"laatste_contact": {"type": "string", "description": "YYYY-MM-DD of RFC3339."},
+					"volgende_actie": {"type": "string", "description": "YYYY-MM-DD."}
+				},
+				"required": ["naam"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareKlantBijwerken",
+			Description: "Werkt een LaventeCare klant/company dossier bij. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"naam": {"type": "string"},
+					"website": {"type": "string"},
+					"sector": {"type": "string"},
+					"status": {"type": "string"},
+					"relatie_type": {"type": "string"},
+					"notities": {"type": "string"},
+					"laatste_contact": {"type": "string"},
+					"volgende_actie": {"type": "string"}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareContactMaken",
+			Description: "Maakt een LaventeCare contactpersoon, optioneel gekoppeld aan een klant/company. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"company_id": {"type": "string"},
+					"naam": {"type": "string"},
+					"email": {"type": "string"},
+					"telefoon": {"type": "string"},
+					"rol": {"type": "string"},
+					"is_primary": {"type": "boolean"},
+					"notities": {"type": "string"}
+				},
+				"required": ["naam"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareOpdrachtMaken",
+			Description: "Maakt een generieke LaventeCare opdracht/workstream. Gebruik dit voor kleine tussendoorprojecten, audits, integratiechecks, automatiseringen, support of advies. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"titel": {"type": "string"},
+					"type": {"type": "string", "description": "Bijv. website_platform, integratie, automatisering, ai_workflow, crm_sales, data_reporting, security_privacy, support_beheer, discovery_advies."},
+					"status": {"type": "string", "description": "Default nieuw. Bijv. nieuw, intake, analyse, uitvoering, wacht_op_klant, afgerond."},
+					"prioriteit": {"type": "string"},
+					"company_id": {"type": "string", "description": "Bestaande klant/company UUID. Gebruik dit boven klant_naam wanneer bekend."},
+					"klant_naam": {"type": "string"},
+					"bron": {"type": "string"},
+					"source_id": {"type": "string"},
+					"lead_id": {"type": "string"},
+					"project_id": {"type": "string"},
+					"doel": {"type": "string"},
+					"scope": {"type": "string"},
+					"deliverable": {"type": "string"},
+					"bevindingen": {"type": "string"},
+					"volgende_stap": {"type": "string"},
+					"deadline": {"type": "string"},
+					"geschatte_minuten": {"type": "number"},
+					"waarde_indicatie": {"type": "number"},
+					"stack_tags": {"type": "array", "items": {"type": "string"}, "description": "Vrije stack/systeem tags, niet hardcoded: bijv. cms, api, webhook, google-workspace, make, zapier, wordpress."},
+					"tags": {"type": "array", "items": {"type": "string"}}
+				},
+				"required": ["titel"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareOpdrachtBijwerken",
+			Description: "Werkt een LaventeCare opdracht/workstream bij. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"type": {"type": "string"},
+					"status": {"type": "string"},
+					"prioriteit": {"type": "string"},
+					"company_id": {"type": "string"},
+					"klant_naam": {"type": "string"},
+					"doel": {"type": "string"},
+					"scope": {"type": "string"},
+					"deliverable": {"type": "string"},
+					"bevindingen": {"type": "string"},
+					"volgende_stap": {"type": "string"},
+					"deadline": {"type": "string"},
+					"geschatte_minuten": {"type": "number"},
+					"waarde_indicatie": {"type": "number"},
+					"stack_tags": {"type": "array", "items": {"type": "string"}},
+					"tags": {"type": "array", "items": {"type": "string"}}
+				},
+				"required": ["id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareOpdrachtNaarProject",
+			Description: "Promoveert een LaventeCare opdracht/workstream naar een volledig project. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"workstream_id": {"type": "string"},
+					"naam": {"type": "string"},
+					"fase": {"type": "string"},
+					"status": {"type": "string"},
+					"samenvatting": {"type": "string"}
+				},
+				"required": ["workstream_id"]
 			}`),
 		},
 	},
@@ -956,6 +1159,7 @@ var AllTools = []ToolDefinition{
 				"type": "object",
 				"properties": {
 					"titel": {"type": "string"},
+					"company_id": {"type": "string", "description": "Bestaande klant/company UUID."},
 					"company_name": {"type": "string"},
 					"website": {"type": "string"},
 					"bron": {"type": "string"},
@@ -978,6 +1182,8 @@ var AllTools = []ToolDefinition{
 				"type": "object",
 				"properties": {
 					"id": {"type": "string"},
+					"company_id": {"type": "string"},
+					"contact_id": {"type": "string"},
 					"status": {"type": "string"},
 					"fit_score": {"type": "number"},
 					"pijnpunt": {"type": "string"},
@@ -999,6 +1205,9 @@ var AllTools = []ToolDefinition{
 				"properties": {
 					"lead_id": {"type": "string"},
 					"naam": {"type": "string"},
+					"company_id": {"type": "string"},
+					"company_name": {"type": "string"},
+					"website": {"type": "string"},
 					"fase": {"type": "string"},
 					"status": {"type": "string"},
 					"samenvatting": {"type": "string"}
@@ -1036,6 +1245,7 @@ var AllTools = []ToolDefinition{
 				"type": "object",
 				"properties": {
 					"id": {"type": "string"},
+					"company_id": {"type": "string"},
 					"fase": {"type": "string"},
 					"status": {"type": "string"},
 					"waarde_indicatie": {"type": "number"},
@@ -1063,7 +1273,9 @@ var AllTools = []ToolDefinition{
 					"priority": {"type": "string"},
 					"due_date": {"type": "string"},
 					"linked_lead_id": {"type": "string"},
-					"linked_project_id": {"type": "string"}
+					"linked_project_id": {"type": "string"},
+					"linked_workstream_id": {"type": "string"},
+					"linked_company_id": {"type": "string"}
 				},
 				"required": ["title"]
 			}`),

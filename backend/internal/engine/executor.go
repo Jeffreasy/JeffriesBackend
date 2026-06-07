@@ -2413,6 +2413,38 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"instruction": "Gebruik alleen deze documenten als kennisbron. Bij count 0: zeg dat er niets gevonden is en adviseer de documentbasis te initialiseren of een concretere zoekterm te gebruiken.",
 		}, err)
 
+	case "laventecareKlantenOpvragen":
+		var args struct {
+			Limit int    `json:"limit"`
+			Query string `json:"query"`
+			Q     string `json:"q"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		companies, err := e.laventeCareStore.ListCompanies(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), firstNonEmpty(args.Query, args.Q))
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare klanten",
+			"count":       len(companies),
+			"items":       companies,
+			"instruction": "Gebruik klanten als centrale CRM-basis. Koppel leads, opdrachten, projecten, notities, agenda en dossierdocumenten via company_id waar mogelijk.",
+		}, err)
+
+	case "laventecareContactenOpvragen":
+		var args struct {
+			Limit     int    `json:"limit"`
+			CompanyID string `json:"company_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		contacts, err := e.laventeCareStore.ListContacts(ctx, e.userID, companyID, clampToolLimit(args.Limit, 10, 30))
+		return e.jsonResponse(map[string]any{"scope": "laventecare contacten", "count": len(contacts), "items": contacts}, err)
+
 	case "laventecareLeadsOpvragen":
 		var args struct {
 			Limit int `json:"limit"`
@@ -2433,6 +2465,22 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		projects, err := e.laventeCareStore.ListProjects(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
 		return e.jsonResponse(map[string]any{"scope": "laventecare projecten", "count": len(projects), "items": projects}, err)
 
+	case "laventecareOpdrachtenOpvragen":
+		var args struct {
+			Limit         int  `json:"limit"`
+			IncludeClosed bool `json:"include_closed"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		workstreams, err := e.laventeCareStore.ListWorkstreams(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), args.IncludeClosed)
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare opdrachten",
+			"count":       len(workstreams),
+			"items":       workstreams,
+			"instruction": "Gebruik opdrachten voor flexibele kleine/middelgrote klussen. Stack-tags zijn voorbeelden van systemen, geen vaste bedrijfsrichting.",
+		}, err)
+
 	case "laventecareActiesOpvragen":
 		var args struct {
 			Limit int `json:"limit"`
@@ -2445,15 +2493,23 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "laventecareDossierDocumentenOpvragen":
 		var args struct {
-			Limit     int    `json:"limit"`
-			LeadID    string `json:"lead_id"`
-			ProjectID string `json:"project_id"`
+			Limit        int    `json:"limit"`
+			LeadID       string `json:"lead_id"`
+			ProjectID    string `json:"project_id"`
+			WorkstreamID string `json:"workstream_id"`
+			CompanyID    string `json:"company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		if strings.TrimSpace(args.LeadID) != "" && strings.TrimSpace(args.ProjectID) != "" {
-			return e.jsonResponse(nil, fmt.Errorf("gebruik lead_id of project_id, niet allebei"))
+		filterCount := 0
+		for _, value := range []string{args.LeadID, args.ProjectID, args.WorkstreamID, args.CompanyID} {
+			if strings.TrimSpace(value) != "" {
+				filterCount++
+			}
+		}
+		if filterCount > 1 {
+			return e.jsonResponse(nil, fmt.Errorf("gebruik company_id, lead_id, project_id of workstream_id, niet meerdere tegelijk"))
 		}
 		leadID, err := parseOptionalUUID(args.LeadID)
 		if err != nil {
@@ -2463,13 +2519,96 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
 		}
-		docs, err := e.laventeCareStore.ListDossierDocuments(ctx, e.userID, clampToolLimit(args.Limit, 8, 30), leadID, projectID)
+		workstreamID, err := parseOptionalUUID(args.WorkstreamID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige workstream_id: %w", err))
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		docs, err := e.laventeCareStore.ListDossierDocuments(ctx, e.userID, clampToolLimit(args.Limit, 8, 30), leadID, projectID, workstreamID, companyID)
 		return e.jsonResponse(map[string]any{
 			"scope":       "laventecare dossierdocumenten",
 			"count":       len(docs),
 			"items":       docs,
 			"instruction": "Gebruik deze lijst als PDF dossierhistorie. Zeg bij count 0 dat er nog geen PDF in het dossier is vastgelegd.",
 		}, err)
+
+	case "laventecareKlantMaken":
+		var args model.LCCompanyCreate
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Naam) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("naam verplicht"))
+		}
+		company, err := e.laventeCareStore.CreateCompany(ctx, e.userID, args)
+		return e.jsonResponse(map[string]any{"ok": true, "company": company}, err)
+
+	case "laventecareKlantBijwerken":
+		var args struct {
+			ID             string  `json:"id"`
+			Naam           *string `json:"naam"`
+			Website        *string `json:"website"`
+			Sector         *string `json:"sector"`
+			Status         *string `json:"status"`
+			RelatieType    *string `json:"relatie_type"`
+			Notities       *string `json:"notities"`
+			LaatsteContact *string `json:"laatste_contact"`
+			VolgendeActie  *string `json:"volgende_actie"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if err := e.laventeCareStore.UpdateCompany(ctx, e.userID, id, model.LCCompanyUpdate{
+			Naam:           args.Naam,
+			Website:        args.Website,
+			Sector:         args.Sector,
+			Status:         args.Status,
+			RelatieType:    args.RelatieType,
+			Notities:       args.Notities,
+			LaatsteContact: args.LaatsteContact,
+			VolgendeActie:  args.VolgendeActie,
+		}); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "companyId": id.String()}, nil)
+
+	case "laventecareContactMaken":
+		var args struct {
+			CompanyID string  `json:"company_id"`
+			Naam      string  `json:"naam"`
+			Email     *string `json:"email"`
+			Telefoon  *string `json:"telefoon"`
+			Rol       *string `json:"rol"`
+			IsPrimary bool    `json:"is_primary"`
+			Notities  *string `json:"notities"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Naam) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("naam verplicht"))
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		contact, err := e.laventeCareStore.CreateContact(ctx, e.userID, model.LCContactCreate{
+			CompanyID: companyID,
+			Naam:      args.Naam,
+			Email:     args.Email,
+			Telefoon:  args.Telefoon,
+			Rol:       args.Rol,
+			IsPrimary: args.IsPrimary,
+			Notities:  args.Notities,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "contact": contact}, err)
 
 	case "laventecareLeadMaken":
 		var args model.LCLeadCreate
@@ -2488,6 +2627,8 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	case "laventecareLeadBijwerken":
 		var args struct {
 			ID                 string  `json:"id"`
+			CompanyID          string  `json:"company_id"`
+			ContactID          string  `json:"contact_id"`
 			Status             *string `json:"status"`
 			FitScore           *int    `json:"fit_score"`
 			Pijnpunt           *string `json:"pijnpunt"`
@@ -2502,7 +2643,17 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		contactID, err := parseOptionalUUID(args.ContactID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige contact_id: %w", err))
+		}
 		input := model.LCLeadUpdate{
+			CompanyID:          companyID,
+			ContactID:          contactID,
 			Status:             args.Status,
 			FitScore:           args.FitScore,
 			Pijnpunt:           args.Pijnpunt,
@@ -2539,6 +2690,146 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		})
 		return e.jsonResponse(map[string]any{"ok": true, "project": project}, err)
 
+	case "laventecareOpdrachtMaken":
+		var args struct {
+			Titel            string   `json:"titel"`
+			CompanyID        string   `json:"company_id"`
+			Type             string   `json:"type"`
+			Status           string   `json:"status"`
+			Prioriteit       string   `json:"prioriteit"`
+			KlantNaam        *string  `json:"klant_naam"`
+			Bron             string   `json:"bron"`
+			SourceID         *string  `json:"source_id"`
+			LeadID           string   `json:"lead_id"`
+			ProjectID        string   `json:"project_id"`
+			Doel             *string  `json:"doel"`
+			Scope            *string  `json:"scope"`
+			Deliverable      *string  `json:"deliverable"`
+			Bevindingen      *string  `json:"bevindingen"`
+			VolgendeStap     *string  `json:"volgende_stap"`
+			Deadline         *string  `json:"deadline"`
+			GeschatteMinuten *int     `json:"geschatte_minuten"`
+			WaardeIndicatie  *int     `json:"waarde_indicatie"`
+			StackTags        []string `json:"stack_tags"`
+			Tags             []string `json:"tags"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Titel) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("titel verplicht"))
+		}
+		leadID, err := parseOptionalUUID(args.LeadID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
+		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		workstream, err := e.laventeCareStore.CreateWorkstream(ctx, e.userID, model.LCWorkstreamCreate{
+			Titel:            args.Titel,
+			CompanyID:        companyID,
+			Type:             args.Type,
+			Status:           args.Status,
+			Prioriteit:       args.Prioriteit,
+			KlantNaam:        args.KlantNaam,
+			Bron:             args.Bron,
+			SourceID:         args.SourceID,
+			LeadID:           leadID,
+			ProjectID:        projectID,
+			Doel:             args.Doel,
+			Scope:            args.Scope,
+			Deliverable:      args.Deliverable,
+			Bevindingen:      args.Bevindingen,
+			VolgendeStap:     args.VolgendeStap,
+			Deadline:         args.Deadline,
+			GeschatteMinuten: args.GeschatteMinuten,
+			WaardeIndicatie:  args.WaardeIndicatie,
+			StackTags:        args.StackTags,
+			Tags:             args.Tags,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "workstream": workstream}, err)
+
+	case "laventecareOpdrachtBijwerken":
+		var args struct {
+			ID               string   `json:"id"`
+			CompanyID        string   `json:"company_id"`
+			Type             *string  `json:"type"`
+			Status           *string  `json:"status"`
+			Prioriteit       *string  `json:"prioriteit"`
+			KlantNaam        *string  `json:"klant_naam"`
+			Doel             *string  `json:"doel"`
+			Scope            *string  `json:"scope"`
+			Deliverable      *string  `json:"deliverable"`
+			Bevindingen      *string  `json:"bevindingen"`
+			VolgendeStap     *string  `json:"volgende_stap"`
+			Deadline         *string  `json:"deadline"`
+			GeschatteMinuten *int     `json:"geschatte_minuten"`
+			WaardeIndicatie  *int     `json:"waarde_indicatie"`
+			StackTags        []string `json:"stack_tags"`
+			Tags             []string `json:"tags"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		if err := e.laventeCareStore.UpdateWorkstream(ctx, e.userID, id, model.LCWorkstreamUpdate{
+			CompanyID:        companyID,
+			Type:             args.Type,
+			Status:           args.Status,
+			Prioriteit:       args.Prioriteit,
+			KlantNaam:        args.KlantNaam,
+			Doel:             args.Doel,
+			Scope:            args.Scope,
+			Deliverable:      args.Deliverable,
+			Bevindingen:      args.Bevindingen,
+			VolgendeStap:     args.VolgendeStap,
+			Deadline:         args.Deadline,
+			GeschatteMinuten: args.GeschatteMinuten,
+			WaardeIndicatie:  args.WaardeIndicatie,
+			StackTags:        args.StackTags,
+			Tags:             args.Tags,
+		}); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{"ok": true, "workstreamId": id.String()}, nil)
+
+	case "laventecareOpdrachtNaarProject":
+		var args struct {
+			WorkstreamID string  `json:"workstream_id"`
+			Naam         string  `json:"naam"`
+			Fase         *string `json:"fase"`
+			Status       *string `json:"status"`
+			Samenvatting *string `json:"samenvatting"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		workstreamID, err := uuid.Parse(args.WorkstreamID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		project, err := e.laventeCareStore.ConvertWorkstreamToProject(ctx, e.userID, model.LCConvertWorkstreamToProject{
+			WorkstreamID: workstreamID,
+			Naam:         args.Naam,
+			Fase:         args.Fase,
+			Status:       args.Status,
+			Samenvatting: args.Samenvatting,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "project": project}, err)
+
 	case "laventecareProjectMaken":
 		var args model.LCProjectCreate
 		if err := e.parseArgs(argsJSON, &args); err != nil {
@@ -2553,8 +2844,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if strings.TrimSpace(args.Status) == "" {
 			args.Status = "actief"
 		}
+		companyID, _, err := e.laventeCareStore.ResolveCompanyReference(ctx, e.userID, args.CompanyID, args.CompanyName, args.Website)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
 		project, err := e.laventeCareStore.CreateProject(ctx, e.userID, model.LCProject{
 			Naam:            args.Naam,
+			CompanyID:       companyID,
 			Fase:            args.Fase,
 			Status:          args.Status,
 			WaardeIndicatie: args.WaardeIndicatie,
@@ -2567,6 +2863,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	case "laventecareProjectBijwerken":
 		var args struct {
 			ID              string  `json:"id"`
+			CompanyID       string  `json:"company_id"`
 			Fase            *string `json:"fase"`
 			Status          *string `json:"status"`
 			WaardeIndicatie *int    `json:"waarde_indicatie"`
@@ -2581,7 +2878,12 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
 		input := model.LCProjectUpdate{
+			CompanyID:       companyID,
 			Fase:            args.Fase,
 			Status:          args.Status,
 			WaardeIndicatie: args.WaardeIndicatie,
@@ -2596,15 +2898,17 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "laventecareActieMaken":
 		var args struct {
-			Source          string  `json:"source"`
-			SourceID        *string `json:"source_id"`
-			Title           string  `json:"title"`
-			Summary         *string `json:"summary"`
-			ActionType      string  `json:"action_type"`
-			Priority        string  `json:"priority"`
-			DueDate         *string `json:"due_date"`
-			LinkedLeadID    *string `json:"linked_lead_id"`
-			LinkedProjectID *string `json:"linked_project_id"`
+			Source             string  `json:"source"`
+			SourceID           *string `json:"source_id"`
+			Title              string  `json:"title"`
+			Summary            *string `json:"summary"`
+			ActionType         string  `json:"action_type"`
+			Priority           string  `json:"priority"`
+			DueDate            *string `json:"due_date"`
+			LinkedLeadID       *string `json:"linked_lead_id"`
+			LinkedProjectID    *string `json:"linked_project_id"`
+			LinkedWorkstreamID *string `json:"linked_workstream_id"`
+			LinkedCompanyID    *string `json:"linked_company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -2621,7 +2925,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if strings.TrimSpace(args.Priority) == "" {
 			args.Priority = "normaal"
 		}
-		var linkedLeadID, linkedProjectID *uuid.UUID
+		var linkedLeadID, linkedProjectID, linkedWorkstreamID, linkedCompanyID *uuid.UUID
 		if args.LinkedLeadID != nil && strings.TrimSpace(*args.LinkedLeadID) != "" {
 			id, err := uuid.Parse(*args.LinkedLeadID)
 			if err != nil {
@@ -2636,16 +2940,32 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			}
 			linkedProjectID = &id
 		}
+		if args.LinkedWorkstreamID != nil && strings.TrimSpace(*args.LinkedWorkstreamID) != "" {
+			id, err := uuid.Parse(*args.LinkedWorkstreamID)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			linkedWorkstreamID = &id
+		}
+		if args.LinkedCompanyID != nil && strings.TrimSpace(*args.LinkedCompanyID) != "" {
+			id, err := uuid.Parse(*args.LinkedCompanyID)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			linkedCompanyID = &id
+		}
 		action, err := e.laventeCareStore.CreateAction(ctx, e.userID, model.LCActionCreate{
-			Source:          args.Source,
-			SourceID:        args.SourceID,
-			Title:           args.Title,
-			Summary:         args.Summary,
-			ActionType:      args.ActionType,
-			Priority:        args.Priority,
-			DueDate:         args.DueDate,
-			LinkedLeadID:    linkedLeadID,
-			LinkedProjectID: linkedProjectID,
+			Source:             args.Source,
+			SourceID:           args.SourceID,
+			Title:              args.Title,
+			Summary:            args.Summary,
+			ActionType:         args.ActionType,
+			Priority:           args.Priority,
+			DueDate:            args.DueDate,
+			LinkedLeadID:       linkedLeadID,
+			LinkedProjectID:    linkedProjectID,
+			LinkedWorkstreamID: linkedWorkstreamID,
+			LinkedCompanyID:    linkedCompanyID,
 		})
 		return e.jsonResponse(map[string]any{"ok": true, "action": action}, err)
 
