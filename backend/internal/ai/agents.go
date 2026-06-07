@@ -47,8 +47,9 @@ var Policies = map[string]ToolPolicy{
 	"leesEmail":  {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"zoekEmails": {Agents: []string{"email", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// System reads
-	"syncStatusOpvragen":   {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"automationsOverzicht": {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"syncStatusOpvragen":      {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"automationsOverzicht":    {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"contextBriefingOpvragen": {Agents: []string{"brain", "dashboard", "agenda", "email", "notes", "laventecare"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},

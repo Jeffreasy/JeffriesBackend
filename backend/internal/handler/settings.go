@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -301,6 +303,9 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 		"grokChat":      h.checkGrokChat(ctx),
 		"grokWebSearch": h.checkGrokWebSearch(ctx),
 		"groqVoice":     h.checkGroqVoice(ctx),
+		"googleOAuth":   h.checkGoogleOAuth(ctx),
+		"gmailSync":     h.checkGmailSyncFreshness(ctx),
+		"calendarSync":  h.checkCalendarSyncFreshness(ctx),
 	}
 
 	ok := true
@@ -389,6 +394,86 @@ func (h *SettingsHandler) checkGroqVoice(ctx context.Context) aiDiagnosticCheck 
 		return errorCheck("Groq voice", "Groq models endpoint "+http.StatusText(resp.StatusCode)+": "+truncateText(string(body), 180), latency)
 	}
 	return successCheck("Groq voice", "API key geldig, Whisper kan gebruikt worden", latency)
+}
+
+func (h *SettingsHandler) checkGoogleOAuth(ctx context.Context) aiDiagnosticCheck {
+	if !googleOAuthConfigured(h.cfg) {
+		return skippedCheck("Google OAuth", "Google client, secret of refresh token ontbreekt")
+	}
+
+	start := time.Now()
+	body := url.Values{
+		"client_id":     {h.cfg.GoogleClientID},
+		"client_secret": {h.cfg.GoogleClientSecret},
+		"refresh_token": {h.cfg.GoogleRefreshToken},
+		"grant_type":    {"refresh_token"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(body.Encode()))
+	if err != nil {
+		return errorCheck("Google OAuth", err.Error(), time.Since(start).Milliseconds())
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return errorCheck("Google OAuth", err.Error(), latency)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return errorCheck("Google OAuth", "Refresh token test faalt: "+truncateText(string(data), 180), latency)
+	}
+	return successCheck("Google OAuth", "Refresh token geldig voor Gmail en Calendar", latency)
+}
+
+func (h *SettingsHandler) checkGmailSyncFreshness(ctx context.Context) aiDiagnosticCheck {
+	if !googleOAuthConfigured(h.cfg) {
+		return skippedCheck("Gmail sync", "Google OAuth ontbreekt")
+	}
+	meta, err := store.NewEmailStore(h.db).GetSyncMeta(ctx, h.cfg.HomeappUserID)
+	if err != nil {
+		return errorCheck("Gmail sync", err.Error(), 0)
+	}
+	if meta == nil {
+		return warningCheck("Gmail sync", "Nog geen Gmail sync metadata", 0)
+	}
+	age := time.Since(meta.UpdatedAt)
+	detail := "Laatste sync " + meta.UpdatedAt.UTC().Format(time.RFC3339) + " · " + strconv.Itoa(meta.TotalSynced) + " emails"
+	if age > 24*time.Hour {
+		return warningCheck("Gmail sync", detail+" · ouder dan 24 uur", 0)
+	}
+	return successCheck("Gmail sync", detail, 0)
+}
+
+func (h *SettingsHandler) checkCalendarSyncFreshness(ctx context.Context) aiDiagnosticCheck {
+	if !googleOAuthConfigured(h.cfg) {
+		return skippedCheck("Calendar sync", "Google OAuth ontbreekt")
+	}
+	meta, err := store.NewScheduleStore(h.db).GetMeta(ctx, h.cfg.HomeappUserID)
+	if err != nil {
+		return errorCheck("Calendar sync", err.Error(), 0)
+	}
+	if meta == nil {
+		return warningCheck("Calendar sync", "Nog geen rooster-sync metadata", 0)
+	}
+
+	var pendingPersonal int
+	_ = h.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM personal_events
+		  WHERE user_id = $1 AND status IN ($2, $3, $4)`,
+		h.cfg.HomeappUserID,
+		store.PersonalEventStatusPendingCreate,
+		store.PersonalEventStatusPendingUpdate,
+		store.PersonalEventStatusPendingDelete,
+	).Scan(&pendingPersonal)
+
+	detail := "Rooster sync " + meta.ImportedAt.UTC().Format(time.RFC3339) + " · " + strconv.Itoa(meta.TotalRows) + " diensten"
+	if pendingPersonal > 0 {
+		return warningCheck("Calendar sync", detail+" · "+strconv.Itoa(pendingPersonal)+" afspraak/afspraken in wachtrij", 0)
+	}
+	return successCheck("Calendar sync", detail, 0)
 }
 
 func aiCapabilitySummary() map[string]int {

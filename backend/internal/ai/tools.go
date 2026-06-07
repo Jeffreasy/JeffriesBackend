@@ -190,6 +190,32 @@ var AllTools = []ToolDefinition{
 			}`),
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contextBriefingOpvragen",
+			Description: "Haalt een cross-domain live briefing op voor Telegram/Grok: planning, Gmail, notities, LaventeCare, syncstatus en aanbevolen acties.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"scope": {
+						"type": "string",
+						"enum": ["vandaag", "morgen", "week", "laventecare"],
+						"description": "Periode/focus. Default vandaag."
+					},
+					"dagen": {
+						"type": "number",
+						"description": "Aantal dagen vooruit, max 14."
+					},
+					"limit": {
+						"type": "number",
+						"description": "Maximaal aantal items per blok, max 12."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
 
 	// ── ROOSTER & FINANCE ──────────────────────────────────────────────
 	{

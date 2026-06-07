@@ -80,6 +80,25 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 	live := map[string]any{"status": "Go backend"}
 
 	switch agentID {
+	case "brain", "dashboard":
+		briefing, err := NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()).
+			buildContextBriefing(ctx, contextBriefingOptions{Scope: "vandaag", Dagen: 2, Limit: 5})
+		if err == nil {
+			live["briefing"] = briefing
+		} else {
+			live["briefingError"] = err.Error()
+		}
+	case "laventecare":
+		briefing, err := NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()).
+			buildContextBriefing(ctx, contextBriefingOptions{Scope: "laventecare", Dagen: 7, Limit: 5})
+		if err == nil {
+			live["businessBriefing"] = briefing
+		} else {
+			live["businessBriefingError"] = err.Error()
+		}
+	}
+
+	switch agentID {
 	case "notes", "brain", "dashboard":
 		if snapshot, err := e.buildNotesAISnapshot(ctx, 8); err == nil {
 			live["notes"] = snapshot

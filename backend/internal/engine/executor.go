@@ -1305,6 +1305,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			},
 		}, nil)
 
+	case "contextBriefingOpvragen":
+		var args contextBriefingOptions
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		briefing, err := e.buildContextBriefing(ctx, args)
+		return e.jsonResponse(briefing, err)
+
 	// ── ROOSTER ──────────────────────────────────────────────────────
 	case "dienstenOpvragen":
 		var events []model.Schedule
