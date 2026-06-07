@@ -1663,13 +1663,16 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "notitieAanmaken":
 		var args struct {
-			Titel      string   `json:"titel"`
-			Inhoud     string   `json:"inhoud"`
-			Tags       []string `json:"tags"`
-			Prioriteit string   `json:"prioriteit"`
-			Symbol     string   `json:"symbol"`
-			Deadline   string   `json:"deadline"`
-			TriageFlag *bool    `json:"triage_flag"`
+			Titel                string   `json:"titel"`
+			Inhoud               string   `json:"inhoud"`
+			Tags                 []string `json:"tags"`
+			Prioriteit           string   `json:"prioriteit"`
+			Symbol               string   `json:"symbol"`
+			Deadline             string   `json:"deadline"`
+			TriageFlag           *bool    `json:"triage_flag"`
+			BusinessContextType  string   `json:"businessContextType"`
+			BusinessContextID    string   `json:"businessContextId"`
+			BusinessContextTitle string   `json:"businessContextTitle"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -1686,13 +1689,16 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			title = "Nieuwe notitie"
 		}
 		n, err := e.noteStore.Create(ctx, e.userID, model.Note{
-			Titel:      &title,
-			Inhoud:     args.Inhoud,
-			Tags:       args.Tags,
-			Prioriteit: strPtr(args.Prioriteit),
-			Symbol:     strPtr(args.Symbol),
-			Deadline:   deadline,
-			TriageFlag: args.TriageFlag,
+			Titel:                &title,
+			Inhoud:               args.Inhoud,
+			Tags:                 args.Tags,
+			Prioriteit:           strPtr(args.Prioriteit),
+			Symbol:               strPtr(args.Symbol),
+			Deadline:             deadline,
+			TriageFlag:           args.TriageFlag,
+			BusinessContextType:  optionalStringPtr(args.BusinessContextType),
+			BusinessContextID:    optionalStringPtr(args.BusinessContextID),
+			BusinessContextTitle: optionalStringPtr(args.BusinessContextTitle),
 		})
 		if err != nil {
 			return e.jsonResponse(nil, err)
@@ -1728,15 +1734,18 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "notitieBewerken":
 		var args struct {
-			ID          string   `json:"id"`
-			Titel       *string  `json:"titel"`
-			Inhoud      *string  `json:"inhoud"`
-			Tags        []string `json:"tags"`
-			Prioriteit  *string  `json:"prioriteit"`
-			Symbol      *string  `json:"symbol"`
-			Deadline    *string  `json:"deadline"`
-			TriageFlag  *bool    `json:"triage_flag"`
-			IsCompleted *bool    `json:"is_completed"`
+			ID                   string   `json:"id"`
+			Titel                *string  `json:"titel"`
+			Inhoud               *string  `json:"inhoud"`
+			Tags                 []string `json:"tags"`
+			Prioriteit           *string  `json:"prioriteit"`
+			Symbol               *string  `json:"symbol"`
+			Deadline             *string  `json:"deadline"`
+			TriageFlag           *bool    `json:"triage_flag"`
+			IsCompleted          *bool    `json:"is_completed"`
+			BusinessContextType  *string  `json:"businessContextType"`
+			BusinessContextID    *string  `json:"businessContextId"`
+			BusinessContextTitle *string  `json:"businessContextTitle"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -1779,6 +1788,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		if args.TriageFlag != nil {
 			fields["triage_flag"] = *args.TriageFlag
+		}
+		if args.BusinessContextType != nil {
+			fields["business_context_type"] = optionalStringPtr(*args.BusinessContextType)
+		}
+		if args.BusinessContextID != nil {
+			fields["business_context_id"] = optionalStringPtr(*args.BusinessContextID)
+		}
+		if args.BusinessContextTitle != nil {
+			fields["business_context_title"] = optionalStringPtr(*args.BusinessContextTitle)
 		}
 		if args.IsCompleted != nil {
 			fields["is_completed"] = *args.IsCompleted
@@ -1948,23 +1966,26 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "afspraakMaken":
 		var args struct {
-			Titel        string `json:"titel"`
-			Title        string `json:"title"`
-			StartDatum   string `json:"startDatum"`
-			StartDatumDB string `json:"start_datum"`
-			StartIso     string `json:"startIso"`
-			StartTijd    string `json:"startTijd"`
-			StartTijdDB  string `json:"start_tijd"`
-			EindDatum    string `json:"eindDatum"`
-			EindDatumDB  string `json:"eind_datum"`
-			EindIso      string `json:"eindIso"`
-			EindTijd     string `json:"eindTijd"`
-			EindTijdDB   string `json:"eind_tijd"`
-			Heledag      *bool  `json:"heledag"`
-			AllDay       *bool  `json:"allDay"`
-			Locatie      string `json:"locatie"`
-			Beschrijving string `json:"beschrijving"`
-			Symbol       string `json:"symbol"`
+			Titel                string `json:"titel"`
+			Title                string `json:"title"`
+			StartDatum           string `json:"startDatum"`
+			StartDatumDB         string `json:"start_datum"`
+			StartIso             string `json:"startIso"`
+			StartTijd            string `json:"startTijd"`
+			StartTijdDB          string `json:"start_tijd"`
+			EindDatum            string `json:"eindDatum"`
+			EindDatumDB          string `json:"eind_datum"`
+			EindIso              string `json:"eindIso"`
+			EindTijd             string `json:"eindTijd"`
+			EindTijdDB           string `json:"eind_tijd"`
+			Heledag              *bool  `json:"heledag"`
+			AllDay               *bool  `json:"allDay"`
+			Locatie              string `json:"locatie"`
+			Beschrijving         string `json:"beschrijving"`
+			Symbol               string `json:"symbol"`
+			BusinessContextType  string `json:"businessContextType"`
+			BusinessContextID    string `json:"businessContextId"`
+			BusinessContextTitle string `json:"businessContextTitle"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -1984,19 +2005,22 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		eventID := "ai-" + uuid.NewString()
 		event := model.PersonalEvent{
-			UserID:       e.userID,
-			EventID:      eventID,
-			Titel:        title,
-			StartDatum:   startDate,
-			StartTijd:    optionalStringPtr(firstNonEmpty(args.StartTijd, args.StartTijdDB)),
-			EindDatum:    endDate,
-			EindTijd:     optionalStringPtr(firstNonEmpty(args.EindTijd, args.EindTijdDB)),
-			Heledag:      allDay,
-			Locatie:      optionalStringPtr(args.Locatie),
-			Beschrijving: optionalStringPtr(args.Beschrijving),
-			Symbol:       optionalStringPtr(args.Symbol),
-			Status:       store.PersonalEventStatusPendingCreate,
-			Kalender:     "AI",
+			UserID:               e.userID,
+			EventID:              eventID,
+			Titel:                title,
+			StartDatum:           startDate,
+			StartTijd:            optionalStringPtr(firstNonEmpty(args.StartTijd, args.StartTijdDB)),
+			EindDatum:            endDate,
+			EindTijd:             optionalStringPtr(firstNonEmpty(args.EindTijd, args.EindTijdDB)),
+			Heledag:              allDay,
+			Locatie:              optionalStringPtr(args.Locatie),
+			Beschrijving:         optionalStringPtr(args.Beschrijving),
+			Symbol:               optionalStringPtr(args.Symbol),
+			BusinessContextType:  optionalStringPtr(args.BusinessContextType),
+			BusinessContextID:    optionalStringPtr(args.BusinessContextID),
+			BusinessContextTitle: optionalStringPtr(args.BusinessContextTitle),
+			Status:               store.PersonalEventStatusPendingCreate,
+			Kalender:             "AI",
 		}
 		if event.Heledag {
 			event.StartTijd = nil
@@ -2014,25 +2038,28 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "afspraakBewerken":
 		var args struct {
-			EventID      string `json:"eventId"`
-			EventIDDB    string `json:"event_id"`
-			Titel        string `json:"titel"`
-			Title        string `json:"title"`
-			StartDatum   string `json:"startDatum"`
-			StartDatumDB string `json:"start_datum"`
-			StartIso     string `json:"startIso"`
-			StartTijd    string `json:"startTijd"`
-			StartTijdDB  string `json:"start_tijd"`
-			EindDatum    string `json:"eindDatum"`
-			EindDatumDB  string `json:"eind_datum"`
-			EindIso      string `json:"eindIso"`
-			EindTijd     string `json:"eindTijd"`
-			EindTijdDB   string `json:"eind_tijd"`
-			Heledag      *bool  `json:"heledag"`
-			AllDay       *bool  `json:"allDay"`
-			Locatie      string `json:"locatie"`
-			Beschrijving string `json:"beschrijving"`
-			Symbol       string `json:"symbol"`
+			EventID              string `json:"eventId"`
+			EventIDDB            string `json:"event_id"`
+			Titel                string `json:"titel"`
+			Title                string `json:"title"`
+			StartDatum           string `json:"startDatum"`
+			StartDatumDB         string `json:"start_datum"`
+			StartIso             string `json:"startIso"`
+			StartTijd            string `json:"startTijd"`
+			StartTijdDB          string `json:"start_tijd"`
+			EindDatum            string `json:"eindDatum"`
+			EindDatumDB          string `json:"eind_datum"`
+			EindIso              string `json:"eindIso"`
+			EindTijd             string `json:"eindTijd"`
+			EindTijdDB           string `json:"eind_tijd"`
+			Heledag              *bool  `json:"heledag"`
+			AllDay               *bool  `json:"allDay"`
+			Locatie              string `json:"locatie"`
+			Beschrijving         string `json:"beschrijving"`
+			Symbol               string `json:"symbol"`
+			BusinessContextType  string `json:"businessContextType"`
+			BusinessContextID    string `json:"businessContextId"`
+			BusinessContextTitle string `json:"businessContextTitle"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -2078,6 +2105,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		if strings.TrimSpace(args.Symbol) != "" {
 			event.Symbol = optionalStringPtr(args.Symbol)
+		}
+		if strings.TrimSpace(args.BusinessContextType) != "" {
+			event.BusinessContextType = optionalStringPtr(args.BusinessContextType)
+		}
+		if strings.TrimSpace(args.BusinessContextID) != "" {
+			event.BusinessContextID = optionalStringPtr(args.BusinessContextID)
+		}
+		if strings.TrimSpace(args.BusinessContextTitle) != "" {
+			event.BusinessContextTitle = optionalStringPtr(args.BusinessContextTitle)
 		}
 		event.Status = store.PersonalEventStatusPendingUpdate
 		if err := e.personalEvStore.Upsert(ctx, event); err != nil {

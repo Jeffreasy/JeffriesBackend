@@ -159,21 +159,24 @@ type TransactionImport struct {
 // ─── PersonalEvent ───────────────────────────────────────────────────────────
 
 type PersonalEvent struct {
-	ID                uuid.UUID `json:"id" db:"id"`
-	UserID            string    `json:"user_id" db:"user_id"`
-	EventID           string    `json:"event_id" db:"event_id"`
-	Titel             string    `json:"titel" db:"titel"`
-	StartDatum        string    `json:"start_datum" db:"start_datum"`
-	StartTijd         *string   `json:"start_tijd" db:"start_tijd"`
-	EindDatum         string    `json:"eind_datum" db:"eind_datum"`
-	EindTijd          *string   `json:"eind_tijd" db:"eind_tijd"`
-	Heledag           bool      `json:"heledag" db:"heledag"`
-	Locatie           *string   `json:"locatie" db:"locatie"`
-	Beschrijving      *string   `json:"beschrijving" db:"beschrijving"`
-	ConflictMetDienst *string   `json:"conflict_met_dienst" db:"conflict_met_dienst"`
-	Symbol            *string   `json:"symbol" db:"symbol"`
-	Status            string    `json:"status" db:"status"`
-	Kalender          string    `json:"kalender" db:"kalender"`
+	ID                   uuid.UUID `json:"id" db:"id"`
+	UserID               string    `json:"user_id" db:"user_id"`
+	EventID              string    `json:"event_id" db:"event_id"`
+	Titel                string    `json:"titel" db:"titel"`
+	StartDatum           string    `json:"start_datum" db:"start_datum"`
+	StartTijd            *string   `json:"start_tijd" db:"start_tijd"`
+	EindDatum            string    `json:"eind_datum" db:"eind_datum"`
+	EindTijd             *string   `json:"eind_tijd" db:"eind_tijd"`
+	Heledag              bool      `json:"heledag" db:"heledag"`
+	Locatie              *string   `json:"locatie" db:"locatie"`
+	Beschrijving         *string   `json:"beschrijving" db:"beschrijving"`
+	ConflictMetDienst    *string   `json:"conflict_met_dienst" db:"conflict_met_dienst"`
+	Symbol               *string   `json:"symbol" db:"symbol"`
+	BusinessContextType  *string   `json:"business_context_type" db:"business_context_type"`
+	BusinessContextID    *string   `json:"business_context_id" db:"business_context_id"`
+	BusinessContextTitle *string   `json:"business_context_title" db:"business_context_title"`
+	Status               string    `json:"status" db:"status"`
+	Kalender             string    `json:"kalender" db:"kalender"`
 }
 
 // ─── AuditLog ────────────────────────────────────────────────────────────────
@@ -245,38 +248,44 @@ type PrivacySettings struct {
 // ─── Notes ──────────────────────────────────────────────────────────────────
 
 type Note struct {
-	ID            uuid.UUID  `json:"id" db:"id"`
-	UserID        string     `json:"user_id" db:"user_id"`
-	Titel         *string    `json:"titel" db:"titel"`
-	Inhoud        string     `json:"inhoud" db:"inhoud"`
-	Tags          []string   `json:"tags" db:"tags"`
-	Kleur         *string    `json:"kleur" db:"kleur"`
-	IsPinned      bool       `json:"is_pinned" db:"is_pinned"`
-	IsArchived    bool       `json:"is_archived" db:"is_archived"`
-	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
-	CompletedAt   *time.Time `json:"completed_at" db:"completed_at"`
-	Deadline      *time.Time `json:"deadline" db:"deadline"`
-	LinkedEventID *string    `json:"linked_event_id" db:"linked_event_id"`
-	Prioriteit    *string    `json:"prioriteit" db:"prioriteit"`
-	Symbol        *string    `json:"symbol" db:"symbol"`
-	TriageFlag    *bool      `json:"triage_flag" db:"triage_flag"`
-	Aangemaakt    time.Time  `json:"aangemaakt" db:"aangemaakt"`
-	Gewijzigd     time.Time  `json:"gewijzigd" db:"gewijzigd"`
+	ID                   uuid.UUID  `json:"id" db:"id"`
+	UserID               string     `json:"user_id" db:"user_id"`
+	Titel                *string    `json:"titel" db:"titel"`
+	Inhoud               string     `json:"inhoud" db:"inhoud"`
+	Tags                 []string   `json:"tags" db:"tags"`
+	Kleur                *string    `json:"kleur" db:"kleur"`
+	IsPinned             bool       `json:"is_pinned" db:"is_pinned"`
+	IsArchived           bool       `json:"is_archived" db:"is_archived"`
+	IsCompleted          bool       `json:"is_completed" db:"is_completed"`
+	CompletedAt          *time.Time `json:"completed_at" db:"completed_at"`
+	Deadline             *time.Time `json:"deadline" db:"deadline"`
+	LinkedEventID        *string    `json:"linked_event_id" db:"linked_event_id"`
+	Prioriteit           *string    `json:"prioriteit" db:"prioriteit"`
+	Symbol               *string    `json:"symbol" db:"symbol"`
+	BusinessContextType  *string    `json:"business_context_type" db:"business_context_type"`
+	BusinessContextID    *string    `json:"business_context_id" db:"business_context_id"`
+	BusinessContextTitle *string    `json:"business_context_title" db:"business_context_title"`
+	TriageFlag           *bool      `json:"triage_flag" db:"triage_flag"`
+	Aangemaakt           time.Time  `json:"aangemaakt" db:"aangemaakt"`
+	Gewijzigd            time.Time  `json:"gewijzigd" db:"gewijzigd"`
 }
 
 type NoteRevision struct {
-	ID            uuid.UUID  `json:"id" db:"id"`
-	NoteID        uuid.UUID  `json:"note_id" db:"note_id"`
-	UserID        string     `json:"user_id" db:"user_id"`
-	Titel         *string    `json:"titel" db:"titel"`
-	Inhoud        string     `json:"inhoud" db:"inhoud"`
-	Tags          []string   `json:"tags" db:"tags"`
-	Kleur         *string    `json:"kleur" db:"kleur"`
-	Deadline      *time.Time `json:"deadline" db:"deadline"`
-	LinkedEventID *string    `json:"linked_event_id" db:"linked_event_id"`
-	Prioriteit    *string    `json:"prioriteit" db:"prioriteit"`
-	Symbol        *string    `json:"symbol" db:"symbol"`
-	Aangemaakt    time.Time  `json:"aangemaakt" db:"aangemaakt"`
+	ID                   uuid.UUID  `json:"id" db:"id"`
+	NoteID               uuid.UUID  `json:"note_id" db:"note_id"`
+	UserID               string     `json:"user_id" db:"user_id"`
+	Titel                *string    `json:"titel" db:"titel"`
+	Inhoud               string     `json:"inhoud" db:"inhoud"`
+	Tags                 []string   `json:"tags" db:"tags"`
+	Kleur                *string    `json:"kleur" db:"kleur"`
+	Deadline             *time.Time `json:"deadline" db:"deadline"`
+	LinkedEventID        *string    `json:"linked_event_id" db:"linked_event_id"`
+	Prioriteit           *string    `json:"prioriteit" db:"prioriteit"`
+	Symbol               *string    `json:"symbol" db:"symbol"`
+	BusinessContextType  *string    `json:"business_context_type" db:"business_context_type"`
+	BusinessContextID    *string    `json:"business_context_id" db:"business_context_id"`
+	BusinessContextTitle *string    `json:"business_context_title" db:"business_context_title"`
+	Aangemaakt           time.Time  `json:"aangemaakt" db:"aangemaakt"`
 }
 
 type NoteLink struct {

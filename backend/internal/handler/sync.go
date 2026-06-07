@@ -156,21 +156,39 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		if symbol != "" {
 			pSymbol = &symbol
 		}
+		businessContextType := pe.BusinessContextType
+		var pBusinessContextType *string
+		if businessContextType != "" {
+			pBusinessContextType = &businessContextType
+		}
+		businessContextID := pe.BusinessContextID
+		var pBusinessContextID *string
+		if businessContextID != "" {
+			pBusinessContextID = &businessContextID
+		}
+		businessContextTitle := pe.BusinessContextTitle
+		var pBusinessContextTitle *string
+		if businessContextTitle != "" {
+			pBusinessContextTitle = &businessContextTitle
+		}
 
 		err = peStore.UpsertSynced(ctx, model.PersonalEvent{
-			UserID:       userID,
-			EventID:      pe.EventID,
-			Titel:        pe.Titel,
-			StartDatum:   pe.StartDatum,
-			StartTijd:    pStartTijd,
-			EindDatum:    pe.EindDatum,
-			EindTijd:     pEindTijd,
-			Heledag:      pe.Heledag,
-			Locatie:      pLocatie,
-			Beschrijving: pBeschrijving,
-			Symbol:       pSymbol,
-			Status:       pe.Status,
-			Kalender:     pe.Kalender,
+			UserID:               userID,
+			EventID:              pe.EventID,
+			Titel:                pe.Titel,
+			StartDatum:           pe.StartDatum,
+			StartTijd:            pStartTijd,
+			EindDatum:            pe.EindDatum,
+			EindTijd:             pEindTijd,
+			Heledag:              pe.Heledag,
+			Locatie:              pLocatie,
+			Beschrijving:         pBeschrijving,
+			Symbol:               pSymbol,
+			BusinessContextType:  pBusinessContextType,
+			BusinessContextID:    pBusinessContextID,
+			BusinessContextTitle: pBusinessContextTitle,
+			Status:               pe.Status,
+			Kalender:             pe.Kalender,
 		})
 		if err != nil {
 			personalWriteFailed = true

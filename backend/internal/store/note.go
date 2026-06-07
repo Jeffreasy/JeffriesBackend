@@ -26,16 +26,18 @@ var ErrNoteNotFound = pgx.ErrNoRows
 var ErrLinkedEventNotFound = errors.New("linked event not found")
 
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived, is_completed, completed_at,
-	deadline, linked_event_id, prioriteit, symbol, triage_flag, aangemaakt, gewijzigd`
+	deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
+	business_context_title, triage_flag, aangemaakt, gewijzigd`
 
 const noteRevisionCols = `id, note_id, user_id, titel, inhoud, tags, kleur,
-	deadline, linked_event_id, prioriteit, symbol, aangemaakt`
+	deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
+	business_context_title, aangemaakt`
 
 func scanNote(row pgx.Row) (model.Note, error) {
 	var n model.Note
 	err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 		&n.IsPinned, &n.IsArchived, &n.IsCompleted, &n.CompletedAt, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-		&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+		&n.Symbol, &n.BusinessContextType, &n.BusinessContextID, &n.BusinessContextTitle, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -45,7 +47,8 @@ func scanNote(row pgx.Row) (model.Note, error) {
 func scanNoteRevision(row pgx.Row) (model.NoteRevision, error) {
 	var r model.NoteRevision
 	err := row.Scan(&r.ID, &r.NoteID, &r.UserID, &r.Titel, &r.Inhoud, &r.Tags,
-		&r.Kleur, &r.Deadline, &r.LinkedEventID, &r.Prioriteit, &r.Symbol, &r.Aangemaakt)
+		&r.Kleur, &r.Deadline, &r.LinkedEventID, &r.Prioriteit, &r.Symbol,
+		&r.BusinessContextType, &r.BusinessContextID, &r.BusinessContextTitle, &r.Aangemaakt)
 	if r.Tags == nil {
 		r.Tags = []string{}
 	}
@@ -66,7 +69,7 @@ func (s *NoteStore) List(ctx context.Context, userID string) ([]model.Note, erro
 		var n model.Note
 		err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 			&n.IsPinned, &n.IsArchived, &n.IsCompleted, &n.CompletedAt, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-			&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+			&n.Symbol, &n.BusinessContextType, &n.BusinessContextID, &n.BusinessContextTitle, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
 		if n.Tags == nil {
 			n.Tags = []string{}
 		}
@@ -101,13 +104,14 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 
 	created, err := scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO notes (id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived, is_completed, completed_at,
-			deadline, linked_event_id, prioriteit, symbol, triage_flag, aangemaakt, gewijzigd)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
+			business_context_title, triage_flag, aangemaakt, gewijzigd)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING %s
 	`, noteCols),
 		n.ID, n.UserID, n.Titel, n.Inhoud, n.Tags, n.Kleur,
 		n.IsPinned, n.IsArchived, n.IsCompleted, n.CompletedAt, n.Deadline, n.LinkedEventID, n.Prioriteit,
-		n.Symbol, n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
+		n.Symbol, n.BusinessContextType, n.BusinessContextID, n.BusinessContextTitle, n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
 	))
 	if err != nil {
 		return created, err
@@ -231,7 +235,7 @@ func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fie
 }
 
 func shouldCheckNoteRevision(fields map[string]any) bool {
-	for _, key := range []string{"titel", "inhoud", "tags", "kleur", "deadline", "linked_event_id", "prioriteit", "symbol"} {
+	for _, key := range []string{"titel", "inhoud", "tags", "kleur", "deadline", "linked_event_id", "prioriteit", "symbol", "business_context_type", "business_context_id", "business_context_title"} {
 		if _, ok := fields[key]; ok {
 			return true
 		}
@@ -280,6 +284,21 @@ func noteRevisionFieldsChanged(n model.Note, fields map[string]any) bool {
 		case "symbol":
 			next, ok := optionalStringValue(val)
 			if ok && normalizedOptionalString(n.Symbol) != next {
+				return true
+			}
+		case "business_context_type":
+			next, ok := optionalStringValue(val)
+			if ok && normalizedOptionalString(n.BusinessContextType) != next {
+				return true
+			}
+		case "business_context_id":
+			next, ok := optionalStringValue(val)
+			if ok && normalizedOptionalString(n.BusinessContextID) != next {
+				return true
+			}
+		case "business_context_title":
+			next, ok := optionalStringValue(val)
+			if ok && normalizedOptionalString(n.BusinessContextTitle) != next {
 				return true
 			}
 		}
@@ -382,10 +401,12 @@ func insertNoteRevision(ctx context.Context, tx pgx.Tx, n model.Note) error {
 	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO note_revisions (note_id, user_id, titel, inhoud, tags, kleur,
-			deadline, linked_event_id, prioriteit, symbol)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
+			business_context_title)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`, n.ID, n.UserID, n.Titel, n.Inhoud, tags, n.Kleur,
-		n.Deadline, n.LinkedEventID, n.Prioriteit, n.Symbol)
+		n.Deadline, n.LinkedEventID, n.Prioriteit, n.Symbol, n.BusinessContextType, n.BusinessContextID,
+		n.BusinessContextTitle)
 	return err
 }
 
@@ -454,11 +475,15 @@ func (s *NoteStore) RestoreRevision(ctx context.Context, userID string, noteID, 
 		       linked_event_id = $6,
 		       prioriteit = $7,
 		       symbol = $8,
-		       gewijzigd = $9
-		 WHERE id = $10 AND user_id = $11
+		       business_context_type = $9,
+		       business_context_id = $10,
+		       business_context_title = $11,
+		       gewijzigd = $12
+		 WHERE id = $13 AND user_id = $14
 		RETURNING %s
 	`, noteCols), rev.Titel, rev.Inhoud, rev.Tags, rev.Kleur, rev.Deadline,
-		rev.LinkedEventID, rev.Prioriteit, rev.Symbol, time.Now(), noteID, userID))
+		rev.LinkedEventID, rev.Prioriteit, rev.Symbol, rev.BusinessContextType, rev.BusinessContextID,
+		rev.BusinessContextTitle, time.Now(), noteID, userID))
 	if err != nil {
 		return updated, err
 	}
@@ -517,14 +542,7 @@ func (s *NoteStore) Search(ctx context.Context, userID, query string, limit int)
 	}
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (model.Note, error) {
-		var n model.Note
-		err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
-			&n.IsPinned, &n.IsArchived, &n.IsCompleted, &n.CompletedAt, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-			&n.Symbol, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
-		if n.Tags == nil {
-			n.Tags = []string{}
-		}
-		return n, err
+		return scanNote(row)
 	})
 }
 

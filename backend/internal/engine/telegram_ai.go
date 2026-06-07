@@ -130,10 +130,15 @@ func (e *Engine) buildNotesAISnapshot(ctx context.Context, limit int) (map[strin
 func noteAIItem(note model.Note, now time.Time, loc *time.Location) map[string]any {
 	checked, total := checklistProgress(note.Inhoud)
 	item := map[string]any{
-		"id":             note.ID.String(),
-		"title":          noteTitle(note),
-		"priority":       optionalNoteString(note.Prioriteit),
-		"symbol":         optionalNoteString(note.Symbol),
+		"id":       note.ID.String(),
+		"title":    noteTitle(note),
+		"priority": optionalNoteString(note.Prioriteit),
+		"symbol":   optionalNoteString(note.Symbol),
+		"businessContext": map[string]any{
+			"type":  optionalNoteString(note.BusinessContextType),
+			"id":    optionalNoteString(note.BusinessContextID),
+			"title": optionalNoteString(note.BusinessContextTitle),
+		},
 		"tags":           note.Tags,
 		"isPinned":       note.IsPinned,
 		"isCompleted":    note.IsCompleted,
@@ -309,4 +314,3 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 
 	return reply, nil
 }
-

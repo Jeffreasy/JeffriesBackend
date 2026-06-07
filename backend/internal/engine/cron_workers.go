@@ -328,21 +328,27 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 			locatie := strPtr(e.Locatie)
 			beschrijving := strPtr(e.Beschrijving)
 			symbol := strPtr(e.Symbol)
+			businessContextType := strPtr(e.BusinessContextType)
+			businessContextID := strPtr(e.BusinessContextID)
+			businessContextTitle := strPtr(e.BusinessContextTitle)
 
 			pe := model.PersonalEvent{
-				UserID:       e.UserID,
-				EventID:      e.EventID,
-				Titel:        e.Titel,
-				StartDatum:   e.StartDatum,
-				StartTijd:    startTijd,
-				EindDatum:    e.EindDatum,
-				EindTijd:     eindTijd,
-				Heledag:      e.Heledag,
-				Locatie:      locatie,
-				Beschrijving: beschrijving,
-				Symbol:       symbol,
-				Status:       e.Status,
-				Kalender:     e.Kalender,
+				UserID:               e.UserID,
+				EventID:              e.EventID,
+				Titel:                e.Titel,
+				StartDatum:           e.StartDatum,
+				StartTijd:            startTijd,
+				EindDatum:            e.EindDatum,
+				EindTijd:             eindTijd,
+				Heledag:              e.Heledag,
+				Locatie:              locatie,
+				Beschrijving:         beschrijving,
+				Symbol:               symbol,
+				BusinessContextType:  businessContextType,
+				BusinessContextID:    businessContextID,
+				BusinessContextTitle: businessContextTitle,
+				Status:               e.Status,
+				Kalender:             e.Kalender,
 			}
 			err := evStore.UpsertSynced(ctx, pe)
 			if err != nil {

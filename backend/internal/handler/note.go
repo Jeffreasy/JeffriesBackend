@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -72,14 +73,17 @@ func (h *NoteHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 type noteCreateBody struct {
-	Titel         *string  `json:"titel"`
-	Inhoud        string   `json:"inhoud"`
-	Tags          []string `json:"tags"`
-	Kleur         *string  `json:"kleur"`
-	Deadline      *string  `json:"deadline"`
-	LinkedEventID *string  `json:"linkedEventId"`
-	Prioriteit    *string  `json:"prioriteit"`
-	Symbol        *string  `json:"symbol"`
+	Titel                *string  `json:"titel"`
+	Inhoud               string   `json:"inhoud"`
+	Tags                 []string `json:"tags"`
+	Kleur                *string  `json:"kleur"`
+	Deadline             *string  `json:"deadline"`
+	LinkedEventID        *string  `json:"linkedEventId"`
+	Prioriteit           *string  `json:"prioriteit"`
+	Symbol               *string  `json:"symbol"`
+	BusinessContextType  *string  `json:"businessContextType"`
+	BusinessContextID    *string  `json:"businessContextId"`
+	BusinessContextTitle *string  `json:"businessContextTitle"`
 }
 
 // Create adds a new note.
@@ -123,14 +127,17 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n := model.Note{
-		Titel:         body.Titel,
-		Inhoud:        body.Inhoud,
-		Tags:          body.Tags,
-		Kleur:         body.Kleur,
-		Deadline:      deadline,
-		LinkedEventID: linkedEventID,
-		Prioriteit:    body.Prioriteit,
-		Symbol:        body.Symbol,
+		Titel:                body.Titel,
+		Inhoud:               body.Inhoud,
+		Tags:                 body.Tags,
+		Kleur:                body.Kleur,
+		Deadline:             deadline,
+		LinkedEventID:        linkedEventID,
+		Prioriteit:           body.Prioriteit,
+		Symbol:               body.Symbol,
+		BusinessContextType:  cleanOptionalString(body.BusinessContextType),
+		BusinessContextID:    cleanOptionalString(body.BusinessContextID),
+		BusinessContextTitle: cleanOptionalString(body.BusinessContextTitle),
 	}
 	created, err := h.store.Create(r.Context(), userID, n)
 	if err != nil {
@@ -141,17 +148,20 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 type noteUpdateBody struct {
-	Titel         *string  `json:"titel"`
-	Inhoud        *string  `json:"inhoud"`
-	Tags          []string `json:"tags"`
-	Kleur         *string  `json:"kleur"`
-	IsPinned      *bool    `json:"isPinned"`
-	IsArchived    *bool    `json:"isArchived"`
-	IsCompleted   *bool    `json:"isCompleted"`
-	Deadline      *string  `json:"deadline"`
-	LinkedEventID *string  `json:"linkedEventId"`
-	Prioriteit    *string  `json:"prioriteit"`
-	Symbol        *string  `json:"symbol"`
+	Titel                *string  `json:"titel"`
+	Inhoud               *string  `json:"inhoud"`
+	Tags                 []string `json:"tags"`
+	Kleur                *string  `json:"kleur"`
+	IsPinned             *bool    `json:"isPinned"`
+	IsArchived           *bool    `json:"isArchived"`
+	IsCompleted          *bool    `json:"isCompleted"`
+	Deadline             *string  `json:"deadline"`
+	LinkedEventID        *string  `json:"linkedEventId"`
+	Prioriteit           *string  `json:"prioriteit"`
+	Symbol               *string  `json:"symbol"`
+	BusinessContextType  *string  `json:"businessContextType"`
+	BusinessContextID    *string  `json:"businessContextId"`
+	BusinessContextTitle *string  `json:"businessContextTitle"`
 }
 
 // Update patches a note.
@@ -221,6 +231,15 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		} else {
 			fields["symbol"] = *body.Symbol
 		}
+	}
+	if body.BusinessContextType != nil {
+		fields["business_context_type"] = cleanOptionalString(body.BusinessContextType)
+	}
+	if body.BusinessContextID != nil {
+		fields["business_context_id"] = cleanOptionalString(body.BusinessContextID)
+	}
+	if body.BusinessContextTitle != nil {
+		fields["business_context_title"] = cleanOptionalString(body.BusinessContextTitle)
 	}
 	if body.LinkedEventID != nil {
 		linkedEventID, err := h.store.NormalizeLinkedEventID(r.Context(), userID, body.LinkedEventID)
@@ -483,4 +502,15 @@ func parseDeadline(deadlineStr *string) (*time.Time, error) {
 		return &t, nil
 	}
 	return nil, err
+}
+
+func cleanOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }

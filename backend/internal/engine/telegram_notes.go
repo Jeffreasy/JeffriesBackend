@@ -280,6 +280,11 @@ func formatNoteListLine(note model.Note, now time.Time, loc *time.Location) stri
 	if total > 0 {
 		meta = append(meta, fmt.Sprintf("%d/%d checklist", checked, total))
 	}
+	if note.BusinessContextTitle != nil && strings.TrimSpace(*note.BusinessContextTitle) != "" {
+		meta = append(meta, strings.TrimSpace(*note.BusinessContextTitle))
+	} else if note.BusinessContextType != nil && strings.TrimSpace(*note.BusinessContextType) != "" {
+		meta = append(meta, strings.TrimSpace(*note.BusinessContextType))
+	}
 	if len(note.Tags) > 0 {
 		meta = append(meta, "#"+strings.Join(note.Tags[:minInt(len(note.Tags), 2)], " #"))
 	}

@@ -457,7 +457,10 @@ var AllTools = []ToolDefinition{
 					"heledag": {"type": "boolean"},
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
-					"symbol": {"type": "string", "description": "Optioneel UI-symbool."}
+					"symbol": {"type": "string", "description": "Optioneel UI-symbool."},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"], "description": "Optionele zakelijke context voor LaventeCare."},
+					"businessContextId": {"type": "string", "description": "Optioneel lead- of project-id als de afspraak aan een specifiek LaventeCare object hangt."},
+					"businessContextTitle": {"type": "string", "description": "Leesbare naam van de zakelijke context."}
 				},
 				"required": ["titel", "startDatum"]
 			}`),
@@ -480,7 +483,10 @@ var AllTools = []ToolDefinition{
 					"heledag": {"type": "boolean"},
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
-					"symbol": {"type": "string"}
+					"symbol": {"type": "string"},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"]},
+					"businessContextId": {"type": "string"},
+					"businessContextTitle": {"type": "string"}
 				},
 				"required": ["eventId"]
 			}`),
@@ -573,6 +579,19 @@ var AllTools = []ToolDefinition{
 					"triage_flag": {
 						"type": "boolean",
 						"description": "Zet op true wanneer de notitie vandaag aandacht nodig heeft, urgent is of een open actie bevat."
+					},
+					"businessContextType": {
+						"type": "string",
+						"enum": ["laventecare", "laventecare_lead", "laventecare_project"],
+						"description": "Optionele zakelijke context; gebruik laventecare_* wanneer de notitie over het bedrijf, een lead of project gaat."
+					},
+					"businessContextId": {
+						"type": "string",
+						"description": "Optioneel lead- of project-id als bekend."
+					},
+					"businessContextTitle": {
+						"type": "string",
+						"description": "Leesbare naam van lead/project of 'LaventeCare'."
 					}
 				},
 				"required": ["titel", "inhoud"]
@@ -622,7 +641,10 @@ var AllTools = []ToolDefinition{
 					"symbol": {"type": "string"},
 					"deadline": {"type": "string", "description": "ISO datum/tijd, yyyy-mm-dd, dd-mm-yyyy of leeg om te wissen."},
 					"triage_flag": {"type": "boolean"},
-					"is_completed": {"type": "boolean"}
+					"is_completed": {"type": "boolean"},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_project"]},
+					"businessContextId": {"type": "string"},
+					"businessContextTitle": {"type": "string"}
 				},
 				"required": ["id"]
 			}`),

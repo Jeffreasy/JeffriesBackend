@@ -78,19 +78,22 @@ type ScheduleSyncResult struct {
 
 // PersonalEventSync represents a parsed personal event for PostgreSQL.
 type PersonalEventSync struct {
-	UserID       string `json:"user_id"`
-	EventID      string `json:"event_id"`
-	Titel        string `json:"titel"`
-	StartDatum   string `json:"start_datum"`
-	StartTijd    string `json:"start_tijd"`
-	EindDatum    string `json:"eind_datum"`
-	EindTijd     string `json:"eind_tijd"`
-	Heledag      bool   `json:"heledag"`
-	Locatie      string `json:"locatie"`
-	Beschrijving string `json:"beschrijving"`
-	Symbol       string `json:"symbol"`
-	Status       string `json:"status"`
-	Kalender     string `json:"kalender"`
+	UserID               string `json:"user_id"`
+	EventID              string `json:"event_id"`
+	Titel                string `json:"titel"`
+	StartDatum           string `json:"start_datum"`
+	StartTijd            string `json:"start_tijd"`
+	EindDatum            string `json:"eind_datum"`
+	EindTijd             string `json:"eind_tijd"`
+	Heledag              bool   `json:"heledag"`
+	Locatie              string `json:"locatie"`
+	Beschrijving         string `json:"beschrijving"`
+	Symbol               string `json:"symbol"`
+	BusinessContextType  string `json:"business_context_type"`
+	BusinessContextID    string `json:"business_context_id"`
+	BusinessContextTitle string `json:"business_context_title"`
+	Status               string `json:"status"`
+	Kalender             string `json:"kalender"`
 }
 
 // PersonalEventsSyncResult carries synced personal events plus the source
@@ -112,11 +115,15 @@ const (
 )
 
 var (
-	amsterdam             *time.Location
-	nlDays                = []string{"Zondag", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag"}
-	keywordsIncl          = []string{"dienst", "sdb", "shift"}
-	keywordsExcl          = []string{"vrij", "vakantie"}
-	symbolMetadataPattern = regexp.MustCompile(`(?i)\[symbol:([a-z0-9_-]+)\]`)
+	amsterdam                   *time.Location
+	nlDays                      = []string{"Zondag", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag"}
+	keywordsIncl                = []string{"dienst", "sdb", "shift"}
+	keywordsExcl                = []string{"vrij", "vakantie"}
+	symbolMetadataPattern       = regexp.MustCompile(`(?i)\[symbol:([a-z0-9_-]+)\]`)
+	contextMetadataPattern      = regexp.MustCompile(`(?i)\[context:([^\]]+)\]`)
+	businessContextTypePattern  = regexp.MustCompile(`(?i)\[(?:businessContextType|business_context_type):([^\]]+)\]`)
+	businessContextIDPattern    = regexp.MustCompile(`(?i)\[(?:businessContextId|business_context_id):([^\]]+)\]`)
+	businessContextTitlePattern = regexp.MustCompile(`(?i)\[(?:businessContextTitle|business_context_title):([^\]]+)\]`)
 )
 
 func init() {
@@ -350,9 +357,15 @@ func DeletePersonalEvent(ctx context.Context, client *OAuthClient, calendarID, e
 
 func personalEventPayload(event model.PersonalEvent) (calendarEventWrite, error) {
 	payload := calendarEventWrite{
-		Summary:     event.Titel,
-		Location:    ptrValue(event.Locatie),
-		Description: descriptionWithSymbol(ptrValue(event.Beschrijving), event.Symbol),
+		Summary:  event.Titel,
+		Location: ptrValue(event.Locatie),
+		Description: descriptionWithPersonalEventMetadata(
+			ptrValue(event.Beschrijving),
+			event.Symbol,
+			event.BusinessContextType,
+			event.BusinessContextID,
+			event.BusinessContextTitle,
+		),
 	}
 
 	if event.Heledag {
@@ -403,25 +416,43 @@ func ptrValue(p *string) string {
 	return *p
 }
 
-func descriptionWithSymbol(description string, symbol *string) string {
-	if symbol == nil {
-		return description
+func descriptionWithPersonalEventMetadata(description string, symbol, contextType, contextID, contextTitle *string) string {
+	cleaned := strings.TrimSpace(symbolMetadataPattern.ReplaceAllString(description, ""))
+	cleaned = strings.TrimSpace(contextMetadataPattern.ReplaceAllString(cleaned, ""))
+	cleaned = strings.TrimSpace(businessContextTypePattern.ReplaceAllString(cleaned, ""))
+	cleaned = strings.TrimSpace(businessContextIDPattern.ReplaceAllString(cleaned, ""))
+	cleaned = strings.TrimSpace(businessContextTitlePattern.ReplaceAllString(cleaned, ""))
+
+	tokens := []string{}
+	if value := cleanMetadataValue(ptrValue(symbol)); value != "" {
+		tokens = append(tokens, "[symbol:"+value+"]")
 	}
 
-	value := strings.TrimSpace(*symbol)
-	if value == "" {
-		return strings.TrimSpace(symbolMetadataPattern.ReplaceAllString(description, ""))
+	contextValue := cleanMetadataValue(ptrValue(contextType))
+	if contextValue != "" {
+		if strings.HasPrefix(strings.ToLower(contextValue), "laventecare") {
+			tokens = append(tokens, "[context:laventecare]")
+		}
+		tokens = append(tokens, "[businessContextType:"+contextValue+"]")
+		if value := cleanMetadataValue(ptrValue(contextID)); value != "" {
+			tokens = append(tokens, "[businessContextId:"+value+"]")
+		}
+		title := cleanMetadataTitle(ptrValue(contextTitle))
+		if title == "" && strings.EqualFold(contextValue, "laventecare") {
+			title = "LaventeCare"
+		}
+		if title != "" {
+			tokens = append(tokens, "[businessContextTitle:"+title+"]")
+		}
 	}
 
-	token := "[symbol:" + value + "]"
-	if symbolMetadataPattern.MatchString(description) {
-		return symbolMetadataPattern.ReplaceAllString(description, token)
+	if len(tokens) == 0 {
+		return cleaned
 	}
-	description = strings.TrimSpace(description)
-	if description == "" {
-		return token
+	if cleaned == "" {
+		return strings.Join(tokens, " ")
 	}
-	return description + " " + token
+	return cleaned + " " + strings.Join(tokens, " ")
 }
 
 func symbolFromDescription(description string) string {
@@ -430,6 +461,45 @@ func symbolFromDescription(description string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
+}
+
+func businessContextFromDescription(description string) (string, string, string) {
+	contextType := metadataMatch(businessContextTypePattern, description)
+	if contextType == "" {
+		context := metadataMatch(contextMetadataPattern, description)
+		if strings.EqualFold(context, "laventecare") {
+			contextType = "laventecare"
+		}
+	}
+	contextID := metadataMatch(businessContextIDPattern, description)
+	contextTitle := metadataMatch(businessContextTitlePattern, description)
+	if contextTitle == "" && strings.EqualFold(contextType, "laventecare") {
+		contextTitle = "LaventeCare"
+	}
+	return contextType, contextID, contextTitle
+}
+
+func metadataMatch(pattern *regexp.Regexp, description string) string {
+	match := pattern.FindStringSubmatch(description)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func cleanMetadataValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "]", ")")
+	value = strings.ReplaceAll(value, "[", "(")
+	return value
+}
+
+func cleanMetadataTitle(value string) string {
+	value = cleanMetadataValue(value)
+	if len(value) > 120 {
+		value = strings.TrimSpace(value[:120])
+	}
+	return value
 }
 
 func localRFC3339(date, clock string) (string, error) {
@@ -598,21 +668,25 @@ func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary
 		startTijd = startDt.Format("15:04")
 		eindTijd = eindDt.Format("15:04")
 	}
+	businessContextType, businessContextID, businessContextTitle := businessContextFromDescription(ev.Description)
 
 	return &PersonalEventSync{
-		UserID:       userID,
-		EventID:      eventID,
-		Titel:        titel,
-		StartDatum:   startDt.Format("2006-01-02"),
-		StartTijd:    startTijd,
-		EindDatum:    eindDt.Format("2006-01-02"),
-		EindTijd:     eindTijd,
-		Heledag:      isAllDay,
-		Locatie:      ev.Location,
-		Beschrijving: ev.Description,
-		Symbol:       symbolFromDescription(ev.Description),
-		Status:       status,
-		Kalender:     kalenderName,
+		UserID:               userID,
+		EventID:              eventID,
+		Titel:                titel,
+		StartDatum:           startDt.Format("2006-01-02"),
+		StartTijd:            startTijd,
+		EindDatum:            eindDt.Format("2006-01-02"),
+		EindTijd:             eindTijd,
+		Heledag:              isAllDay,
+		Locatie:              ev.Location,
+		Beschrijving:         ev.Description,
+		Symbol:               symbolFromDescription(ev.Description),
+		BusinessContextType:  businessContextType,
+		BusinessContextID:    businessContextID,
+		BusinessContextTitle: businessContextTitle,
+		Status:               status,
+		Kalender:             kalenderName,
 	}
 }
 
