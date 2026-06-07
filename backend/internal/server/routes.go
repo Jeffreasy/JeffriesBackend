@@ -184,6 +184,8 @@ func registerRoutes(
 			r.Route("/laventecare", func(r chi.Router) {
 				r.Get("/cockpit", lcH.Cockpit)
 				r.Get("/documents", lcH.ListDocuments)
+				r.Get("/dossier-documents", lcH.ListDossierDocuments)
+				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)
 				r.Get("/leads", lcH.ListLeads)
 				r.With(authMw).Post("/leads", lcH.CreateLead)
 				r.With(authMw).Patch("/leads/{id}", lcH.UpdateLead)

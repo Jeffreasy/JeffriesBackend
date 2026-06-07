@@ -9,42 +9,42 @@ import (
 // ─── LaventeCare CRM ────────────────────────────────────────────────────────
 
 type LCLead struct {
-	ID               uuid.UUID  `json:"id" db:"id"`
-	UserID           string     `json:"user_id" db:"user_id"`
-	CompanyID        *uuid.UUID `json:"company_id" db:"company_id"`
-	ContactID        *uuid.UUID `json:"contact_id" db:"contact_id"`
-	Titel            string     `json:"titel" db:"titel"`
-	Bron             string     `json:"bron" db:"bron"`
-	SourceID         *string    `json:"source_id" db:"source_id"`
-	Status           string     `json:"status" db:"status"`
-	FitScore         *int       `json:"fit_score" db:"fit_score"`
-	Pijnpunt         *string    `json:"pijnpunt" db:"pijnpunt"`
-	Prioriteit       *string    `json:"prioriteit" db:"prioriteit"`
-	VolgendeStap     *string    `json:"volgende_stap" db:"volgende_stap"`
-	VolgendeActieDatum *string  `json:"volgende_actie_datum" db:"volgende_actie_datum"`
-	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	ID                 uuid.UUID  `json:"id" db:"id"`
+	UserID             string     `json:"user_id" db:"user_id"`
+	CompanyID          *uuid.UUID `json:"company_id" db:"company_id"`
+	ContactID          *uuid.UUID `json:"contact_id" db:"contact_id"`
+	Titel              string     `json:"titel" db:"titel"`
+	Bron               string     `json:"bron" db:"bron"`
+	SourceID           *string    `json:"source_id" db:"source_id"`
+	Status             string     `json:"status" db:"status"`
+	FitScore           *int       `json:"fit_score" db:"fit_score"`
+	Pijnpunt           *string    `json:"pijnpunt" db:"pijnpunt"`
+	Prioriteit         *string    `json:"prioriteit" db:"prioriteit"`
+	VolgendeStap       *string    `json:"volgende_stap" db:"volgende_stap"`
+	VolgendeActieDatum *string    `json:"volgende_actie_datum" db:"volgende_actie_datum"`
+	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 type LCLeadCreate struct {
-	Titel            string  `json:"titel"`
-	CompanyName      *string `json:"company_name"`
-	Website          *string `json:"website"`
-	Bron             string  `json:"bron"`
-	SourceID         *string `json:"source_id"`
-	Pijnpunt         *string `json:"pijnpunt"`
-	Prioriteit       *string `json:"prioriteit"`
-	FitScore         *int    `json:"fit_score"`
-	VolgendeStap     *string `json:"volgende_stap"`
+	Titel              string  `json:"titel"`
+	CompanyName        *string `json:"company_name"`
+	Website            *string `json:"website"`
+	Bron               string  `json:"bron"`
+	SourceID           *string `json:"source_id"`
+	Pijnpunt           *string `json:"pijnpunt"`
+	Prioriteit         *string `json:"prioriteit"`
+	FitScore           *int    `json:"fit_score"`
+	VolgendeStap       *string `json:"volgende_stap"`
 	VolgendeActieDatum *string `json:"volgende_actie_datum"`
 }
 
 type LCLeadUpdate struct {
-	Status           *string `json:"status,omitempty"`
-	FitScore         *int    `json:"fit_score,omitempty"`
-	Pijnpunt         *string `json:"pijnpunt,omitempty"`
-	Prioriteit       *string `json:"prioriteit,omitempty"`
-	VolgendeStap     *string `json:"volgende_stap,omitempty"`
+	Status             *string `json:"status,omitempty"`
+	FitScore           *int    `json:"fit_score,omitempty"`
+	Pijnpunt           *string `json:"pijnpunt,omitempty"`
+	Prioriteit         *string `json:"prioriteit,omitempty"`
+	VolgendeStap       *string `json:"volgende_stap,omitempty"`
 	VolgendeActieDatum *string `json:"volgende_actie_datum,omitempty"`
 }
 
@@ -113,18 +113,52 @@ type LCActionCreate struct {
 }
 
 type LCDocument struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	UserID      string    `json:"user_id" db:"user_id"`
-	DocumentKey string    `json:"document_key" db:"document_key"`
-	Titel       string    `json:"titel" db:"titel"`
-	Categorie   string    `json:"categorie" db:"categorie"`
-	Fase        *string   `json:"fase" db:"fase"`
-	Versie      string    `json:"versie" db:"versie"`
-	SourcePath  *string   `json:"source_path" db:"source_path"`
-	Samenvatting string   `json:"samenvatting" db:"samenvatting"`
-	Tags        []string  `json:"tags" db:"tags"`
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	ID           uuid.UUID `json:"id" db:"id"`
+	UserID       string    `json:"user_id" db:"user_id"`
+	DocumentKey  string    `json:"document_key" db:"document_key"`
+	Titel        string    `json:"titel" db:"titel"`
+	Categorie    string    `json:"categorie" db:"categorie"`
+	Fase         *string   `json:"fase" db:"fase"`
+	Versie       string    `json:"versie" db:"versie"`
+	SourcePath   *string   `json:"source_path" db:"source_path"`
+	Samenvatting string    `json:"samenvatting" db:"samenvatting"`
+	Tags         []string  `json:"tags" db:"tags"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
+}
+
+type LCDossierDocument struct {
+	ID            uuid.UUID  `json:"id" db:"id"`
+	UserID        string     `json:"user_id" db:"user_id"`
+	DocumentKey   string     `json:"document_key" db:"document_key"`
+	Titel         string     `json:"titel" db:"titel"`
+	TemplateLabel *string    `json:"template_label" db:"template_label"`
+	ContextType   string     `json:"context_type" db:"context_type"`
+	ContextID     *string    `json:"context_id" db:"context_id"`
+	ContextTitle  *string    `json:"context_title" db:"context_title"`
+	LeadID        *uuid.UUID `json:"lead_id" db:"lead_id"`
+	ProjectID     *uuid.UUID `json:"project_id" db:"project_id"`
+	PDFURL        string     `json:"pdf_url" db:"pdf_url"`
+	Theme         string     `json:"theme" db:"theme"`
+	Delivery      string     `json:"delivery" db:"delivery"`
+	Notes         *string    `json:"notes" db:"notes"`
+	GeneratedAt   time.Time  `json:"generated_at" db:"generated_at"`
+	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+}
+
+type LCDossierDocumentCreate struct {
+	DocumentKey   string     `json:"document_key"`
+	Titel         string     `json:"titel"`
+	TemplateLabel *string    `json:"template_label"`
+	ContextType   string     `json:"context_type"`
+	ContextID     *string    `json:"context_id"`
+	ContextTitle  *string    `json:"context_title"`
+	LeadID        *uuid.UUID `json:"lead_id"`
+	ProjectID     *uuid.UUID `json:"project_id"`
+	PDFURL        string     `json:"pdf_url"`
+	Theme         string     `json:"theme"`
+	Delivery      string     `json:"delivery"`
+	Notes         *string    `json:"notes"`
 }
 
 type LCDecision struct {
@@ -170,31 +204,33 @@ type LCSlaIncident struct {
 
 // LCCockpit is the aggregated dashboard response.
 type LCCockpit struct {
-	Summary         LCCockpitSummary   `json:"summary"`
-	ActiveLeads     []LCLead           `json:"activeLeads"`
-	ActiveProjects  []LCProject        `json:"activeProjects"`
-	ActionItems     []LCActionItem     `json:"actionItems"`
-	OpenIncidents   []LCSlaIncident    `json:"openIncidents"`
-	OpenChanges     []LCChangeRequest  `json:"openChanges"`
-	RecentDecisions []LCDecision       `json:"recentDecisions"`
-	DocumentCatalog []LCDocument       `json:"documentCatalog"`
-	BusinessSignals []LCBusinessSignal `json:"businessSignals"`
-	FollowUps       []LCFollowUpSignal `json:"followUps"`
+	Summary          LCCockpitSummary    `json:"summary"`
+	ActiveLeads      []LCLead            `json:"activeLeads"`
+	ActiveProjects   []LCProject         `json:"activeProjects"`
+	ActionItems      []LCActionItem      `json:"actionItems"`
+	OpenIncidents    []LCSlaIncident     `json:"openIncidents"`
+	OpenChanges      []LCChangeRequest   `json:"openChanges"`
+	RecentDecisions  []LCDecision        `json:"recentDecisions"`
+	DocumentCatalog  []LCDocument        `json:"documentCatalog"`
+	DossierDocuments []LCDossierDocument `json:"dossierDocuments"`
+	BusinessSignals  []LCBusinessSignal  `json:"businessSignals"`
+	FollowUps        []LCFollowUpSignal  `json:"followUps"`
 }
 
 type LCCockpitSummary struct {
-	Leads           int  `json:"leads"`
-	ActiveLeads     int  `json:"activeLeads"`
-	Projects        int  `json:"projects"`
-	ActiveProjects  int  `json:"activeProjects"`
-	Documents       int  `json:"documents"`
-	OpenIncidents   int  `json:"openIncidents"`
-	OpenChanges     int  `json:"openChanges"`
-	Decisions       int  `json:"decisions"`
-	ActionItems     int  `json:"actionItems"`
-	DocumentsSeeded bool `json:"documentsSeeded"`
-	BusinessSignals int  `json:"businessSignals"`
-	FollowUps       int  `json:"followUps"`
+	Leads            int  `json:"leads"`
+	ActiveLeads      int  `json:"activeLeads"`
+	Projects         int  `json:"projects"`
+	ActiveProjects   int  `json:"activeProjects"`
+	Documents        int  `json:"documents"`
+	OpenIncidents    int  `json:"openIncidents"`
+	OpenChanges      int  `json:"openChanges"`
+	Decisions        int  `json:"decisions"`
+	ActionItems      int  `json:"actionItems"`
+	DossierDocuments int  `json:"dossierDocuments"`
+	DocumentsSeeded  bool `json:"documentsSeeded"`
+	BusinessSignals  int  `json:"businessSignals"`
+	FollowUps        int  `json:"followUps"`
 }
 
 // LCConvertLeadToProject is the request body for converting a lead to a project.

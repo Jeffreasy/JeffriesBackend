@@ -301,7 +301,8 @@ func (s *LaventeCareStore) SearchDocuments(ctx context.Context, userID string, q
 func (s *LaventeCareStore) SeedDocuments(ctx context.Context, userID string, docs []model.LCDocument) (inserted, updated int, err error) {
 	now := time.Now().UTC()
 	for _, doc := range docs {
-		tag, uErr := s.db.Pool.Exec(ctx,
+		var wasInserted bool
+		uErr := s.db.Pool.QueryRow(ctx,
 			`INSERT INTO lc_documents (id, user_id, document_key, titel, categorie, fase, versie,
 			        source_path, samenvatting, tags, created_at, updated_at)
 			 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
@@ -309,18 +310,146 @@ func (s *LaventeCareStore) SeedDocuments(ctx context.Context, userID string, doc
 			        titel = EXCLUDED.titel, categorie = EXCLUDED.categorie,
 			        fase = EXCLUDED.fase, versie = EXCLUDED.versie,
 			        source_path = EXCLUDED.source_path, samenvatting = EXCLUDED.samenvatting,
-			        tags = EXCLUDED.tags, updated_at = EXCLUDED.updated_at`,
+			        tags = EXCLUDED.tags, updated_at = EXCLUDED.updated_at
+			 RETURNING xmax = 0`,
 			userID, doc.DocumentKey, doc.Titel, doc.Categorie, doc.Fase, doc.Versie,
-			doc.SourcePath, doc.Samenvatting, doc.Tags, now)
+			doc.SourcePath, doc.Samenvatting, doc.Tags, now).Scan(&wasInserted)
 		if uErr != nil {
 			return inserted, updated, uErr
 		}
-		if tag.RowsAffected() > 0 {
-			// ON CONFLICT DO UPDATE always reports 1 row; distinguish by checking creation
+		if wasInserted {
+			inserted++
+		} else {
 			updated++
 		}
 	}
 	return inserted, updated, nil
+}
+
+// ─── Dossier Documents ──────────────────────────────────────────────────────
+
+func (s *LaventeCareStore) ListDossierDocuments(ctx context.Context, userID string, limit int, leadID, projectID *uuid.UUID) ([]model.LCDossierDocument, error) {
+	base := `SELECT id, user_id, document_key, titel, template_label, context_type,
+		        context_id, context_title, lead_id, project_id, pdf_url, theme,
+		        delivery, notes, generated_at, created_at
+		 FROM lc_dossier_documents
+		 WHERE user_id = $1`
+
+	if leadID != nil {
+		rows, err := s.db.Pool.Query(ctx, base+` AND lead_id = $2 ORDER BY created_at DESC LIMIT $3`, userID, *leadID, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return pgx.CollectRows(rows, scanDossierDocument)
+	}
+
+	if projectID != nil {
+		rows, err := s.db.Pool.Query(ctx, base+` AND project_id = $2 ORDER BY created_at DESC LIMIT $3`, userID, *projectID, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return pgx.CollectRows(rows, scanDossierDocument)
+	}
+
+	rows, err := s.db.Pool.Query(ctx, base+` ORDER BY created_at DESC LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanDossierDocument)
+}
+
+func (s *LaventeCareStore) CountDossierDocuments(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM lc_dossier_documents WHERE user_id = $1`,
+		userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (s *LaventeCareStore) CreateDossierDocument(ctx context.Context, userID string, input model.LCDossierDocumentCreate) (*model.LCDossierDocument, error) {
+	if err := s.validateDossierDocumentTarget(ctx, userID, input.LeadID, input.ProjectID); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	id := uuid.New()
+	contextType := strings.TrimSpace(input.ContextType)
+	if contextType == "" {
+		contextType = "manual"
+	}
+	theme := strings.TrimSpace(input.Theme)
+	if theme == "" {
+		theme = "screen"
+	}
+	delivery := strings.TrimSpace(input.Delivery)
+	if delivery == "" {
+		delivery = "inline"
+	}
+
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_dossier_documents (id, user_id, document_key, titel, template_label,
+		        context_type, context_id, context_title, lead_id, project_id, pdf_url,
+		        theme, delivery, notes, generated_at, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
+		id, userID, input.DocumentKey, input.Titel, input.TemplateLabel,
+		contextType, input.ContextID, input.ContextTitle, input.LeadID, input.ProjectID,
+		input.PDFURL, theme, delivery, input.Notes, now)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.LCDossierDocument{
+		ID:            id,
+		UserID:        userID,
+		DocumentKey:   input.DocumentKey,
+		Titel:         input.Titel,
+		TemplateLabel: input.TemplateLabel,
+		ContextType:   contextType,
+		ContextID:     input.ContextID,
+		ContextTitle:  input.ContextTitle,
+		LeadID:        input.LeadID,
+		ProjectID:     input.ProjectID,
+		PDFURL:        input.PDFURL,
+		Theme:         theme,
+		Delivery:      delivery,
+		Notes:         input.Notes,
+		GeneratedAt:   now,
+		CreatedAt:     now,
+	}, nil
+}
+
+func (s *LaventeCareStore) validateDossierDocumentTarget(ctx context.Context, userID string, leadID, projectID *uuid.UUID) error {
+	if leadID != nil {
+		var exists bool
+		if err := s.db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM lc_leads WHERE user_id = $1 AND id = $2)`,
+			userID, *leadID,
+		).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return pgx.ErrNoRows
+		}
+	}
+
+	if projectID != nil {
+		var exists bool
+		if err := s.db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM lc_projects WHERE user_id = $1 AND id = $2)`,
+			userID, *projectID,
+		).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return pgx.ErrNoRows
+		}
+	}
+
+	return nil
 }
 
 // ─── Cockpit (aggregated dashboard) ──────────────────────────────────────────
@@ -342,6 +471,14 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	dossierDocuments, err := s.ListDossierDocuments(ctx, userID, 8, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	dossierDocumentCount, err := s.CountDossierDocuments(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	activeLeads := filterOpen(leads, func(l model.LCLead) string { return l.Status })
 	activeProjects := filterOpen(projects, func(p model.LCProject) string { return p.Status })
@@ -357,28 +494,30 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 
 	return &model.LCCockpit{
 		Summary: model.LCCockpitSummary{
-			Leads:           len(leads),
-			ActiveLeads:     len(activeLeads),
-			Projects:        len(projects),
-			ActiveProjects:  len(activeProjects),
-			Documents:       len(documents),
-			OpenIncidents:   len(incidents),
-			OpenChanges:     len(changes),
-			Decisions:       len(decisions),
-			ActionItems:     len(actions),
-			DocumentsSeeded: len(documents) > 0,
-			BusinessSignals: len(signals),
-			FollowUps:       len(followUps),
+			Leads:            len(leads),
+			ActiveLeads:      len(activeLeads),
+			Projects:         len(projects),
+			ActiveProjects:   len(activeProjects),
+			Documents:        len(documents),
+			OpenIncidents:    len(incidents),
+			OpenChanges:      len(changes),
+			Decisions:        len(decisions),
+			ActionItems:      len(actions),
+			DossierDocuments: dossierDocumentCount,
+			DocumentsSeeded:  len(documents) > 0,
+			BusinessSignals:  len(signals),
+			FollowUps:        len(followUps),
 		},
-		ActiveLeads:     take(activeLeads, 8),
-		ActiveProjects:  take(activeProjects, 8),
-		ActionItems:     actions,
-		OpenIncidents:   incidents,
-		OpenChanges:     changes,
-		RecentDecisions: decisions,
-		DocumentCatalog: documents,
-		BusinessSignals: signals,
-		FollowUps:       followUps,
+		ActiveLeads:      take(activeLeads, 8),
+		ActiveProjects:   take(activeProjects, 8),
+		ActionItems:      actions,
+		OpenIncidents:    incidents,
+		OpenChanges:      changes,
+		RecentDecisions:  decisions,
+		DocumentCatalog:  documents,
+		DossierDocuments: dossierDocuments,
+		BusinessSignals:  signals,
+		FollowUps:        followUps,
 	}, nil
 }
 
@@ -703,6 +842,14 @@ func scanDocument(row pgx.CollectableRow) (model.LCDocument, error) {
 	err := row.Scan(&d.ID, &d.UserID, &d.DocumentKey, &d.Titel, &d.Categorie,
 		&d.Fase, &d.Versie, &d.SourcePath, &d.Samenvatting, &d.Tags,
 		&d.CreatedAt, &d.UpdatedAt)
+	return d, err
+}
+
+func scanDossierDocument(row pgx.CollectableRow) (model.LCDossierDocument, error) {
+	var d model.LCDossierDocument
+	err := row.Scan(&d.ID, &d.UserID, &d.DocumentKey, &d.Titel, &d.TemplateLabel,
+		&d.ContextType, &d.ContextID, &d.ContextTitle, &d.LeadID, &d.ProjectID,
+		&d.PDFURL, &d.Theme, &d.Delivery, &d.Notes, &d.GeneratedAt, &d.CreatedAt)
 	return d, err
 }
 

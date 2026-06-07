@@ -372,6 +372,85 @@ func (h *LaventeCareHandler) ListDocuments(w http.ResponseWriter, r *http.Reques
 	JSON(w, http.StatusOK, docs)
 }
 
+// ListDossierDocuments returns recently generated dossier documents.
+// @Summary List Dossier Documents
+// @Description Returns generated PDF dossier document history, optionally filtered by lead or project
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(20)
+// @Param leadId query string false "Lead ID (UUID)"
+// @Param projectId query string false "Project ID (UUID)"
+// @Success 200 {array} model.LCDossierDocument
+// @Failure 400 {string} string "Invalid query parameter"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/dossier-documents [get]
+func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 20)
+	var leadID *uuid.UUID
+	var projectID *uuid.UUID
+
+	if raw := r.URL.Query().Get("leadId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid leadId")
+			return
+		}
+		leadID = &id
+	}
+
+	if raw := r.URL.Query().Get("projectId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid projectId")
+			return
+		}
+		projectID = &id
+	}
+
+	docs, err := h.store.ListDossierDocuments(r.Context(), h.userID, limit, leadID, projectID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, docs)
+}
+
+// CreateDossierDocument logs a generated PDF as a lead/project dossier document.
+// @Summary Create Dossier Document
+// @Description Logs a generated PDF URL against a lead or project dossier
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCDossierDocumentCreate true "Dossier Document Details"
+// @Success 201 {object} model.LCDossierDocument
+// @Failure 400 {string} string "Invalid request body or missing required field"
+// @Failure 404 {string} string "Lead or project not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/dossier-documents [post]
+func (h *LaventeCareHandler) CreateDossierDocument(w http.ResponseWriter, r *http.Request) {
+	var input model.LCDossierDocumentCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.DocumentKey == "" || input.Titel == "" || input.PDFURL == "" {
+		Error(w, http.StatusBadRequest, "document_key, titel en pdf_url zijn verplicht")
+		return
+	}
+
+	doc, err := h.store.CreateDossierDocument(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Lead of project niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, doc)
+}
+
 // ConvertSignalToLead creates a lead from a business signal.
 // @Summary Convert Signal to Lead
 // @Description Converts a business signal into a CRM lead
@@ -406,7 +485,7 @@ func (h *LaventeCareHandler) ConvertSignalToLead(w http.ResponseWriter, r *http.
 		return
 	}
 	JSON(w, http.StatusCreated, map[string]any{
-		"lead":  lead,
+		"lead":   lead,
 		"reused": false,
 	})
 }
