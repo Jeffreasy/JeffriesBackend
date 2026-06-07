@@ -28,7 +28,7 @@ var Registry = []Agent{
 	{ID: "email", Naam: "Email", Emoji: "📧", Beschrijving: "Gmail inbox beheren — lezen, zoeken, verwijderen, versturen.", Capabilities: []string{"Email lezen", "Email zoeken", "Email versturen", "Inbox opruimen"}},
 	{ID: "notes", Naam: "Notities", Emoji: "📝", Beschrijving: "Dagelijks journal en knowledge base — notities aanmaken, zoeken, pinnen en archiveren.", Capabilities: []string{"Dagnotities", "Notitie maken", "Notities zoeken", "Weekoverzicht", "Pinnen", "Archiveren"}},
 	{ID: "habits", Naam: "Habits", Emoji: "🎯", Beschrijving: "Habits volgen, streaks, badges en rapportage.", Capabilities: []string{"Habit voltooien", "Streaks bekijken", "Badges", "Rapport"}},
-	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren"}},
+	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis, dossierdocumenten en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren", "PDF dossierhistorie"}},
 }
 
 // GetAgent returns the agent by ID or nil.
@@ -99,11 +99,12 @@ var Policies = map[string]ToolPolicy{
 	"habitRapport":    {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"habitNotitie":    {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
 	// LaventeCare reads
-	"laventecareCockpit":           {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"laventecareKennisZoeken":      {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"laventecareLeadsOpvragen":     {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"laventecareProjectenOpvragen": {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"laventecareActiesOpvragen":    {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareCockpit":                   {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareKennisZoeken":              {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareLeadsOpvragen":             {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareProjectenOpvragen":         {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareActiesOpvragen":            {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareDossierDocumentenOpvragen": {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// LaventeCare writes
 	"laventecareLeadMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareLeadBijwerken":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},

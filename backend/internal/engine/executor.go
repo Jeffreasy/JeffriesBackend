@@ -2399,6 +2399,34 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
 		return e.jsonResponse(map[string]any{"scope": "laventecare acties", "count": len(actions), "items": actions}, err)
 
+	case "laventecareDossierDocumentenOpvragen":
+		var args struct {
+			Limit     int    `json:"limit"`
+			LeadID    string `json:"lead_id"`
+			ProjectID string `json:"project_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.LeadID) != "" && strings.TrimSpace(args.ProjectID) != "" {
+			return e.jsonResponse(nil, fmt.Errorf("gebruik lead_id of project_id, niet allebei"))
+		}
+		leadID, err := parseOptionalUUID(args.LeadID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
+		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+		}
+		docs, err := e.laventeCareStore.ListDossierDocuments(ctx, e.userID, clampToolLimit(args.Limit, 8, 30), leadID, projectID)
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare dossierdocumenten",
+			"count":       len(docs),
+			"items":       docs,
+			"instruction": "Gebruik deze lijst als PDF dossierhistorie. Zeg bij count 0 dat er nog geen PDF in het dossier is vastgelegd.",
+		}, err)
+
 	case "laventecareLeadMaken":
 		var args model.LCLeadCreate
 		if err := e.parseArgs(argsJSON, &args); err != nil {

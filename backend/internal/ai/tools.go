@@ -877,6 +877,31 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareDossierDocumentenOpvragen",
+			Description: "Haalt recent vastgelegde LaventeCare PDF dossierdocumenten op, optioneel gefilterd op lead of project.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal documenten (max 30)."
+					},
+					"lead_id": {
+						"type": "string",
+						"description": "Optionele lead UUID om op te filteren."
+					},
+					"project_id": {
+						"type": "string",
+						"description": "Optionele project UUID om op te filteren."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareLeadMaken",
 			Description: "Maakt een LaventeCare lead. Deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{
