@@ -38,6 +38,27 @@ func TestRouteFreeTextLaventeCareIntentGoesToLaventeCare(t *testing.T) {
 	}
 }
 
+func TestRouteFreeTextLaventeCareAgendaAndNotesStayWithLaventeCare(t *testing.T) {
+	tests := []string{
+		"welke afspraken heb ik rond LaventeCare deze week?",
+		"zoek notities over LaventeCare HenkeWonen",
+		"welke offertes staan in het klantdossier?",
+	}
+
+	for _, input := range tests {
+		if got := routeFreeText(input); got != "laventecare" {
+			t.Fatalf("routeFreeText(%q) = %q, want laventecare", input, got)
+		}
+	}
+}
+
+func TestRouteFreeTextLaventeCareNoteCaptureStaysWithNotes(t *testing.T) {
+	got := routeFreeText("noteer LaventeCare HenkeWonen morgen bellen")
+	if got != "notes" {
+		t.Fatalf("routeFreeText() = %q, want notes", got)
+	}
+}
+
 func TestRouteFreeTextHabitIntentGoesToHabits(t *testing.T) {
 	got := routeFreeText("ik heb mijn water habit afgevinkt")
 	if got != "habits" {

@@ -27,7 +27,7 @@ const (
 	agendaPrompt   = "Geef mijn aankomende persoonlijke agenda-afspraken. Gebruik afsprakenOpvragen en combineer met planningOpvragen wanneer diensten relevant zijn. Maak duidelijk onderscheid tussen afspraken, diensten en wachtrij-items."
 	roosterPrompt  = "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag."
 	financePrompt  = "Geef een compacte finance status voor de huidige maand. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maandanalyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand. Noem all-time alleen als de gebruiker daarom vraagt."
-	lcPrompt       = "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen, PDF dossierdocumenten en of de documentbasis is geinitialiseerd. Gebruik laventecareDossierDocumentenOpvragen als de gebruiker naar PDFs, offertes, rapportages of dossierhistorie vraagt. Gebruik geen verzonnen CRM-data."
+	lcPrompt       = "Geef de LaventeCare cockpit. Gebruik laventecareCockpit als basis en benoem leads, projecten, actiepunten, signalen, aankomende agenda/follow-ups, relevante notities, PDF dossierdocumenten en of de documentbasis is geinitialiseerd. Gebruik planningOpvragen of afsprakenOpvragen voor agenda-context, notitiesZoeken of notitiesOverzicht voor notitie-context, en laventecareDossierDocumentenOpvragen als de gebruiker naar PDFs, offertes, rapportages of dossierhistorie vraagt. Houd CRM, agenda, notities en dossierstukken duidelijk gescheiden. Gebruik geen verzonnen CRM-data."
 	emailPrompt    = "Geef een compacte inbox status en noem welke emails aandacht nodig lijken."
 	habitsPrompt   = "Geef mijn habit status voor vandaag. Gebruik habitRapport als basis en benoem vandaagDue, vandaagCompleted, streaks, badges, incidenten en maximaal drie concrete adviezen."
 	checkPrompt    = "Help mij een habit af te vinken. Gebruik habitRapport om de habits van vandaag te tonen en vraag kort welke habit ik wil voltooien als de naam ontbreekt."
@@ -645,6 +645,10 @@ func routeFreeText(text string) string {
 	}
 
 	lower := strings.ToLower(text)
+	laventeCareIntent := hasLaventeCareIntent(lower)
+	if laventeCareIntent && !hasNoteCaptureIntent(lower) && (hasPlanningQuestion(lower) || hasAgendaIntent(lower) || hasNoteIntent(lower) || hasLaventeCareDossierIntent(lower)) {
+		return "laventecare"
+	}
 	if hasPlanningQuestion(lower) {
 		return "agenda"
 	}
@@ -654,7 +658,7 @@ func routeFreeText(text string) string {
 	if hasHabitIntent(lower) {
 		return "habits"
 	}
-	if hasLaventeCareIntent(lower) {
+	if laventeCareIntent {
 		return "laventecare"
 	}
 	if hasFinanceIntent(lower) {
@@ -696,8 +700,26 @@ func hasNoteIntent(lower string) bool {
 	return false
 }
 
+func hasNoteCaptureIntent(lower string) bool {
+	for _, kw := range []string{"noteer", "onthoud", "vergeet niet", "maak notitie", "nieuwe notitie", "idee:"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasLaventeCareIntent(lower string) bool {
-	for _, kw := range []string{"laventecare", "lead", "leads", "crm", "project funnel", "klantproject", "business cockpit"} {
+	for _, kw := range []string{"laventecare", "lead", "leads", "crm", "project funnel", "klantproject", "business cockpit", "offerte", "offertes", "rapportage", "rapportages", "klantdossier", "dossierstuk"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLaventeCareDossierIntent(lower string) bool {
+	for _, kw := range []string{"pdf", "pdfs", "dossier", "dossierdocument", "dossierdocumenten", "offerte", "offertes", "rapportage", "rapportages"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}

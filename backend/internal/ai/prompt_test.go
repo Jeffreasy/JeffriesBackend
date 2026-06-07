@@ -101,6 +101,8 @@ func TestBuildSystemPromptAddsLaventeCareGuardrails(t *testing.T) {
 	for _, needle := range []string{
 		"LAVENTECARE ORCHESTRATIE",
 		"laventecareCockpit",
+		"planningOpvragen",
+		"notitiesZoeken",
 		"laventecareDossierDocumentenOpvragen",
 		"PDF Studio",
 		"documentbasis leeg",

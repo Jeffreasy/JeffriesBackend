@@ -28,7 +28,7 @@ var Registry = []Agent{
 	{ID: "email", Naam: "Email", Emoji: "📧", Beschrijving: "Gmail inbox beheren — lezen, zoeken, verwijderen, versturen.", Capabilities: []string{"Email lezen", "Email zoeken", "Email versturen", "Inbox opruimen"}},
 	{ID: "notes", Naam: "Notities", Emoji: "📝", Beschrijving: "Dagelijks journal en knowledge base — notities aanmaken, zoeken, pinnen en archiveren.", Capabilities: []string{"Dagnotities", "Notitie maken", "Notities zoeken", "Weekoverzicht", "Pinnen", "Archiveren"}},
 	{ID: "habits", Naam: "Habits", Emoji: "🎯", Beschrijving: "Habits volgen, streaks, badges en rapportage.", Capabilities: []string{"Habit voltooien", "Streaks bekijken", "Badges", "Rapport"}},
-	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis, dossierdocumenten en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren", "PDF dossierhistorie"}},
+	{ID: "laventecare", Naam: "LaventeCare", Emoji: "🏢", Beschrijving: "LaventeCare CRM — leads, projecten, acties, kennis, dossierdocumenten, agenda-context, notities en SLA.", Capabilities: []string{"Cockpit", "Kennis zoeken", "Leads beheren", "Projecten beheren", "Acties beheren", "PDF dossierhistorie", "Agenda koppeling", "Notitie context"}},
 }
 
 // GetAgent returns the agent by ID or nil.
@@ -61,7 +61,7 @@ var Policies = map[string]ToolPolicy{
 	// Smart home
 	"lampBedien": {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: false},
 	// Schedule reads
-	"planningOpvragen":        {Agents: []string{"agenda", "rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"planningOpvragen":        {Agents: []string{"agenda", "rooster", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"dienstenOpvragen":        {Agents: []string{"agenda", "rooster", "finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"contractAnalyseOpvragen": {Agents: []string{"rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"salarisOpvragen":         {Agents: []string{"finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -79,15 +79,15 @@ var Policies = map[string]ToolPolicy{
 	"afspraakMaken":       {Agents: []string{"agenda", "rooster", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"afspraakBewerken":    {Agents: []string{"agenda", "rooster", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"afspraakVerwijderen": {Agents: []string{"agenda", "rooster", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"afsprakenOpvragen":   {Agents: []string{"agenda", "rooster", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"afsprakenOpvragen":   {Agents: []string{"agenda", "rooster", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Notes
 	"notitieAanmaken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"notitiesZoeken":        {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"notitiesOverzicht":     {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"notitiesZoeken":        {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"notitiesOverzicht":     {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"notitiePinnen":         {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
 	"notitieBewerken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitieArchiveren":     {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"notitiesVandaag":       {Agents: []string{"notes", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"notitiesVandaag":       {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
 	"habitAanmaken":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
