@@ -327,7 +327,11 @@ func UpdatePersonalEvent(ctx context.Context, client *OAuthClient, calendarID, e
 	}
 
 	u := fmt.Sprintf("%s/calendars/%s/events/%s", calendarBase, url.PathEscape(calendarID), url.PathEscape(eventID))
-	return client.SendJSON(ctx, "PATCH", u, payload, nil)
+	err = client.SendJSON(ctx, "PATCH", u, payload, nil)
+	if err != nil && isInvalidStartTimeError(err) {
+		return client.SendJSON(ctx, "PUT", u, payload, nil)
+	}
+	return err
 }
 
 // DeletePersonalEvent removes a Google Calendar event. Missing remote events are treated as already deleted.
@@ -516,6 +520,10 @@ func addDaysISO(date string, days int) (string, error) {
 		return "", fmt.Errorf("parse calendar date %s: %w", date, err)
 	}
 	return t.AddDate(0, 0, days).Format("2006-01-02"), nil
+}
+
+func isInvalidStartTimeError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid start time")
 }
 
 func inclusiveAllDayEnd(startDt, googleEndDt time.Time) time.Time {
