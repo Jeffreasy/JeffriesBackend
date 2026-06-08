@@ -446,7 +446,7 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			        default_cc = EXCLUDED.default_cc,
 			        default_bcc = EXCLUDED.default_bcc,
 			        updated_at = EXCLUDED.updated_at
-			  WHERE lc_mail_templates.body_html NOT LIKE '%Lavente<span%'`,
+			  WHERE lc_mail_templates.body_html NOT LIKE '%laventecare-mail-shell:v2%'`,
 			uuid.New(), userID, template.TemplateKey, template.Name, template.Category, template.Status,
 			template.SubjectTemplate, template.BodyHTML, template.BodyText, cleanEmails(template.DefaultCC),
 			cleanEmails(template.DefaultBCC), now)
@@ -661,6 +661,8 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"laventecare.email":      valueOr(strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")), "jeffrey@laventecare.nl"),
 		"laventecare.phone":      "+31 6 39 03 40 85",
 		"laventecare.website":    "https://www.laventecare.nl",
+		"laventecare.logo_url":   "https://ik.imagekit.io/a0oim4e3e/tr:f-png,w-112/LaventeCare/logo.svg?updatedAt=1779275051433",
+		"laventecare.tagline":    "Van idee tot werkend systeem",
 		"cta.label":              "Afstemmen",
 		"cta.url":                "",
 		"quote.number":           "concept",
@@ -1406,6 +1408,7 @@ type mailTemplateContent struct {
 }
 
 func brandedMailHTML(content mailTemplateContent) string {
+	const logoURL = "https://ik.imagekit.io/a0oim4e3e/tr:f-png,w-112/LaventeCare/logo.svg?updatedAt=1779275051433"
 	focusRows := ""
 	if content.FocusTitle != "" || len(content.FocusItems) > 0 {
 		var items strings.Builder
@@ -1456,6 +1459,7 @@ func brandedMailHTML(content mailTemplateContent) string {
   <title>%s</title>
 </head>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+  <!-- laventecare-mail-shell:v2 -->
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">%s</div>
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background:#f1f5f9;">
     <tr>
@@ -1465,11 +1469,14 @@ func brandedMailHTML(content mailTemplateContent) string {
             <td style="background:#0a1628;padding:22px 28px;">
               <table role="presentation" cellpadding="0" cellspacing="0" width="100%%">
                 <tr>
-                  <td valign="middle">
-                    <div style="font-size:20px;font-weight:900;letter-spacing:-.3px;color:#f0f9ff;">Lavente<span style="color:#22d3ee;">Care</span></div>
-                    <div style="margin-top:3px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#bae6fd;">Van idee tot werkend systeem</div>
+                  <td valign="middle" width="64" style="width:64px;padding-right:14px;">
+                    <img src="%s" width="54" alt="LaventeCare" style="display:block;width:54px;max-width:54px;height:auto;border:0;outline:none;text-decoration:none;">
                   </td>
-                  <td align="right" valign="middle" style="font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#34d399;">AI · Web · IoT</td>
+                  <td valign="middle">
+                    <div style="font-size:21px;font-weight:900;letter-spacing:-.25px;color:#f8fafc;">Lavente<span style="color:#22d3ee;">Care</span></div>
+                    <div style="margin-top:4px;font-size:11px;font-weight:800;letter-spacing:1.35px;text-transform:uppercase;color:#bae6fd;">{{laventecare.tagline}}</div>
+                  </td>
+                  <td align="right" valign="middle" style="font-size:11px;font-weight:800;letter-spacing:1.25px;text-transform:uppercase;color:#34d399;">AI · Automatisering · Websystemen</td>
                 </tr>
               </table>
             </td>
@@ -1513,6 +1520,7 @@ func brandedMailHTML(content mailTemplateContent) string {
 </html>`,
 		escapeMailText(valueOr(content.Title, "LaventeCare")),
 		escapeMailText(valueOr(content.Preheader, "Bericht van LaventeCare")),
+		escapeMailAttr(logoURL),
 		escapeMailText(valueOr(content.Eyebrow, "LaventeCare")),
 		escapeMailText(valueOr(content.Title, "Nieuw bericht")),
 		escapeMailText(valueOr(content.Greeting, "Beste {{contact.naam}},")),
