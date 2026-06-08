@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
+	"github.com/Jeffreasy/JeffriesBackend/internal/bunq"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/telegram"
@@ -340,6 +341,46 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 	}
 
 	JSON(w, http.StatusOK, resp)
+}
+
+// BunqIntrospect creates a temporary bunq API context from Render env and
+// returns only the IDs needed for configuration. It never exposes API keys.
+func (h *SettingsHandler) BunqIntrospect(w http.ResponseWriter, r *http.Request) {
+	if !configuredSecret(h.cfg.AppSecretKey) {
+		Error(w, http.StatusForbidden, "APP_SECRET_KEY moet eerst een echte secret zijn voordat bunq introspectie beschikbaar is.")
+		return
+	}
+	if !configuredSecret(h.cfg.BunqAPIKey) {
+		Error(w, http.StatusBadRequest, "BUNQ_API_KEY ontbreekt of is een placeholder.")
+		return
+	}
+
+	result, err := bunq.Discover(r.Context(), bunq.Config{
+		Environment:       h.cfg.BunqEnvironment,
+		APIKey:            h.cfg.BunqAPIKey,
+		DeviceDescription: h.cfg.BunqDeviceDescription,
+	})
+	if err != nil {
+		Error(w, http.StatusBadGateway, "Bunq introspectie mislukt: "+err.Error())
+		return
+	}
+
+	recommendedEnv := map[string]string{}
+	if result.UserID > 0 {
+		recommendedEnv["BUNQ_USER_ID"] = strconv.Itoa(result.UserID)
+	}
+	if result.PrimaryAccountID != nil {
+		recommendedEnv["BUNQ_MONETARY_ACCOUNT_ID"] = strconv.Itoa(*result.PrimaryAccountID)
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"configured":     bunqConfigured(h.cfg),
+		"envStatus":      bunqEnvStatus(h.cfg),
+		"result":         result,
+		"recommendedEnv": recommendedEnv,
+		"next":           "Zet BUNQ_USER_ID en BUNQ_MONETARY_ACCOUNT_ID in Render env. Roteer daarna de gelekte API key.",
+	})
 }
 
 func (h *SettingsHandler) checkGrokChat(ctx context.Context) aiDiagnosticCheck {
@@ -797,6 +838,15 @@ func bunqConfigured(cfg *config.Config) bool {
 	return configuredSecret(cfg.BunqAPIKey) &&
 		configuredValue(cfg.BunqUserID) &&
 		configuredValue(cfg.BunqMonetaryAccountID)
+}
+
+func bunqEnvStatus(cfg *config.Config) map[string]bool {
+	return map[string]bool{
+		"apiKey":          configuredSecret(cfg.BunqAPIKey),
+		"userId":          configuredValue(cfg.BunqUserID),
+		"monetaryAccount": configuredValue(cfg.BunqMonetaryAccountID),
+		"callbackSecret":  configuredSecret(cfg.BunqCallbackSecret),
+	}
 }
 
 func maskedSuffix(value string, keep int) any {

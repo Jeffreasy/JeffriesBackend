@@ -224,6 +224,7 @@ func registerRoutes(
 				r.Get("/backup", settingsH.Backup)
 				r.Get("/telegram/status", settingsH.TelegramStatus)
 				r.Get("/ai/diagnostics", settingsH.AIDiagnostics)
+				r.Get("/bunq/introspect", settingsH.BunqIntrospect)
 			})
 
 			// AI confirmation queue
