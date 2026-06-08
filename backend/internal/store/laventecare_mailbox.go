@@ -93,9 +93,42 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			Name:            "Intake opvolging",
 			Category:        "sales",
 			Status:          "active",
-			SubjectTemplate: "Vervolg LaventeCare intake - {{company.naam}}",
-			BodyHTML:        defaultMailHTML("Intake opvolging", "Beste {{contact.naam}},", "Dank voor je bericht en de context rond {{company.naam}}. Ik heb de belangrijkste punten vastgelegd en kijk graag met je mee naar de meest praktische vervolgstap.", "Voorstel voor vervolg: {{next_step}}"),
-			BodyText:        mailStrPtr("Beste {{contact.naam}},\n\nDank voor je bericht en de context rond {{company.naam}}. Ik heb de belangrijkste punten vastgelegd en kijk graag met je mee naar de meest praktische vervolgstap.\n\nVoorstel voor vervolg: {{next_step}}\n\nMet vriendelijke groet,\nLaventeCare"),
+			SubjectTemplate: "Vervolg intake - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Ik heb de intakepunten vastgelegd en stel een praktische vervolgstap voor.",
+				Eyebrow:     "Sales intake",
+				Title:       "Vervolg op onze intake",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Dank voor je bericht en de context rond {{company.naam}}. Ik heb de belangrijkste punten vastgelegd en kijk graag met je mee naar de meest praktische vervolgstap.",
+				Body:        "Mijn insteek is om snel helder te maken waar de grootste winst zit, welke afhankelijkheden belangrijk zijn en welke stap het meeste effect heeft zonder onnodige complexiteit.",
+				FocusTitle:  "Voorstel voor vervolg",
+				FocusItems:  []string{"{{next_step}}", "Ik koppel dit aan de juiste klantcontext in LaventeCare.", "Na akkoord werk ik de eerste scope of planning concreet uit."},
+				CTAURL:      "{{cta.url}}",
+				CTALabel:    "{{cta.label}}",
+				ClosingLine: "Als dit past, pak ik het gericht verder op.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nDank voor je bericht en de context rond {{company.naam}}. Ik heb de belangrijkste punten vastgelegd en kijk graag mee naar de meest praktische vervolgstap.\n\nVoorstel voor vervolg:\n- {{next_step}}\n- Ik koppel dit aan de juiste klantcontext in LaventeCare.\n- Na akkoord werk ik de eerste scope of planning concreet uit.\n\nAls dit past, pak ik het gericht verder op.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "discovery_scope",
+			Name:            "Discovery en scope",
+			Category:        "sales",
+			Status:          "active",
+			SubjectTemplate: "Scope voorstel - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Een compacte scope om richting, risico's en eerste oplevering scherp te krijgen.",
+				Eyebrow:     "Discovery",
+				Title:       "Scope en eerste werkpakket",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Op basis van onze context stel ik voor om voor {{company.naam}} te starten met een compacte discovery/scope. Daarmee maken we de gewenste uitkomst, afhankelijkheden en prioriteiten concreet voordat er gebouwd wordt.",
+				Body:        "Dit voorkomt losse ad-hoc keuzes en geeft ons een professioneel vertrekpunt voor planning, budget en uitvoering.",
+				FocusTitle:  "Wat ik oplever",
+				FocusItems:  []string{"Probleem en doelstelling scherp op papier.", "Technische en operationele afhankelijkheden in beeld.", "Een concreet voorstel voor {{next_step}}."},
+				CTAURL:      "{{cta.url}}",
+				CTALabel:    "{{cta.label}}",
+				ClosingLine: "Ik kan dit na akkoord direct voorbereiden.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nOp basis van onze context stel ik voor om voor {{company.naam}} te starten met een compacte discovery/scope. Daarmee maken we de gewenste uitkomst, afhankelijkheden en prioriteiten concreet voordat er gebouwd wordt.\n\nWat ik oplever:\n- Probleem en doelstelling scherp op papier.\n- Technische en operationele afhankelijkheden in beeld.\n- Een concreet voorstel voor {{next_step}}.\n\nIk kan dit na akkoord direct voorbereiden.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "quote_send",
@@ -103,8 +136,20 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			Category:        "commerce",
 			Status:          "active",
 			SubjectTemplate: "Offerte {{quote.number}} - {{company.naam}}",
-			BodyHTML:        defaultMailHTML("Offerte", "Beste {{contact.naam}},", "In de bijlage/omgeving staat de offerte voor {{company.naam}} klaar. De kern: {{quote.summary}}", "Laat me weten of je akkoord bent, dan plan ik de uitvoering in."),
-			BodyText:        mailStrPtr("Beste {{contact.naam}},\n\nDe offerte voor {{company.naam}} staat klaar. De kern: {{quote.summary}}\n\nLaat me weten of je akkoord bent, dan plan ik de uitvoering in.\n\nMet vriendelijke groet,\nLaventeCare"),
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "De offerte staat klaar met scope, planning en vervolgstap.",
+				Eyebrow:     "Offerte",
+				Title:       "Offerte staat klaar",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "De offerte voor {{company.naam}} staat klaar. De kern: {{quote.summary}}",
+				Body:        "Ik heb de aanpak zo opgebouwd dat scope, verantwoordelijkheid en vervolg helder blijven. Daarmee kunnen we professioneel starten zonder ruis in verwachtingen.",
+				FocusTitle:  "Samenvatting",
+				FocusItems:  []string{"Offertenummer: {{quote.number}}", "Kern: {{quote.summary}}", "Volgende stap: {{next_step}}"},
+				CTAURL:      "{{quote.url}}",
+				CTALabel:    "Offerte bekijken",
+				ClosingLine: "Laat me weten of je akkoord bent, dan plan ik de uitvoering in.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nDe offerte voor {{company.naam}} staat klaar. De kern: {{quote.summary}}\n\nSamenvatting:\n- Offertenummer: {{quote.number}}\n- Kern: {{quote.summary}}\n- Volgende stap: {{next_step}}\n\nLaat me weten of je akkoord bent, dan plan ik de uitvoering in.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "invoice_send",
@@ -112,8 +157,41 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			Category:        "commerce",
 			Status:          "active",
 			SubjectTemplate: "Factuur {{invoice.number}} - {{company.naam}}",
-			BodyHTML:        defaultMailHTML("Factuur", "Beste {{contact.naam}},", "De factuur voor de uitgevoerde werkzaamheden staat klaar. Je kunt betalen via: {{invoice.payment_url}}", "Als er iets niet klopt, hoor ik het graag direct."),
-			BodyText:        mailStrPtr("Beste {{contact.naam}},\n\nDe factuur voor de uitgevoerde werkzaamheden staat klaar. Je kunt betalen via: {{invoice.payment_url}}\n\nAls er iets niet klopt, hoor ik het graag direct.\n\nMet vriendelijke groet,\nLaventeCare"),
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "De factuur en betaalinformatie staan klaar.",
+				Eyebrow:     "Facturatie",
+				Title:       "Factuur staat klaar",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "De factuur voor de uitgevoerde werkzaamheden voor {{company.naam}} staat klaar.",
+				Body:        "Je kunt betalen via het betaalverzoek hieronder. De betaling wordt gekoppeld aan het klantdossier zodat administratie en opvolging netjes bij elkaar blijven.",
+				FocusTitle:  "Factuurinformatie",
+				FocusItems:  []string{"Factuurnummer: {{invoice.number}}", "Bedrag: {{invoice.amount}}", "Betaaltermijn: {{invoice.due_date}}"},
+				CTAURL:      "{{invoice.payment_url}}",
+				CTALabel:    "Factuur betalen",
+				ClosingLine: "Als er iets niet klopt, hoor ik het graag direct.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nDe factuur voor de uitgevoerde werkzaamheden voor {{company.naam}} staat klaar.\n\nFactuurinformatie:\n- Factuurnummer: {{invoice.number}}\n- Bedrag: {{invoice.amount}}\n- Betaaltermijn: {{invoice.due_date}}\n\nBetalen kan via: {{invoice.payment_url}}\n\nAls er iets niet klopt, hoor ik het graag direct.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "payment_reminder",
+			Name:            "Betalingsherinnering",
+			Category:        "commerce",
+			Status:          "active",
+			SubjectTemplate: "Herinnering factuur {{invoice.number}} - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Vriendelijke herinnering voor een openstaande factuur.",
+				Eyebrow:     "Betalingsherinnering",
+				Title:       "Openstaande factuur",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Ik zie dat factuur {{invoice.number}} voor {{company.naam}} nog openstaat. Mogelijk is deze er tussendoor geglipt.",
+				Body:        "Hieronder staat de betaalinformatie nogmaals compact bij elkaar.",
+				FocusTitle:  "Openstaand",
+				FocusItems:  []string{"Factuurnummer: {{invoice.number}}", "Bedrag: {{invoice.amount}}", "Vervaldatum: {{invoice.due_date}}"},
+				CTAURL:      "{{invoice.payment_url}}",
+				CTALabel:    "Nu betalen",
+				ClosingLine: "Als betaling inmiddels onderweg is, kun je deze mail als niet verzonden beschouwen.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nIk zie dat factuur {{invoice.number}} voor {{company.naam}} nog openstaat. Mogelijk is deze er tussendoor geglipt.\n\nOpenstaand:\n- Factuurnummer: {{invoice.number}}\n- Bedrag: {{invoice.amount}}\n- Vervaldatum: {{invoice.due_date}}\n\nBetalen kan via: {{invoice.payment_url}}\n\nAls betaling inmiddels onderweg is, kun je deze mail als niet verzonden beschouwen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "project_update",
@@ -121,8 +199,41 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			Category:        "delivery",
 			Status:          "active",
 			SubjectTemplate: "Projectupdate - {{project.naam}}",
-			BodyHTML:        defaultMailHTML("Projectupdate", "Beste {{contact.naam}},", "Hierbij een korte update over {{project.naam}}: {{project.update}}", "Volgende stap: {{next_step}}"),
-			BodyText:        mailStrPtr("Beste {{contact.naam}},\n\nHierbij een korte update over {{project.naam}}: {{project.update}}\n\nVolgende stap: {{next_step}}\n\nMet vriendelijke groet,\nLaventeCare"),
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Korte update over voortgang, aandachtspunten en vervolgstap.",
+				Eyebrow:     "Delivery update",
+				Title:       "Projectupdate",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Hierbij een korte update over {{project.naam}}.",
+				Body:        "{{project.update}}",
+				FocusTitle:  "Nu belangrijk",
+				FocusItems:  []string{"Status: {{project.status}}", "Aandachtspunt: {{project.risk}}", "Volgende stap: {{next_step}}"},
+				CTAURL:      "{{project.url}}",
+				CTALabel:    "Project bekijken",
+				ClosingLine: "Ik houd de lijn kort en praktisch, zodat we snel kunnen bijsturen waar nodig.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nHierbij een korte update over {{project.naam}}.\n\n{{project.update}}\n\nNu belangrijk:\n- Status: {{project.status}}\n- Aandachtspunt: {{project.risk}}\n- Volgende stap: {{next_step}}\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "delivery_handover",
+			Name:            "Oplevering en overdracht",
+			Category:        "delivery",
+			Status:          "active",
+			SubjectTemplate: "Oplevering - {{project.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Oplevering, toegang en afspraken voor beheer staan klaar.",
+				Eyebrow:     "Oplevering",
+				Title:       "Oplevering en overdracht",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "{{project.naam}} is klaar voor oplevering. Hieronder staat compact wat is afgerond en wat de vervolgstap is.",
+				Body:        "Ik heb de oplevering zo ingericht dat de belangrijkste onderdelen herleidbaar blijven: afspraken, toegang, documentatie en eventuele beheerpunten.",
+				FocusTitle:  "Overdracht",
+				FocusItems:  []string{"Opgeleverd: {{delivery.done}}", "Nog te controleren: {{delivery.check}}", "Vervolg/beheer: {{next_step}}"},
+				CTAURL:      "{{project.url}}",
+				CTALabel:    "Oplevering bekijken",
+				ClosingLine: "Na jouw akkoord zet ik de status definitief op opgeleverd.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\n{{project.naam}} is klaar voor oplevering. Hieronder staat compact wat is afgerond en wat de vervolgstap is.\n\nOverdracht:\n- Opgeleverd: {{delivery.done}}\n- Nog te controleren: {{delivery.check}}\n- Vervolg/beheer: {{next_step}}\n\nNa jouw akkoord zet ik de status definitief op opgeleverd.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "meeting_recap",
@@ -130,8 +241,62 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			Category:        "dossier",
 			Status:          "active",
 			SubjectTemplate: "Samenvatting gesprek - {{company.naam}}",
-			BodyHTML:        defaultMailHTML("Gespreksverslag", "Beste {{contact.naam}},", "Hierbij de korte samenvatting van ons gesprek: {{meeting.summary}}", "Acties: {{meeting.actions}}"),
-			BodyText:        mailStrPtr("Beste {{contact.naam}},\n\nHierbij de korte samenvatting van ons gesprek: {{meeting.summary}}\n\nActies: {{meeting.actions}}\n\nMet vriendelijke groet,\nLaventeCare"),
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Korte samenvatting met besluiten, acties en vervolg.",
+				Eyebrow:     "Klantdossier",
+				Title:       "Samenvatting van ons gesprek",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Hierbij de korte samenvatting van ons gesprek over {{company.naam}}.",
+				Body:        "{{meeting.summary}}",
+				FocusTitle:  "Acties en afspraken",
+				FocusItems:  []string{"Besproken: {{meeting.topic}}", "Acties: {{meeting.actions}}", "Volgende stap: {{next_step}}"},
+				CTAURL:      "{{meeting.url}}",
+				CTALabel:    "Dossier bekijken",
+				ClosingLine: "Als ik iets verkeerd heb geïnterpreteerd, hoor ik het graag. Dan corrigeer ik het dossier direct.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nHierbij de korte samenvatting van ons gesprek over {{company.naam}}.\n\n{{meeting.summary}}\n\nActies en afspraken:\n- Besproken: {{meeting.topic}}\n- Acties: {{meeting.actions}}\n- Volgende stap: {{next_step}}\n\nAls ik iets verkeerd heb geïnterpreteerd, hoor ik het graag. Dan corrigeer ik het dossier direct.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "support_sla",
+			Name:            "Support / SLA update",
+			Category:        "support",
+			Status:          "active",
+			SubjectTemplate: "Support update - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Update over melding, status en vervolgstap.",
+				Eyebrow:     "Support",
+				Title:       "Support update",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Hierbij een update over de melding voor {{company.naam}}.",
+				Body:        "{{support.summary}}",
+				FocusTitle:  "Status",
+				FocusItems:  []string{"Prioriteit: {{support.priority}}", "Status: {{support.status}}", "Volgende stap: {{next_step}}"},
+				CTAURL:      "{{support.url}}",
+				CTALabel:    "Melding bekijken",
+				ClosingLine: "Ik houd dit bij tot de melding volledig is afgerond.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nHierbij een update over de melding voor {{company.naam}}.\n\n{{support.summary}}\n\nStatus:\n- Prioriteit: {{support.priority}}\n- Status: {{support.status}}\n- Volgende stap: {{next_step}}\n\nIk houd dit bij tot de melding volledig is afgerond.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "change_request",
+			Name:            "Wijzigingsverzoek",
+			Category:        "operations",
+			Status:          "active",
+			SubjectTemplate: "Wijzigingsverzoek - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Impact, planning en akkoord voor een wijziging.",
+				Eyebrow:     "Change request",
+				Title:       "Wijziging ter bevestiging",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Voor {{company.naam}} staat er een wijziging klaar ter bevestiging.",
+				Body:        "{{change.summary}}",
+				FocusTitle:  "Impact",
+				FocusItems:  []string{"Wijziging: {{change.title}}", "Planning impact: {{change.planning_impact}}", "Budget impact: {{change.budget_impact}}"},
+				CTAURL:      "{{change.url}}",
+				CTALabel:    "Wijziging bekijken",
+				ClosingLine: "Na akkoord verwerk ik dit in planning en klantdossier.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nVoor {{company.naam}} staat er een wijziging klaar ter bevestiging.\n\n{{change.summary}}\n\nImpact:\n- Wijziging: {{change.title}}\n- Planning impact: {{change.planning_impact}}\n- Budget impact: {{change.budget_impact}}\n\nNa akkoord verwerk ik dit in planning en klantdossier.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 	}
 
@@ -140,7 +305,17 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			`INSERT INTO lc_mail_templates (id, user_id, template_key, name, category, status,
 			        subject_template, body_html, body_text, default_cc, default_bcc, created_at, updated_at)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
-			 ON CONFLICT (user_id, template_key) DO NOTHING`,
+			 ON CONFLICT (user_id, template_key) DO UPDATE SET
+			        name = EXCLUDED.name,
+			        category = EXCLUDED.category,
+			        status = EXCLUDED.status,
+			        subject_template = EXCLUDED.subject_template,
+			        body_html = EXCLUDED.body_html,
+			        body_text = EXCLUDED.body_text,
+			        default_cc = EXCLUDED.default_cc,
+			        default_bcc = EXCLUDED.default_bcc,
+			        updated_at = EXCLUDED.updated_at
+			  WHERE lc_mail_templates.body_html NOT LIKE '%Lavente<span%'`,
 			uuid.New(), userID, template.TemplateKey, template.Name, template.Category, template.Status,
 			template.SubjectTemplate, template.BodyHTML, template.BodyText, cleanEmails(template.DefaultCC),
 			cleanEmails(template.DefaultBCC), now)
@@ -348,9 +523,41 @@ func (s *LaventeCareStore) MarkMailOutboxFailed(ctx context.Context, userID stri
 
 func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
 	values := map[string]string{
-		"laventecare.name":  "LaventeCare",
-		"laventecare.email": strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")),
-		"next_step":         valueOr(input.Variables["next_step"], "Ik hoor graag wat voor jou het beste moment is om dit op te pakken."),
+		"laventecare.name":       "LaventeCare",
+		"laventecare.owner":      "Jeffrey Lavente",
+		"laventecare.email":      valueOr(strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")), "jeffrey@laventecare.nl"),
+		"laventecare.phone":      "+31 6 39 03 40 85",
+		"laventecare.website":    "https://www.laventecare.nl",
+		"cta.label":              "Afstemmen",
+		"cta.url":                "https://www.laventecare.nl/contact",
+		"quote.number":           "concept",
+		"quote.summary":          "de afgesproken scope",
+		"quote.url":              "https://www.laventecare.nl/contact",
+		"invoice.number":         "concept",
+		"invoice.amount":         "zie factuur",
+		"invoice.due_date":       "14 dagen",
+		"invoice.payment_url":    "https://www.laventecare.nl/contact",
+		"project.naam":           "het project",
+		"project.status":         "in uitvoering",
+		"project.update":         "De voortgang loopt volgens afspraak.",
+		"project.risk":           "geen bijzonderheden",
+		"project.url":            "https://www.laventecare.nl/contact",
+		"meeting.topic":          "afstemming",
+		"meeting.summary":        "De besproken punten zijn vastgelegd in het klantdossier.",
+		"meeting.actions":        "de vervolgstap wordt opgepakt",
+		"meeting.url":            "https://www.laventecare.nl/contact",
+		"delivery.done":          "de afgesproken werkzaamheden",
+		"delivery.check":         "laatste controle door klant",
+		"support.priority":       "normaal",
+		"support.status":         "in behandeling",
+		"support.summary":        "De melding is geregistreerd en wordt opgevolgd.",
+		"support.url":            "https://www.laventecare.nl/contact",
+		"change.title":           "wijziging",
+		"change.summary":         "De wijziging is vastgelegd ter bevestiging.",
+		"change.planning_impact": "nog te bepalen",
+		"change.budget_impact":   "nog te bepalen",
+		"change.url":             "https://www.laventecare.nl/contact",
+		"next_step":              valueOr(input.Variables["next_step"], "Ik hoor graag wat voor jou het beste moment is om dit op te pakken."),
 	}
 	for key, value := range input.Variables {
 		values[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
@@ -446,20 +653,145 @@ func scanMailOutboxItem(row pgx.CollectableRow) (model.LCMailOutboxItem, error) 
 	return m, err
 }
 
-func defaultMailHTML(title, greeting, body, next string) string {
-	return fmt.Sprintf(
-		`<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.65;color:#0f172a;background:#ffffff;">
-  <p style="margin:0 0 16px;font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#0f766e;">%s</p>
-  <p>%s</p>
-  <p>%s</p>
-  <p>%s</p>
-  <p style="margin-top:24px;">Met vriendelijke groet,<br><strong>LaventeCare</strong></p>
-</div>`,
-		html.EscapeString(title),
-		html.EscapeString(greeting),
-		html.EscapeString(body),
-		html.EscapeString(next),
+type mailTemplateContent struct {
+	Preheader   string
+	Eyebrow     string
+	Title       string
+	Greeting    string
+	Intro       string
+	Body        string
+	FocusTitle  string
+	FocusItems  []string
+	CTAURL      string
+	CTALabel    string
+	ClosingLine string
+}
+
+func brandedMailHTML(content mailTemplateContent) string {
+	focusRows := ""
+	if content.FocusTitle != "" || len(content.FocusItems) > 0 {
+		var items strings.Builder
+		for _, item := range content.FocusItems {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			items.WriteString(fmt.Sprintf(
+				`<tr><td style="padding:7px 0 7px 0;border-bottom:1px solid #e2e8f0;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%%"><tr>
+    <td width="18" valign="top" style="padding-top:3px;"><span style="display:block;width:7px;height:7px;border-radius:999px;background:#0891b2;"></span></td>
+    <td style="font-size:14px;line-height:1.55;color:#334155;">%s</td>
+  </tr></table>
+</td></tr>`,
+				escapeMailText(item),
+			))
+		}
+		focusRows = fmt.Sprintf(
+			`<tr><td style="padding:0 28px 26px 28px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #0891b2;border-radius:10px;">
+    <tr><td style="padding:16px 18px 5px 18px;font-size:11px;line-height:1.4;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0f766e;">%s</td></tr>
+    <tr><td style="padding:0 18px 12px 18px;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%%">%s</table></td></tr>
+  </table>
+</td></tr>`,
+			escapeMailText(valueOr(content.FocusTitle, "Belangrijk")),
+			items.String(),
+		)
+	}
+
+	cta := ""
+	if strings.TrimSpace(content.CTAURL) != "" && strings.TrimSpace(content.CTALabel) != "" {
+		cta = fmt.Sprintf(
+			`<tr><td align="center" style="padding:2px 28px 30px 28px;">
+  <a href="%s" target="_blank" style="display:inline-block;background:#059669;border:1px solid #047857;border-radius:9px;color:#ffffff;font-size:14px;font-weight:800;line-height:1.1;padding:14px 22px;text-decoration:none;">%s</a>
+</td></tr>`,
+			escapeMailAttr(content.CTAURL),
+			escapeMailText(content.CTALabel),
+		)
+	}
+
+	return fmt.Sprintf(`<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <title>%s</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">%s</div>
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background:#f1f5f9;">
+    <tr>
+      <td align="center" style="padding:30px 14px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="max-width:620px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 18px 45px rgba(15,23,42,.10);">
+          <tr>
+            <td style="background:#0a1628;padding:22px 28px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%%">
+                <tr>
+                  <td valign="middle">
+                    <div style="font-size:20px;font-weight:900;letter-spacing:-.3px;color:#f0f9ff;">Lavente<span style="color:#22d3ee;">Care</span></div>
+                    <div style="margin-top:3px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#bae6fd;">Van idee tot werkend systeem</div>
+                  </td>
+                  <td align="right" valign="middle" style="font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#34d399;">AI · Web · IoT</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#0f1e35;padding:26px 28px 28px 28px;border-top:1px solid #1e3a52;">
+              <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#22d3ee;">%s</div>
+              <div style="margin-top:8px;font-size:28px;line-height:1.15;font-weight:900;letter-spacing:-.7px;color:#f0f9ff;">%s</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 28px 10px 28px;">
+              <p style="margin:0 0 16px 0;font-size:15px;line-height:1.65;color:#334155;">%s</p>
+              <p style="margin:0 0 16px 0;font-size:15px;line-height:1.65;color:#334155;">%s</p>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:1.65;color:#475569;">%s</p>
+            </td>
+          </tr>
+          %s
+          %s
+          <tr>
+            <td style="padding:0 28px 28px 28px;">
+              <p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:#334155;">%s</p>
+              <p style="margin:0;font-size:15px;line-height:1.65;color:#334155;">Met vriendelijke groet,<br><strong style="color:#0f172a;">Jeffrey Lavente</strong><br><span style="color:#64748b;">LaventeCare</span></p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 28px;">
+              <p style="margin:0 0 6px 0;text-align:center;font-size:12px;line-height:1.55;color:#64748b;">
+                <a href="mailto:{{laventecare.email}}" style="color:#0891b2;font-weight:800;text-decoration:none;">{{laventecare.email}}</a>
+                <span style="color:#cbd5e1;"> · </span>
+                <a href="https://www.laventecare.nl" style="color:#0891b2;font-weight:800;text-decoration:none;">laventecare.nl</a>
+              </p>
+              <p style="margin:0;text-align:center;font-size:11px;line-height:1.55;color:#94a3b8;">LaventeCare · KVK 88162710 · Dronten, Nederland</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
+		escapeMailText(valueOr(content.Title, "LaventeCare")),
+		escapeMailText(valueOr(content.Preheader, "Bericht van LaventeCare")),
+		escapeMailText(valueOr(content.Eyebrow, "LaventeCare")),
+		escapeMailText(valueOr(content.Title, "Nieuw bericht")),
+		escapeMailText(valueOr(content.Greeting, "Beste {{contact.naam}},")),
+		escapeMailText(content.Intro),
+		escapeMailText(content.Body),
+		focusRows,
+		cta,
+		escapeMailText(content.ClosingLine),
 	)
+}
+
+func escapeMailText(value string) string {
+	return strings.ReplaceAll(html.EscapeString(value), "\n", "<br>")
+}
+
+func escapeMailAttr(value string) string {
+	return html.EscapeString(strings.TrimSpace(value))
 }
 
 func renderTemplate(input string, values map[string]string) string {
