@@ -722,6 +722,8 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 
 	var company *model.LCCompany
 	var contact *model.LCContact
+	var mailProject map[string]any
+	var mailWorkstream map[string]any
 	companyID := input.CompanyID
 	contactID := input.ContactID
 
@@ -754,6 +756,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		if err != nil {
 			return nil, nil, nil, "", nil, err
 		}
+		mailProject = project
 		setMailValue(values, "project.naam", stringMapValue(project, "naam"))
 		setMailValue(values, "project.status", stringMapValue(project, "status"))
 		setMailValue(values, "project.update", stringMapValue(project, "samenvatting"))
@@ -764,6 +767,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		if err != nil {
 			return nil, nil, nil, "", nil, err
 		}
+		mailWorkstream = workstream
 		if input.ProjectID == nil && projectID != nil {
 			input.ProjectID = projectID
 		}
@@ -849,6 +853,14 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		} else {
 			values["company.naam"] = "je organisatie"
 		}
+	}
+	accessIDs, accessKeywords := mailAIContextKeys(company, contact, mailProject, mailWorkstream)
+	hasAccessNote, err := s.mailAIAccessNoteExists(ctx, userID, accessIDs, accessKeywords)
+	if err != nil {
+		return nil, nil, nil, "", nil, err
+	}
+	if hasAccessNote {
+		setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 	}
 	for key, value := range inputVars {
 		values[key] = value
@@ -1051,6 +1063,40 @@ func (s *LaventeCareStore) mailAINotes(ctx context.Context, userID string, ids, 
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIAccessNoteExists(ctx context.Context, userID string, ids, keywords []string) (bool, error) {
+	keywords = mailAIUsefulKeywords(keywords)
+	if len(ids) == 0 && len(keywords) == 0 {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1
+		     FROM notes
+		    WHERE user_id = $1
+		      AND is_archived = false
+		      AND lower(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
+		                COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' ||
+		                COALESCE(array_to_string(tags, ' '), ''))
+		          ~ '(account|accounts|login|inlog|toegang|wachtwoord|password|gebruikersnaam|username|portal|omgeving)'
+		      AND (
+		        business_context_id = ANY($2::text[])
+		        OR EXISTS (
+		          SELECT 1
+		            FROM unnest($3::text[]) q
+		           WHERE lower(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
+		                       COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' ||
+		                       COALESCE(array_to_string(tags, ' '), ''))
+		                 LIKE '%' || q || '%'
+		        )
+		      )
+		    LIMIT 1
+		 )`,
+		userID, ids, keywords,
+	).Scan(&exists)
+	return exists, err
 }
 
 func (s *LaventeCareStore) mailAIAgenda(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
@@ -1322,6 +1368,18 @@ func mailAIContextKeys(company *model.LCCompany, contact *model.LCContact, proje
 		}
 	}
 	return dedupeNonEmpty(ids), dedupeLowerKeywords(keywords)
+}
+
+func mailAIUsefulKeywords(values []string) []string {
+	result := []string{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || value == "laventecare" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return dedupeLowerKeywords(result)
 }
 
 func safeStringMap(values map[string]string) map[string]string {

@@ -1953,8 +1953,8 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		mailAIAddVariable(variables, "pilot.feedback_moment", "na de eerste testperiode")
 	}
 	if variables["pilot.access_summary"] == "" {
-		if mailAIHasPilotAccessContext(contextBundle.Notes) {
-			mailAIAddVariable(variables, "pilot.access_summary", "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal")
+		if mailAIHasAccessContext(contextBundle.Notes) {
+			mailAIAddVariable(variables, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 		} else {
 			mailAIAddVariable(variables, "pilot.access_summary", "pilottoegang stem ik voor de start af via het afgesproken kanaal")
 		}
@@ -1987,8 +1987,8 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		subjectHint = fmt.Sprintf("%s - %s", contextBundle.Template.Name, target)
 	}
 	briefing := fmt.Sprintf("Contextvoorstel op basis van %d bron(nen). Controleer bedragen, deadlines en klantafspraken voordat je verzendt.", len(sources))
-	if mailAIHasPilotAccessContext(contextBundle.Notes) {
-		briefing = briefing + " Pilotaccount-notitie gevonden; gevoelige waarden zijn afgeschermd en horen alleen bewust via een veilig kanaal gedeeld te worden."
+	if mailAIHasAccessContext(contextBundle.Notes) {
+		briefing = briefing + " Toegangsnotitie gevonden; gevoelige waarden zijn afgeschermd en horen alleen bewust via een veilig kanaal gedeeld te worden."
 	}
 	if strings.TrimSpace(input.Intent) != "" {
 		briefing = briefing + " Intent: " + strings.TrimSpace(input.Intent) + "."
@@ -2080,16 +2080,19 @@ func mailAISourcesFromContext(contextBundle *model.LCMailAIContext) []model.LCMa
 	return sources
 }
 
-func mailAIHasPilotAccessContext(items []model.LCMailAIContextItem) bool {
+func mailAIHasAccessContext(items []model.LCMailAIContextItem) bool {
 	for _, item := range items {
 		text := strings.ToLower(strings.Join([]string{item.Title, item.Summary}, " "))
-		hasAccessWord := strings.Contains(text, "account") ||
+		if strings.Contains(text, "account") ||
+			strings.Contains(text, "accounts") ||
 			strings.Contains(text, "login") ||
 			strings.Contains(text, "inlog") ||
 			strings.Contains(text, "toegang") ||
 			strings.Contains(text, "wachtwoord") ||
-			strings.Contains(text, "password")
-		if hasAccessWord && (strings.Contains(text, "pilot") || strings.Contains(text, "test")) {
+			strings.Contains(text, "password") ||
+			strings.Contains(text, "gebruikersnaam") ||
+			strings.Contains(text, "username") ||
+			strings.Contains(text, "portal") {
 			return true
 		}
 	}
