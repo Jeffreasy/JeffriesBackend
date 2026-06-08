@@ -2535,6 +2535,25 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"instruction": "Gebruik deze lijst als PDF dossierhistorie. Zeg bij count 0 dat er nog geen PDF in het dossier is vastgelegd.",
 		}, err)
 
+	case "laventecareBillingOpvragen":
+		var args struct {
+			Limit     int    `json:"limit"`
+			CompanyID string `json:"company_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+		}
+		billing, err := e.laventeCareStore.GetBilling(ctx, e.userID, clampToolLimit(args.Limit, 20, 80), companyID)
+		return e.jsonResponse(map[string]any{
+			"scope":       "laventecare commercie",
+			"billing":     billing,
+			"instruction": "Gebruik summary als hoofdbron. Offertes, urenregels en facturen zijn interne LaventeCare waarheid. BunqReady betekent alleen dat de API-key aanwezig lijkt; maak geen betaalverzoeken zonder expliciete bevestigingsflow.",
+		}, err)
+
 	case "laventecareKlantMaken":
 		var args model.LCCompanyCreate
 		if err := e.parseArgs(argsJSON, &args); err != nil {

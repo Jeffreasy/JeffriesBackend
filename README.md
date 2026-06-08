@@ -92,6 +92,21 @@ node scripts/gen-gmail-token.mjs
 
 Zet de getoonde redirect URI in Google Cloud Console bij de OAuth client. Het refresh token daarna alleen in `.env` en Render env vars zetten, nooit committen.
 
+## LaventeCare billing + bunq
+
+LaventeCare ondersteunt intern offertes, urenregistratie en factuurconcepten. Die workflows werken direct met PostgreSQL. Voor live bunq-betaalverzoeken is extra configuratie nodig op Render:
+
+```bash
+BUNQ_ENVIRONMENT=sandbox
+BUNQ_API_KEY=<bunq api key>
+BUNQ_USER_ID=<bunq user id>
+BUNQ_MONETARY_ACCOUNT_ID=<bunq monetary account id>
+BUNQ_CALLBACK_SECRET=<lange random secret>
+BUNQ_DEVICE_DESCRIPTION="JeffriesHomeapp Render"
+```
+
+De backend houdt facturen alvast klaar met `payment_provider=bunq`, `merchant_reference` en velden voor provider-request-id/betaallink. Live RequestInquiry-aanmaak blijft bewust achter de bevestigingslaag, zodat Telegram/UI nooit ongemerkt bankacties uitvoeren.
+
 ## Integratie-status
 
 De frontend kan de echte runtime-status uitlezen via:

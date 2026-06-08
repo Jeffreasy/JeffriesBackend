@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -1230,6 +1232,670 @@ func (s *LaventeCareStore) resolveDossierCompanyID(ctx context.Context, userID s
 	return nil, nil
 }
 
+// ─── Billing: quotes, hours and invoices ────────────────────────────────────
+
+func (s *LaventeCareStore) GetBilling(ctx context.Context, userID string, limit int, companyID *uuid.UUID) (*model.LCBilling, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	quotes, err := s.ListQuotes(ctx, userID, limit, companyID)
+	if err != nil {
+		return nil, err
+	}
+	quoteLines, err := s.ListQuoteLines(ctx, userID, companyID)
+	if err != nil {
+		return nil, err
+	}
+	timeEntries, err := s.ListTimeEntries(ctx, userID, limit, companyID)
+	if err != nil {
+		return nil, err
+	}
+	invoices, err := s.ListInvoices(ctx, userID, limit, companyID)
+	if err != nil {
+		return nil, err
+	}
+	invoiceLines, err := s.ListInvoiceLines(ctx, userID, companyID)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := model.LCBillingSummary{
+		Quotes:              len(quotes),
+		TimeEntries:         len(timeEntries),
+		Invoices:            len(invoices),
+		DefaultProvider:     "bunq",
+		BunqReady:           bunqBillingConfigured(),
+		NextStepDescription: "Maak een conceptfactuur vanuit uren en activeer daarna bunq betaalverzoeken met bevestiging.",
+	}
+	for _, quote := range quotes {
+		if quote.Status != "vervallen" && quote.Status != "geweigerd" && quote.Status != "geaccepteerd" {
+			summary.OpenQuotes++
+		}
+	}
+	for _, entry := range timeEntries {
+		if entry.Billable {
+			summary.BillableMinutes += entry.Minutes
+		}
+		if entry.Billable && entry.InvoiceID == nil && entry.Status != "afgeschreven" {
+			summary.UninvoicedMinutes += entry.Minutes
+		}
+	}
+	for _, invoice := range invoices {
+		if invoice.Status != "betaald" && invoice.Status != "geannuleerd" {
+			summary.OpenInvoices++
+			summary.OutstandingCents += maxInt(invoice.TotalCents-invoice.PaidCents, 0)
+		}
+		summary.PaidCents += invoice.PaidCents
+	}
+
+	return &model.LCBilling{
+		Summary:      summary,
+		Quotes:       quotes,
+		QuoteLines:   quoteLines,
+		TimeEntries:  timeEntries,
+		Invoices:     invoices,
+		InvoiceLines: invoiceLines,
+	}, nil
+}
+
+func bunqBillingConfigured() bool {
+	return strings.TrimSpace(os.Getenv("BUNQ_API_KEY")) != "" &&
+		strings.TrimSpace(os.Getenv("BUNQ_USER_ID")) != "" &&
+		strings.TrimSpace(os.Getenv("BUNQ_MONETARY_ACCOUNT_ID")) != ""
+}
+
+func (s *LaventeCareStore) ListQuotes(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCQuote, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT q.id, q.user_id, q.company_id, q.project_id, q.workstream_id,
+		        q.quote_number, q.titel, q.status, q.issue_date::text, q.valid_until::text,
+		        q.currency, q.subtotal_cents, q.vat_rate_bps, q.vat_cents, q.total_cents,
+		        q.accepted_at, q.notes, q.created_at, q.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_quotes q
+		   LEFT JOIN lc_companies c ON c.id = q.company_id
+		   LEFT JOIN lc_projects p ON p.id = q.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = q.workstream_id
+		  WHERE q.user_id = $1
+		    AND ($2::uuid IS NULL OR q.company_id = $2)
+		  ORDER BY q.created_at DESC
+		  LIMIT $3`,
+		userID, companyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanQuote)
+}
+
+func (s *LaventeCareStore) ListQuoteLines(ctx context.Context, userID string, companyID *uuid.UUID) ([]model.LCQuoteLine, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT l.id, l.quote_id, l.user_id, l.description, l.quantity,
+		        l.unit_amount_cents, l.total_cents, l.sort_order
+		   FROM lc_quote_lines l
+		   JOIN lc_quotes q ON q.id = l.quote_id
+		  WHERE l.user_id = $1
+		    AND ($2::uuid IS NULL OR q.company_id = $2)
+		  ORDER BY q.created_at DESC, l.sort_order ASC
+		  LIMIT 200`,
+		userID, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanQuoteLine)
+}
+
+func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input model.LCQuoteCreate) (*model.LCQuote, error) {
+	if strings.TrimSpace(input.Titel) == "" {
+		return nil, pgx.ErrNoRows
+	}
+	companyID, err := s.resolveBillingCompanyID(ctx, userID, input.CompanyID, input.ProjectID, input.WorkstreamID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateBillingTarget(ctx, userID, companyID, input.ProjectID, input.WorkstreamID, nil); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	status := cleanStatus(input.Status, "concept")
+	issueDate := cleanDateValue(input.IssueDate, now.Format("2006-01-02"))
+	currency := cleanCurrency(input.Currency)
+	vatRate := 2100
+	if input.VatRateBps != nil {
+		vatRate = *input.VatRateBps
+	}
+	subtotal := 0
+	cleanLines := cleanQuoteLines(input.Lines)
+	for _, line := range cleanLines {
+		subtotal += line.TotalCents
+	}
+	vat := vatCents(subtotal, vatRate)
+	total := subtotal + vat
+	number, err := s.nextLCNumber(ctx, userID, "lc_quotes", "quote_number", "LC-OFF")
+	if err != nil {
+		return nil, err
+	}
+	id := uuid.New()
+
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx,
+		`INSERT INTO lc_quotes (id, user_id, company_id, project_id, workstream_id,
+		        quote_number, titel, status, issue_date, valid_until, currency,
+		        subtotal_cents, vat_rate_bps, vat_cents, total_cents, notes, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+		id, userID, companyID, input.ProjectID, input.WorkstreamID, number, strings.TrimSpace(input.Titel),
+		status, issueDate, cleanDatePtr(input.ValidUntil), currency, subtotal, vatRate, vat, total,
+		cleanStringPtr(input.Notes), now)
+	if err != nil {
+		return nil, err
+	}
+	for idx, line := range cleanLines {
+		sortOrder := line.SortOrder
+		if sortOrder == 0 {
+			sortOrder = idx + 1
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO lc_quote_lines (id, quote_id, user_id, description, quantity,
+			        unit_amount_cents, total_cents, sort_order)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			uuid.New(), id, userID, line.Description, line.Quantity, line.UnitAmountCents,
+			line.TotalCents, sortOrder); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetQuote(ctx, userID, id)
+}
+
+func (s *LaventeCareStore) GetQuote(ctx context.Context, userID string, id uuid.UUID) (*model.LCQuote, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT q.id, q.user_id, q.company_id, q.project_id, q.workstream_id,
+		        q.quote_number, q.titel, q.status, q.issue_date::text, q.valid_until::text,
+		        q.currency, q.subtotal_cents, q.vat_rate_bps, q.vat_cents, q.total_cents,
+		        q.accepted_at, q.notes, q.created_at, q.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_quotes q
+		   LEFT JOIN lc_companies c ON c.id = q.company_id
+		   LEFT JOIN lc_projects p ON p.id = q.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = q.workstream_id
+		  WHERE q.user_id = $1 AND q.id = $2
+		  LIMIT 1`,
+		userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	quotes, err := pgx.CollectRows(rows, scanQuote)
+	if err != nil {
+		return nil, err
+	}
+	if len(quotes) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &quotes[0], nil
+}
+
+func (s *LaventeCareStore) UpdateQuoteStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
+	status = cleanStatus(status, "")
+	if status == "" {
+		return pgx.ErrNoRows
+	}
+	now := time.Now().UTC()
+	var acceptedAt *time.Time
+	if status == "geaccepteerd" {
+		acceptedAt = &now
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_quotes
+		    SET status = $3,
+		        accepted_at = COALESCE($4, accepted_at),
+		        updated_at = $5
+		  WHERE id = $1 AND user_id = $2`,
+		id, userID, status, acceptedAt, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) ListTimeEntries(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCTimeEntry, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT t.id, t.user_id, t.company_id, t.project_id, t.workstream_id,
+		        t.activity_event_id, t.invoice_id, t.source_type, t.source_id,
+		        t.description, t.entry_date::text, t.minutes, t.hourly_rate_cents,
+		        t.billable, t.status, t.created_at, t.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_time_entries t
+		   LEFT JOIN lc_companies c ON c.id = t.company_id
+		   LEFT JOIN lc_projects p ON p.id = t.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = t.workstream_id
+		  WHERE t.user_id = $1
+		    AND ($2::uuid IS NULL OR t.company_id = $2)
+		  ORDER BY t.entry_date DESC, t.created_at DESC
+		  LIMIT $3`,
+		userID, companyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanTimeEntry)
+}
+
+func (s *LaventeCareStore) CreateTimeEntry(ctx context.Context, userID string, input model.LCTimeEntryCreate) (*model.LCTimeEntry, error) {
+	if strings.TrimSpace(input.Description) == "" || input.Minutes <= 0 {
+		return nil, pgx.ErrNoRows
+	}
+	companyID, err := s.resolveBillingCompanyID(ctx, userID, input.CompanyID, input.ProjectID, input.WorkstreamID, input.ActivityEventID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateBillingTarget(ctx, userID, companyID, input.ProjectID, input.WorkstreamID, input.ActivityEventID); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	id := uuid.New()
+	rate := 7500
+	if input.HourlyRateCents != nil && *input.HourlyRateCents >= 0 {
+		rate = *input.HourlyRateCents
+	}
+	billable := true
+	if input.Billable != nil {
+		billable = *input.Billable
+	}
+	sourceType := cleanStatus(input.SourceType, "manual")
+	status := cleanStatus(input.Status, "concept")
+	entryDate := cleanDateValue(input.EntryDate, now.Format("2006-01-02"))
+
+	_, err = s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_time_entries (id, user_id, company_id, project_id, workstream_id,
+		        activity_event_id, source_type, source_id, description, entry_date, minutes,
+		        hourly_rate_cents, billable, status, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
+		id, userID, companyID, input.ProjectID, input.WorkstreamID, input.ActivityEventID,
+		sourceType, cleanStringPtr(input.SourceID), strings.TrimSpace(input.Description), entryDate,
+		input.Minutes, rate, billable, status, now)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetTimeEntry(ctx, userID, id)
+}
+
+func (s *LaventeCareStore) GetTimeEntry(ctx context.Context, userID string, id uuid.UUID) (*model.LCTimeEntry, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT t.id, t.user_id, t.company_id, t.project_id, t.workstream_id,
+		        t.activity_event_id, t.invoice_id, t.source_type, t.source_id,
+		        t.description, t.entry_date::text, t.minutes, t.hourly_rate_cents,
+		        t.billable, t.status, t.created_at, t.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_time_entries t
+		   LEFT JOIN lc_companies c ON c.id = t.company_id
+		   LEFT JOIN lc_projects p ON p.id = t.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = t.workstream_id
+		  WHERE t.user_id = $1 AND t.id = $2
+		  LIMIT 1`,
+		userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries, err := pgx.CollectRows(rows, scanTimeEntry)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &entries[0], nil
+}
+
+func (s *LaventeCareStore) ListInvoices(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCInvoice, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id,
+		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
+		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
+		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
+		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_invoices i
+		   LEFT JOIN lc_companies c ON c.id = i.company_id
+		   LEFT JOIN lc_projects p ON p.id = i.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = i.workstream_id
+		  WHERE i.user_id = $1
+		    AND ($2::uuid IS NULL OR i.company_id = $2)
+		  ORDER BY i.created_at DESC
+		  LIMIT $3`,
+		userID, companyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanInvoice)
+}
+
+func (s *LaventeCareStore) ListInvoiceLines(ctx context.Context, userID string, companyID *uuid.UUID) ([]model.LCInvoiceLine, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT l.id, l.invoice_id, l.user_id, l.source_time_entry_id, l.description,
+		        l.quantity_minutes, l.unit_amount_cents, l.vat_rate_bps, l.total_cents, l.sort_order
+		   FROM lc_invoice_lines l
+		   JOIN lc_invoices i ON i.id = l.invoice_id
+		  WHERE l.user_id = $1
+		    AND ($2::uuid IS NULL OR i.company_id = $2)
+		  ORDER BY i.created_at DESC, l.sort_order ASC
+		  LIMIT 200`,
+		userID, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanInvoiceLine)
+}
+
+func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, input model.LCInvoiceCreate) (*model.LCInvoice, error) {
+	companyID, err := s.resolveBillingCompanyID(ctx, userID, input.CompanyID, input.ProjectID, input.WorkstreamID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateBillingTarget(ctx, userID, companyID, input.ProjectID, input.WorkstreamID, nil); err != nil {
+		return nil, err
+	}
+
+	lines := cleanInvoiceLines(input.Lines)
+	if len(input.TimeEntryIDs) > 0 {
+		timeLines, resolvedCompanyID, err := s.invoiceLinesFromTimeEntries(ctx, userID, input.TimeEntryIDs)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil {
+			companyID = resolvedCompanyID
+		}
+		lines = append(lines, timeLines...)
+	}
+	if len(lines) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+
+	now := time.Now().UTC()
+	issueDate := cleanDateValue(input.IssueDate, now.Format("2006-01-02"))
+	dueDate := cleanDatePtr(input.DueDate)
+	if dueDate == nil {
+		dueDate = addDaysDatePtr(issueDate, 14)
+	}
+	status := cleanStatus(input.Status, "concept")
+	currency := cleanCurrency(input.Currency)
+	vatRate := 2100
+	if input.VatRateBps != nil {
+		vatRate = *input.VatRateBps
+	}
+	subtotal := 0
+	for _, line := range lines {
+		subtotal += line.TotalCents
+	}
+	vat := vatCents(subtotal, vatRate)
+	total := subtotal + vat
+	number, err := s.nextLCNumber(ctx, userID, "lc_invoices", "invoice_number", "LC-FAC")
+	if err != nil {
+		return nil, err
+	}
+	merchantReference := number
+	id := uuid.New()
+
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx,
+		`INSERT INTO lc_invoices (id, user_id, company_id, project_id, workstream_id,
+		        invoice_number, status, issue_date, due_date, currency, subtotal_cents,
+		        vat_rate_bps, vat_cents, total_cents, paid_cents, payment_provider,
+		        merchant_reference, notes, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,'bunq',$15,$16,$17,$17)`,
+		id, userID, companyID, input.ProjectID, input.WorkstreamID, number, status, issueDate,
+		dueDate, currency, subtotal, vatRate, vat, total, merchantReference, cleanStringPtr(input.Notes), now)
+	if err != nil {
+		return nil, err
+	}
+
+	for idx, line := range lines {
+		sortOrder := line.SortOrder
+		if sortOrder == 0 {
+			sortOrder = idx + 1
+		}
+		lineVat := vatRate
+		if line.VatRateBps != nil {
+			lineVat = *line.VatRateBps
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO lc_invoice_lines (id, invoice_id, user_id, source_time_entry_id,
+			        description, quantity_minutes, unit_amount_cents, vat_rate_bps, total_cents, sort_order)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			uuid.New(), id, userID, line.SourceTimeEntryID, strings.TrimSpace(line.Description),
+			line.QuantityMinutes, line.UnitAmountCents, lineVat, line.TotalCents, sortOrder); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(input.TimeEntryIDs) > 0 {
+		if _, err := tx.Exec(ctx,
+			`UPDATE lc_time_entries
+			    SET invoice_id = $3, status = 'gefactureerd', updated_at = $4
+			  WHERE user_id = $1 AND id = ANY($2)`,
+			userID, input.TimeEntryIDs, id, now); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetInvoice(ctx, userID, id)
+}
+
+func (s *LaventeCareStore) GetInvoice(ctx context.Context, userID string, id uuid.UUID) (*model.LCInvoice, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id,
+		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
+		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
+		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
+		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_invoices i
+		   LEFT JOIN lc_companies c ON c.id = i.company_id
+		   LEFT JOIN lc_projects p ON p.id = i.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = i.workstream_id
+		  WHERE i.user_id = $1 AND i.id = $2
+		  LIMIT 1`,
+		userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	invoices, err := pgx.CollectRows(rows, scanInvoice)
+	if err != nil {
+		return nil, err
+	}
+	if len(invoices) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &invoices[0], nil
+}
+
+func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID string, id uuid.UUID, input model.LCInvoiceStatusUpdate) error {
+	invoice, err := s.GetInvoice(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	status := cleanStatus(input.Status, "")
+	if status == "" {
+		return pgx.ErrNoRows
+	}
+	now := time.Now().UTC()
+	paidAt := parseDateTimePtr(input.PaidAt)
+	sentAt := parseDateTimePtr(input.SentAt)
+	paidCents := input.PaidCents
+	if status == "betaald" {
+		if paidAt == nil {
+			paidAt = &now
+		}
+		if paidCents == nil {
+			value := invoice.TotalCents
+			paidCents = &value
+		}
+	}
+	if status == "verstuurd" && sentAt == nil {
+		sentAt = &now
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_invoices
+		    SET status = $3,
+		        paid_cents = COALESCE($4, paid_cents),
+		        payment_provider = COALESCE($5, payment_provider),
+		        provider_request_id = COALESCE($6, provider_request_id),
+		        merchant_reference = COALESCE($7, merchant_reference),
+		        payment_url = COALESCE($8, payment_url),
+		        sent_at = COALESCE($9, sent_at),
+		        paid_at = COALESCE($10, paid_at),
+		        updated_at = $11
+		  WHERE id = $1 AND user_id = $2`,
+		id, userID, status, paidCents, cleanStringPtr(input.PaymentProvider),
+		cleanStringPtr(input.ProviderRequestID), cleanStringPtr(input.MerchantReference),
+		cleanStringPtr(input.PaymentURL), sentAt, paidAt, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) invoiceLinesFromTimeEntries(ctx context.Context, userID string, ids []uuid.UUID) ([]model.LCInvoiceLineCreate, *uuid.UUID, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, company_id, description, minutes, hourly_rate_cents
+		   FROM lc_time_entries
+		  WHERE user_id = $1
+		    AND id = ANY($2)
+		    AND billable = true
+		    AND invoice_id IS NULL
+		  ORDER BY entry_date ASC, created_at ASC`,
+		userID, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	lines := make([]model.LCInvoiceLineCreate, 0, len(ids))
+	var companyID *uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		var entryCompanyID *uuid.UUID
+		var description string
+		var minutes int
+		var rate int
+		if err := rows.Scan(&id, &entryCompanyID, &description, &minutes, &rate); err != nil {
+			return nil, nil, err
+		}
+		if companyID == nil && entryCompanyID != nil {
+			companyID = entryCompanyID
+		}
+		entryID := id
+		lines = append(lines, model.LCInvoiceLineCreate{
+			SourceTimeEntryID: &entryID,
+			Description:       description,
+			QuantityMinutes:   minutes,
+			UnitAmountCents:   rate,
+			TotalCents:        centsFromMinutes(minutes, rate),
+		})
+	}
+	if rows.Err() != nil {
+		return nil, nil, rows.Err()
+	}
+	if len(lines) != len(ids) {
+		return nil, nil, pgx.ErrNoRows
+	}
+	return lines, companyID, nil
+}
+
+func (s *LaventeCareStore) resolveBillingCompanyID(ctx context.Context, userID string, companyID, projectID, workstreamID, activityEventID *uuid.UUID) (*uuid.UUID, error) {
+	resolved, err := s.resolveDossierCompanyID(ctx, userID, companyID, nil, projectID, workstreamID)
+	if err != nil || resolved != nil {
+		return resolved, err
+	}
+	if activityEventID != nil {
+		var id *uuid.UUID
+		if err := s.db.Pool.QueryRow(ctx,
+			`SELECT company_id FROM lc_activity_events WHERE user_id = $1 AND id = $2`,
+			userID, *activityEventID).Scan(&id); err != nil && err != pgx.ErrNoRows {
+			return nil, err
+		} else if id != nil {
+			return id, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *LaventeCareStore) validateBillingTarget(ctx context.Context, userID string, companyID, projectID, workstreamID, activityEventID *uuid.UUID) error {
+	check := func(table string, id *uuid.UUID) error {
+		if id == nil {
+			return nil
+		}
+		var exists bool
+		query := fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s WHERE user_id = $1 AND id = $2)`, table)
+		if err := s.db.Pool.QueryRow(ctx, query, userID, *id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return pgx.ErrNoRows
+		}
+		return nil
+	}
+	if err := check("lc_companies", companyID); err != nil {
+		return err
+	}
+	if err := check("lc_projects", projectID); err != nil {
+		return err
+	}
+	if err := check("lc_workstreams", workstreamID); err != nil {
+		return err
+	}
+	if err := check("lc_activity_events", activityEventID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) nextLCNumber(ctx context.Context, userID, table, column, prefix string) (string, error) {
+	year := time.Now().UTC().Format("2006")
+	needle := prefix + "-" + year + "-%"
+	query := fmt.Sprintf(`SELECT COUNT(*)::int FROM %s WHERE user_id = $1 AND %s LIKE $2`, table, column)
+	var count int
+	if err := s.db.Pool.QueryRow(ctx, query, userID, needle).Scan(&count); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s-%04d", prefix, year, count+1), nil
+}
+
 // ─── Cockpit (aggregated dashboard) ──────────────────────────────────────────
 
 func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*model.LCCockpit, error) {
@@ -1753,6 +2419,52 @@ func scanActivityEvent(row pgx.CollectableRow) (model.LCActivityEvent, error) {
 	return e, err
 }
 
+func scanQuote(row pgx.CollectableRow) (model.LCQuote, error) {
+	var q model.LCQuote
+	err := row.Scan(&q.ID, &q.UserID, &q.CompanyID, &q.ProjectID, &q.WorkstreamID,
+		&q.QuoteNumber, &q.Titel, &q.Status, &q.IssueDate, &q.ValidUntil,
+		&q.Currency, &q.SubtotalCents, &q.VatRateBps, &q.VatCents, &q.TotalCents,
+		&q.AcceptedAt, &q.Notes, &q.CreatedAt, &q.UpdatedAt,
+		&q.CompanyName, &q.ProjectName, &q.WorkstreamTitle)
+	return q, err
+}
+
+func scanQuoteLine(row pgx.CollectableRow) (model.LCQuoteLine, error) {
+	var l model.LCQuoteLine
+	err := row.Scan(&l.ID, &l.QuoteID, &l.UserID, &l.Description, &l.Quantity,
+		&l.UnitAmountCents, &l.TotalCents, &l.SortOrder)
+	return l, err
+}
+
+func scanTimeEntry(row pgx.CollectableRow) (model.LCTimeEntry, error) {
+	var t model.LCTimeEntry
+	err := row.Scan(&t.ID, &t.UserID, &t.CompanyID, &t.ProjectID, &t.WorkstreamID,
+		&t.ActivityEventID, &t.InvoiceID, &t.SourceType, &t.SourceID,
+		&t.Description, &t.EntryDate, &t.Minutes, &t.HourlyRateCents,
+		&t.Billable, &t.Status, &t.CreatedAt, &t.UpdatedAt,
+		&t.CompanyName, &t.ProjectName, &t.WorkstreamTitle)
+	return t, err
+}
+
+func scanInvoice(row pgx.CollectableRow) (model.LCInvoice, error) {
+	var i model.LCInvoice
+	err := row.Scan(&i.ID, &i.UserID, &i.CompanyID, &i.ProjectID, &i.WorkstreamID,
+		&i.InvoiceNumber, &i.Status, &i.IssueDate, &i.DueDate, &i.Currency,
+		&i.SubtotalCents, &i.VatRateBps, &i.VatCents, &i.TotalCents, &i.PaidCents,
+		&i.PaymentProvider, &i.ProviderRequestID, &i.MerchantReference,
+		&i.PaymentURL, &i.SentAt, &i.PaidAt, &i.Notes, &i.CreatedAt, &i.UpdatedAt,
+		&i.CompanyName, &i.ProjectName, &i.WorkstreamTitle)
+	return i, err
+}
+
+func scanInvoiceLine(row pgx.CollectableRow) (model.LCInvoiceLine, error) {
+	var l model.LCInvoiceLine
+	err := row.Scan(&l.ID, &l.InvoiceID, &l.UserID, &l.SourceTimeEntryID,
+		&l.Description, &l.QuantityMinutes, &l.UnitAmountCents, &l.VatRateBps,
+		&l.TotalCents, &l.SortOrder)
+	return l, err
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func filterOpen[T any](items []T, statusFn func(T) string) []T {
@@ -1798,6 +2510,138 @@ func cleanStringPtr(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func cleanStatus(value, fallback string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func cleanCurrency(value string) string {
+	currency := strings.ToUpper(strings.TrimSpace(value))
+	if currency == "" {
+		return "EUR"
+	}
+	return currency
+}
+
+func cleanDateValue(value *string, fallback string) string {
+	raw := strings.TrimSpace(deref(value))
+	if raw == "" {
+		return fallback
+	}
+	parsed := parseDate(raw)
+	if parsed == "" {
+		return fallback
+	}
+	return parsed
+}
+
+func cleanDatePtr(value *string) *string {
+	raw := strings.TrimSpace(deref(value))
+	if raw == "" {
+		return nil
+	}
+	parsed := parseDate(raw)
+	if parsed == "" {
+		return nil
+	}
+	return &parsed
+}
+
+func parseDate(raw string) string {
+	for _, layout := range []string{"2006-01-02", time.RFC3339, "2006-01-02 15:04"} {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed.Format("2006-01-02")
+		}
+	}
+	return ""
+}
+
+func addDaysDatePtr(date string, days int) *string {
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return nil
+	}
+	value := parsed.AddDate(0, 0, days).Format("2006-01-02")
+	return &value
+}
+
+func cleanQuoteLines(lines []model.LCQuoteLineCreate) []model.LCQuoteLineCreate {
+	result := make([]model.LCQuoteLineCreate, 0, len(lines))
+	for _, line := range lines {
+		description := strings.TrimSpace(line.Description)
+		if description == "" {
+			continue
+		}
+		quantity := line.Quantity
+		if quantity <= 0 {
+			quantity = 1
+		}
+		unit := maxInt(line.UnitAmountCents, 0)
+		result = append(result, model.LCQuoteLineCreate{
+			Description:     description,
+			Quantity:        quantity,
+			UnitAmountCents: unit,
+			TotalCents:      quantity * unit,
+			SortOrder:       line.SortOrder,
+		})
+	}
+	return result
+}
+
+func cleanInvoiceLines(lines []model.LCInvoiceLineCreate) []model.LCInvoiceLineCreate {
+	result := make([]model.LCInvoiceLineCreate, 0, len(lines))
+	for _, line := range lines {
+		description := strings.TrimSpace(line.Description)
+		if description == "" {
+			continue
+		}
+		minutes := line.QuantityMinutes
+		if minutes < 0 {
+			minutes = 0
+		}
+		unit := maxInt(line.UnitAmountCents, 0)
+		total := line.TotalCents
+		if total <= 0 {
+			total = centsFromMinutes(minutes, unit)
+		}
+		result = append(result, model.LCInvoiceLineCreate{
+			SourceTimeEntryID: line.SourceTimeEntryID,
+			Description:       description,
+			QuantityMinutes:   minutes,
+			UnitAmountCents:   unit,
+			VatRateBps:        line.VatRateBps,
+			TotalCents:        total,
+			SortOrder:         line.SortOrder,
+		})
+	}
+	return result
+}
+
+func centsFromMinutes(minutes, hourlyRateCents int) int {
+	if minutes <= 0 || hourlyRateCents <= 0 {
+		return 0
+	}
+	return (minutes*hourlyRateCents + 30) / 60
+}
+
+func vatCents(subtotalCents, vatRateBps int) int {
+	if subtotalCents <= 0 || vatRateBps <= 0 {
+		return 0
+	}
+	return (subtotalCents*vatRateBps + 5000) / 10000
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func parseDateTimePtr(value *string) *time.Time {

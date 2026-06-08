@@ -61,6 +61,14 @@ type Config struct {
 	TodoistAPIToken  string
 	TodoistProjectID string
 
+	// bunq (LaventeCare billing)
+	BunqEnvironment       string
+	BunqAPIKey            string
+	BunqUserID            string
+	BunqMonetaryAccountID string
+	BunqCallbackSecret    string
+	BunqDeviceDescription string
+
 	// CORS
 	CORSOrigins []string
 
@@ -118,6 +126,13 @@ func Load() *Config {
 
 		TodoistAPIToken:  envOr("TODOIST_API_TOKEN", ""),
 		TodoistProjectID: envOr("TODOIST_PROJECT_ID", ""),
+
+		BunqEnvironment:       envOr("BUNQ_ENVIRONMENT", "sandbox"),
+		BunqAPIKey:            envOr("BUNQ_API_KEY", ""),
+		BunqUserID:            envOr("BUNQ_USER_ID", ""),
+		BunqMonetaryAccountID: envOr("BUNQ_MONETARY_ACCOUNT_ID", ""),
+		BunqCallbackSecret:    envOr("BUNQ_CALLBACK_SECRET", ""),
+		BunqDeviceDescription: envOr("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
 
 		CORSOrigins: envSliceOr("CORS_ORIGINS", []string{"http://localhost:3000"}),
 

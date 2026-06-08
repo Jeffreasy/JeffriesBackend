@@ -141,6 +141,12 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 			"googleCalendarAutoSync":   h.cfg.GoogleCalendarEnabled && googleOAuthConfigured(h.cfg),
 			"gmail":                    googleOAuthConfigured(h.cfg),
 			"gmailAutoSync":            h.cfg.GmailEnabled && googleOAuthConfigured(h.cfg),
+			"bunq":                     bunqConfigured(h.cfg),
+			"bunqEnvironment":          h.cfg.BunqEnvironment,
+			"bunqApiKeyConfigured":     configuredSecret(h.cfg.BunqAPIKey),
+			"bunqUserConfigured":       configuredValue(h.cfg.BunqUserID),
+			"bunqMonetaryAccount":      configuredValue(h.cfg.BunqMonetaryAccountID),
+			"bunqCallbackConfigured":   configuredSecret(h.cfg.BunqCallbackSecret),
 			"todoist":                  h.cfg.TodoistEnabled && configuredValue(h.cfg.TodoistAPIToken),
 			"queueLightCommands":       h.cfg.QueueLightCommands(),
 			"startBackgroundEngine":    h.cfg.StartBackgroundEngine,
@@ -785,6 +791,12 @@ func googleOAuthConfigured(cfg *config.Config) bool {
 	return configuredValue(cfg.GoogleClientID) &&
 		configuredValue(cfg.GoogleClientSecret) &&
 		configuredValue(cfg.GoogleRefreshToken)
+}
+
+func bunqConfigured(cfg *config.Config) bool {
+	return configuredSecret(cfg.BunqAPIKey) &&
+		configuredValue(cfg.BunqUserID) &&
+		configuredValue(cfg.BunqMonetaryAccountID)
 }
 
 func maskedSuffix(value string, keep int) any {

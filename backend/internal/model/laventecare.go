@@ -359,6 +359,204 @@ type LCActivityEventCreate struct {
 	OccurredAt   *string    `json:"occurred_at"`
 }
 
+type LCBilling struct {
+	Summary      LCBillingSummary `json:"summary"`
+	Quotes       []LCQuote        `json:"quotes"`
+	QuoteLines   []LCQuoteLine    `json:"quoteLines"`
+	TimeEntries  []LCTimeEntry    `json:"timeEntries"`
+	Invoices     []LCInvoice      `json:"invoices"`
+	InvoiceLines []LCInvoiceLine  `json:"invoiceLines"`
+}
+
+type LCBillingSummary struct {
+	Quotes              int    `json:"quotes"`
+	OpenQuotes          int    `json:"openQuotes"`
+	TimeEntries         int    `json:"timeEntries"`
+	BillableMinutes     int    `json:"billableMinutes"`
+	UninvoicedMinutes   int    `json:"uninvoicedMinutes"`
+	Invoices            int    `json:"invoices"`
+	OpenInvoices        int    `json:"openInvoices"`
+	OutstandingCents    int    `json:"outstandingCents"`
+	PaidCents           int    `json:"paidCents"`
+	DefaultProvider     string `json:"defaultProvider"`
+	BunqReady           bool   `json:"bunqReady"`
+	NextStepDescription string `json:"nextStepDescription"`
+}
+
+type LCQuote struct {
+	ID              uuid.UUID  `json:"id" db:"id"`
+	UserID          string     `json:"user_id" db:"user_id"`
+	CompanyID       *uuid.UUID `json:"company_id" db:"company_id"`
+	ProjectID       *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID    *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	QuoteNumber     string     `json:"quote_number" db:"quote_number"`
+	Titel           string     `json:"titel" db:"titel"`
+	Status          string     `json:"status" db:"status"`
+	IssueDate       string     `json:"issue_date" db:"issue_date"`
+	ValidUntil      *string    `json:"valid_until" db:"valid_until"`
+	Currency        string     `json:"currency" db:"currency"`
+	SubtotalCents   int        `json:"subtotal_cents" db:"subtotal_cents"`
+	VatRateBps      int        `json:"vat_rate_bps" db:"vat_rate_bps"`
+	VatCents        int        `json:"vat_cents" db:"vat_cents"`
+	TotalCents      int        `json:"total_cents" db:"total_cents"`
+	AcceptedAt      *time.Time `json:"accepted_at" db:"accepted_at"`
+	Notes           *string    `json:"notes" db:"notes"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName     *string    `json:"company_name,omitempty"`
+	ProjectName     *string    `json:"project_name,omitempty"`
+	WorkstreamTitle *string    `json:"workstream_title,omitempty"`
+}
+
+type LCQuoteLine struct {
+	ID              uuid.UUID `json:"id" db:"id"`
+	QuoteID         uuid.UUID `json:"quote_id" db:"quote_id"`
+	UserID          string    `json:"user_id" db:"user_id"`
+	Description     string    `json:"description" db:"description"`
+	Quantity        int       `json:"quantity" db:"quantity"`
+	UnitAmountCents int       `json:"unit_amount_cents" db:"unit_amount_cents"`
+	TotalCents      int       `json:"total_cents" db:"total_cents"`
+	SortOrder       int       `json:"sort_order" db:"sort_order"`
+}
+
+type LCQuoteLineCreate struct {
+	Description     string `json:"description"`
+	Quantity        int    `json:"quantity"`
+	UnitAmountCents int    `json:"unit_amount_cents"`
+	TotalCents      int    `json:"total_cents"`
+	SortOrder       int    `json:"sort_order"`
+}
+
+type LCQuoteCreate struct {
+	CompanyID    *uuid.UUID          `json:"company_id"`
+	ProjectID    *uuid.UUID          `json:"project_id"`
+	WorkstreamID *uuid.UUID          `json:"workstream_id"`
+	Titel        string              `json:"titel"`
+	Status       string              `json:"status"`
+	IssueDate    *string             `json:"issue_date"`
+	ValidUntil   *string             `json:"valid_until"`
+	Currency     string              `json:"currency"`
+	VatRateBps   *int                `json:"vat_rate_bps"`
+	Notes        *string             `json:"notes"`
+	Lines        []LCQuoteLineCreate `json:"lines"`
+}
+
+type LCTimeEntry struct {
+	ID              uuid.UUID  `json:"id" db:"id"`
+	UserID          string     `json:"user_id" db:"user_id"`
+	CompanyID       *uuid.UUID `json:"company_id" db:"company_id"`
+	ProjectID       *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID    *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	ActivityEventID *uuid.UUID `json:"activity_event_id" db:"activity_event_id"`
+	InvoiceID       *uuid.UUID `json:"invoice_id" db:"invoice_id"`
+	SourceType      string     `json:"source_type" db:"source_type"`
+	SourceID        *string    `json:"source_id" db:"source_id"`
+	Description     string     `json:"description" db:"description"`
+	EntryDate       string     `json:"entry_date" db:"entry_date"`
+	Minutes         int        `json:"minutes" db:"minutes"`
+	HourlyRateCents int        `json:"hourly_rate_cents" db:"hourly_rate_cents"`
+	Billable        bool       `json:"billable" db:"billable"`
+	Status          string     `json:"status" db:"status"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName     *string    `json:"company_name,omitempty"`
+	ProjectName     *string    `json:"project_name,omitempty"`
+	WorkstreamTitle *string    `json:"workstream_title,omitempty"`
+}
+
+type LCTimeEntryCreate struct {
+	CompanyID       *uuid.UUID `json:"company_id"`
+	ProjectID       *uuid.UUID `json:"project_id"`
+	WorkstreamID    *uuid.UUID `json:"workstream_id"`
+	ActivityEventID *uuid.UUID `json:"activity_event_id"`
+	SourceType      string     `json:"source_type"`
+	SourceID        *string    `json:"source_id"`
+	Description     string     `json:"description"`
+	EntryDate       *string    `json:"entry_date"`
+	Minutes         int        `json:"minutes"`
+	HourlyRateCents *int       `json:"hourly_rate_cents"`
+	Billable        *bool      `json:"billable"`
+	Status          string     `json:"status"`
+}
+
+type LCInvoice struct {
+	ID                uuid.UUID  `json:"id" db:"id"`
+	UserID            string     `json:"user_id" db:"user_id"`
+	CompanyID         *uuid.UUID `json:"company_id" db:"company_id"`
+	ProjectID         *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID      *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	InvoiceNumber     string     `json:"invoice_number" db:"invoice_number"`
+	Status            string     `json:"status" db:"status"`
+	IssueDate         string     `json:"issue_date" db:"issue_date"`
+	DueDate           *string    `json:"due_date" db:"due_date"`
+	Currency          string     `json:"currency" db:"currency"`
+	SubtotalCents     int        `json:"subtotal_cents" db:"subtotal_cents"`
+	VatRateBps        int        `json:"vat_rate_bps" db:"vat_rate_bps"`
+	VatCents          int        `json:"vat_cents" db:"vat_cents"`
+	TotalCents        int        `json:"total_cents" db:"total_cents"`
+	PaidCents         int        `json:"paid_cents" db:"paid_cents"`
+	PaymentProvider   string     `json:"payment_provider" db:"payment_provider"`
+	ProviderRequestID *string    `json:"provider_request_id" db:"provider_request_id"`
+	MerchantReference *string    `json:"merchant_reference" db:"merchant_reference"`
+	PaymentURL        *string    `json:"payment_url" db:"payment_url"`
+	SentAt            *time.Time `json:"sent_at" db:"sent_at"`
+	PaidAt            *time.Time `json:"paid_at" db:"paid_at"`
+	Notes             *string    `json:"notes" db:"notes"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName       *string    `json:"company_name,omitempty"`
+	ProjectName       *string    `json:"project_name,omitempty"`
+	WorkstreamTitle   *string    `json:"workstream_title,omitempty"`
+}
+
+type LCInvoiceLine struct {
+	ID                uuid.UUID  `json:"id" db:"id"`
+	InvoiceID         uuid.UUID  `json:"invoice_id" db:"invoice_id"`
+	UserID            string     `json:"user_id" db:"user_id"`
+	SourceTimeEntryID *uuid.UUID `json:"source_time_entry_id" db:"source_time_entry_id"`
+	Description       string     `json:"description" db:"description"`
+	QuantityMinutes   int        `json:"quantity_minutes" db:"quantity_minutes"`
+	UnitAmountCents   int        `json:"unit_amount_cents" db:"unit_amount_cents"`
+	VatRateBps        int        `json:"vat_rate_bps" db:"vat_rate_bps"`
+	TotalCents        int        `json:"total_cents" db:"total_cents"`
+	SortOrder         int        `json:"sort_order" db:"sort_order"`
+}
+
+type LCInvoiceLineCreate struct {
+	SourceTimeEntryID *uuid.UUID `json:"source_time_entry_id"`
+	Description       string     `json:"description"`
+	QuantityMinutes   int        `json:"quantity_minutes"`
+	UnitAmountCents   int        `json:"unit_amount_cents"`
+	VatRateBps        *int       `json:"vat_rate_bps"`
+	TotalCents        int        `json:"total_cents"`
+	SortOrder         int        `json:"sort_order"`
+}
+
+type LCInvoiceCreate struct {
+	CompanyID    *uuid.UUID            `json:"company_id"`
+	ProjectID    *uuid.UUID            `json:"project_id"`
+	WorkstreamID *uuid.UUID            `json:"workstream_id"`
+	Status       string                `json:"status"`
+	IssueDate    *string               `json:"issue_date"`
+	DueDate      *string               `json:"due_date"`
+	Currency     string                `json:"currency"`
+	VatRateBps   *int                  `json:"vat_rate_bps"`
+	Notes        *string               `json:"notes"`
+	TimeEntryIDs []uuid.UUID           `json:"time_entry_ids"`
+	Lines        []LCInvoiceLineCreate `json:"lines"`
+}
+
+type LCInvoiceStatusUpdate struct {
+	Status            string  `json:"status"`
+	PaidCents         *int    `json:"paid_cents"`
+	PaymentProvider   *string `json:"payment_provider"`
+	ProviderRequestID *string `json:"provider_request_id"`
+	MerchantReference *string `json:"merchant_reference"`
+	PaymentURL        *string `json:"payment_url"`
+	PaidAt            *string `json:"paid_at"`
+	SentAt            *string `json:"sent_at"`
+}
+
 type LCDecision struct {
 	ID        uuid.UUID  `json:"id" db:"id"`
 	UserID    string     `json:"user_id" db:"user_id"`

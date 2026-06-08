@@ -1010,6 +1010,27 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareBillingOpvragen",
+			Description: "Haalt LaventeCare offertes, urenregels, facturen, open bedragen en bunq-readiness op. Alleen lezen; geen facturen of betaalverzoeken maken.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {
+						"type": "number",
+						"description": "Aantal recente items (max 80)."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om commercie op klantniveau te filteren."
+					}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareKlantMaken",
 			Description: "Maakt een LaventeCare klant/company dossier. Deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{

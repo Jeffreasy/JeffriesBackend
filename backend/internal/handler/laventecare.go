@@ -22,6 +22,18 @@ func NewLaventeCareHandler(s *store.LaventeCareStore, userID string) *LaventeCar
 	return &LaventeCareHandler{store: s, userID: userID}
 }
 
+func parseOptionalUUIDQuery(r *http.Request, key string) (*uuid.UUID, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
 // Cockpit returns the aggregated LaventeCare dashboard.
 // @Summary Get LaventeCare Cockpit
 // @Description Returns the aggregated CRM dashboard data
@@ -37,6 +49,211 @@ func (h *LaventeCareHandler) Cockpit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, cockpit)
+}
+
+// Billing returns LaventeCare quotes, time entries, invoices and summary.
+// @Summary Get LaventeCare Billing
+// @Description Returns the commercial LaventeCare workflow: quotes, hours and invoices
+// @Tags LaventeCare
+// @Produce json
+// @Param companyId query string false "Company ID (UUID)"
+// @Param limit query int false "Limit count" default(40)
+// @Success 200 {object} model.LCBilling
+// @Failure 400 {string} string "Invalid companyId"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/billing [get]
+func (h *LaventeCareHandler) Billing(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 40)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	billing, err := h.store.GetBilling(r.Context(), h.userID, limit, companyID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, billing)
+}
+
+// CreateQuote creates a LaventeCare quote.
+// @Summary Create LaventeCare Quote
+// @Description Creates a quote draft that can later become an invoice
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCQuoteCreate true "Quote"
+// @Success 201 {object} model.LCQuote
+// @Failure 400 {string} string "Invalid request body or missing fields"
+// @Failure 404 {string} string "Related customer object not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/quotes [post]
+func (h *LaventeCareHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
+	var input model.LCQuoteCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Titel == "" || len(input.Lines) == 0 {
+		Error(w, http.StatusBadRequest, "titel en minimaal 1 regel zijn verplicht")
+		return
+	}
+	quote, err := h.store.CreateQuote(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant, opdracht of project niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, quote)
+}
+
+// UpdateQuoteStatus updates a LaventeCare quote status.
+// @Summary Update Quote Status
+// @Description Updates a quote status such as verzonden or geaccepteerd
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Quote ID (UUID)"
+// @Param request body map[string]string true "Status"
+// @Success 200 {object} map[string]string "status ok"
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Quote not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/quotes/{id}/status [patch]
+func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid quote ID")
+		return
+	}
+	var input struct {
+		Status string `json:"status"`
+	}
+	if err := DecodeJSON(r, &input); err != nil || input.Status == "" {
+		Error(w, http.StatusBadRequest, "Status is verplicht")
+		return
+	}
+	if err := h.store.UpdateQuoteStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Offerte niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// CreateTimeEntry creates a billable LaventeCare time entry.
+// @Summary Create Time Entry
+// @Description Logs billable or non-billable work time for a customer/project/workstream
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCTimeEntryCreate true "Time Entry"
+// @Success 201 {object} model.LCTimeEntry
+// @Failure 400 {string} string "Invalid request body or missing fields"
+// @Failure 404 {string} string "Related customer object not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/time-entries [post]
+func (h *LaventeCareHandler) CreateTimeEntry(w http.ResponseWriter, r *http.Request) {
+	var input model.LCTimeEntryCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.Description == "" || input.Minutes <= 0 {
+		Error(w, http.StatusBadRequest, "description en minutes zijn verplicht")
+		return
+	}
+	entry, err := h.store.CreateTimeEntry(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant, opdracht of project niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, entry)
+}
+
+// CreateInvoice creates a LaventeCare invoice draft.
+// @Summary Create Invoice
+// @Description Creates an invoice from manual lines or selected time entries
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCInvoiceCreate true "Invoice"
+// @Success 201 {object} model.LCInvoice
+// @Failure 400 {string} string "Invalid request body or missing lines"
+// @Failure 404 {string} string "Related customer object not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/invoices [post]
+func (h *LaventeCareHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
+	var input model.LCInvoiceCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(input.Lines) == 0 && len(input.TimeEntryIDs) == 0 {
+		Error(w, http.StatusBadRequest, "minimaal 1 regel of urenregel is verplicht")
+		return
+	}
+	invoice, err := h.store.CreateInvoice(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Factuurbron niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, invoice)
+}
+
+// UpdateInvoiceStatus updates an invoice/payment status.
+// @Summary Update Invoice Status
+// @Description Updates invoice status and optional bunq/payment metadata
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Invoice ID (UUID)"
+// @Param request body model.LCInvoiceStatusUpdate true "Invoice Status"
+// @Success 200 {object} map[string]string "status ok"
+// @Failure 400 {string} string "Invalid request body or ID"
+// @Failure 404 {string} string "Invoice not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/invoices/{id}/status [patch]
+func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		return
+	}
+	var input model.LCInvoiceStatusUpdate
+	if err := DecodeJSON(r, &input); err != nil || input.Status == "" {
+		Error(w, http.StatusBadRequest, "Status is verplicht")
+		return
+	}
+	if err := h.store.UpdateInvoiceStatus(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Factuur niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ListCompanies returns LaventeCare companies/customer dossiers.

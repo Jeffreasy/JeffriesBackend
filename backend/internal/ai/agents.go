@@ -109,6 +109,7 @@ var Policies = map[string]ToolPolicy{
 	"laventecareProjectenOpvragen":         {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareActiesOpvragen":            {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareDossierDocumentenOpvragen": {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareBillingOpvragen":           {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// LaventeCare writes
 	"laventecareKlantMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareKlantBijwerken":      {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
