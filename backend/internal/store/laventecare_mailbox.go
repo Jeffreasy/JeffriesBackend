@@ -262,6 +262,27 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nOp basis van onze context stel ik voor om voor {{company.naam}} te starten met een compacte discovery/scope. Daarmee maken we de gewenste uitkomst, afhankelijkheden en prioriteiten concreet voordat er gebouwd wordt.\n\nWat ik oplever:\n- Probleem en doelstelling scherp op papier.\n- Technische en operationele afhankelijkheden in beeld.\n- Een concreet voorstel voor {{next_step}}.\n\nIk kan dit na akkoord direct voorbereiden.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
+			TemplateKey:     "proposal_qa",
+			Name:            "Voorstel en Q&A",
+			Category:        "sales",
+			Status:          "active",
+			SubjectTemplate: "Antwoorden en voorstel - {{company.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "Compact antwoord op scope, werking, kosten, eigendom, AVG en fasering.",
+				Eyebrow:     "Voorstel",
+				Title:       "Antwoorden en aanpak",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Dank voor jullie vragen over {{company.naam}}. Hieronder zet ik compact neer wat de scope is, wat er al staat en hoe ik dit professioneel zou faseren.",
+				Body:        "{{proposal.current_state}}",
+				FocusTitle:  "Kernantwoorden",
+				FocusItems:  []string{"Scope: {{proposal.scope}}", "Waarde: {{proposal.value}}", "AI en matching: {{proposal.ai}}", "Veiligheid en eigendom: {{proposal.security}}", "Kosten en fasering: {{proposal.costs}}", "Volgende stap: {{proposal.next_step}}"},
+				CTAURL:      "{{cta.url}}",
+				CTALabel:    "{{cta.label}}",
+				ClosingLine: "Ik kan dit in een demo laten zien en daarna de scope definitief maken, zodat jullie exact weten wat binnen de eerste fase valt.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nDank voor jullie vragen over {{company.naam}}. Hieronder zet ik compact neer wat de scope is, wat er al staat en hoe ik dit professioneel zou faseren.\n\n{{proposal.current_state}}\n\nKernantwoorden:\n- Scope: {{proposal.scope}}\n- Waarde: {{proposal.value}}\n- AI en matching: {{proposal.ai}}\n- Veiligheid en eigendom: {{proposal.security}}\n- Kosten en fasering: {{proposal.costs}}\n- Volgende stap: {{proposal.next_step}}\n\nIk kan dit in een demo laten zien en daarna de scope definitief maken, zodat jullie exact weten wat binnen de eerste fase valt.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
 			TemplateKey:     "quote_send",
 			Name:            "Offerte versturen",
 			Category:        "commerce",
@@ -698,6 +719,13 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"project.update":         "De voortgang loopt volgens afspraak.",
 		"project.risk":           "geen bijzonderheden",
 		"project.url":            "",
+		"proposal.scope":         "de afgesproken scope",
+		"proposal.current_state": "Er is een werkende basis, maar productieafspraken, beveiliging, AVG, onderhoud en fasering moeten nog expliciet worden vastgelegd.",
+		"proposal.value":         "minder handmatig werk, sneller kandidaten verwerken, beter overzicht en beter onderbouwde matches",
+		"proposal.ai":            "de AI-score is adviserend, uitlegbaar en blijft onder menselijke controle",
+		"proposal.security":      "broncode, export, eigendom en AVG-afspraken worden expliciet vastgelegd voordat productie live gaat",
+		"proposal.costs":         "projectkosten en maandelijkse kosten worden apart gemaakt, inclusief hosting, AI, opslag en onderhoud",
+		"proposal.next_step":     "demo tonen, vragen afstemmen en daarna scope/offerte definitief maken",
 		"pilot.scope":            "de afgesproken testscope",
 		"pilot.criteria":         "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
 		"pilot.feedback_moment":  "na de eerste testperiode",
@@ -761,6 +789,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		setMailValue(values, "project.status", stringMapValue(project, "status"))
 		setMailValue(values, "project.update", stringMapValue(project, "samenvatting"))
 		setMailValue(values, "pilot.scope", stringMapValue(project, "samenvatting"))
+		setMailValue(values, "proposal.scope", stringMapValue(project, "samenvatting"))
 	}
 	if input.WorkstreamID != nil {
 		workstream, _, projectID, err := s.mailAIWorkstream(ctx, userID, input.WorkstreamID)
@@ -777,6 +806,14 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 			stringMapValue(workstream, "scope"),
 			stringMapValue(workstream, "deliverable"),
 		}, " "))
+		proposalScope := joinMailParts([]string{
+			stringMapValue(workstream, "doel"),
+			stringMapValue(workstream, "scope"),
+			stringMapValue(workstream, "deliverable"),
+		}, " ")
+		setMailValue(values, "proposal.scope", proposalScope)
+		setMailValue(values, "proposal.current_state", stringMapValue(workstream, "bevindingen"))
+		setMailValue(values, "proposal.next_step", stringMapValue(workstream, "volgende_stap"))
 		setMailValue(values, "project.update", joinMailParts([]string{
 			stringMapValue(workstream, "bevindingen"),
 			stringMapValue(workstream, "volgende_stap"),

@@ -221,6 +221,7 @@ type LCWorkstreamCreate struct {
 
 type LCWorkstreamUpdate struct {
 	CompanyID        *uuid.UUID `json:"company_id,omitempty"`
+	ProjectID        *uuid.UUID `json:"project_id,omitempty"`
 	Type             *string    `json:"type,omitempty"`
 	Status           *string    `json:"status,omitempty"`
 	Prioriteit       *string    `json:"prioriteit,omitempty"`
@@ -818,11 +819,12 @@ type LCConvertLeadToProject struct {
 
 // LCConvertWorkstreamToProject is the request body for promoting an opdracht to a project.
 type LCConvertWorkstreamToProject struct {
-	WorkstreamID uuid.UUID `json:"workstream_id"`
-	Naam         string    `json:"naam"`
-	Fase         *string   `json:"fase"`
-	Status       *string   `json:"status"`
-	Samenvatting *string   `json:"samenvatting"`
+	WorkstreamID uuid.UUID  `json:"workstream_id"`
+	ProjectID    *uuid.UUID `json:"project_id,omitempty"`
+	Naam         string     `json:"naam"`
+	Fase         *string    `json:"fase"`
+	Status       *string    `json:"status"`
+	Samenvatting *string    `json:"samenvatting"`
 }
 
 // LCConvertSignalToLead is the request body for converting a business signal to a lead.

@@ -484,8 +484,8 @@ var AllTools = []ToolDefinition{
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
 					"symbol": {"type": "string", "description": "Optioneel UI-symbool."},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"], "description": "Optionele zakelijke context voor LaventeCare."},
-					"businessContextId": {"type": "string", "description": "Optioneel lead- of project-id als de afspraak aan een specifiek LaventeCare object hangt."},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_company", "laventecare_lead", "laventecare_workstream", "laventecare_project"], "description": "Optionele zakelijke context voor LaventeCare."},
+					"businessContextId": {"type": "string", "description": "Optioneel klant-, lead-, opdracht- of project-id als de afspraak aan een specifiek LaventeCare object hangt."},
 					"businessContextTitle": {"type": "string", "description": "Leesbare naam van de zakelijke context."}
 				},
 				"required": ["titel", "startDatum"]
@@ -510,7 +510,7 @@ var AllTools = []ToolDefinition{
 					"locatie": {"type": "string"},
 					"beschrijving": {"type": "string"},
 					"symbol": {"type": "string"},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_company", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
 					"businessContextId": {"type": "string"},
 					"businessContextTitle": {"type": "string"}
 				},
@@ -608,12 +608,12 @@ var AllTools = []ToolDefinition{
 					},
 					"businessContextType": {
 						"type": "string",
-						"enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"],
-						"description": "Optionele zakelijke context; gebruik laventecare_* wanneer de notitie over het bedrijf, een lead, opdracht of project gaat."
+						"enum": ["laventecare", "laventecare_company", "laventecare_lead", "laventecare_workstream", "laventecare_project"],
+						"description": "Optionele zakelijke context; gebruik laventecare_company voor klantdossiers en laventecare_* wanneer de notitie over het bedrijf, een lead, opdracht of project gaat."
 					},
 					"businessContextId": {
 						"type": "string",
-						"description": "Optioneel lead- of project-id als bekend."
+						"description": "Optioneel klant-, lead-, opdracht- of project-id als bekend."
 					},
 					"businessContextTitle": {
 						"type": "string",
@@ -668,7 +668,7 @@ var AllTools = []ToolDefinition{
 					"deadline": {"type": "string", "description": "ISO datum/tijd, yyyy-mm-dd, dd-mm-yyyy of leeg om te wissen."},
 					"triage_flag": {"type": "boolean"},
 					"is_completed": {"type": "boolean"},
-					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
+					"businessContextType": {"type": "string", "enum": ["laventecare", "laventecare_company", "laventecare_lead", "laventecare_workstream", "laventecare_project"]},
 					"businessContextId": {"type": "string"},
 					"businessContextTitle": {"type": "string"}
 				},
@@ -1154,6 +1154,7 @@ var AllTools = []ToolDefinition{
 					"status": {"type": "string"},
 					"prioriteit": {"type": "string"},
 					"company_id": {"type": "string"},
+					"project_id": {"type": "string"},
 					"klant_naam": {"type": "string"},
 					"doel": {"type": "string"},
 					"scope": {"type": "string"},
@@ -1179,6 +1180,7 @@ var AllTools = []ToolDefinition{
 				"type": "object",
 				"properties": {
 					"workstream_id": {"type": "string"},
+					"project_id": {"type": "string", "description": "Bestaand project UUID. Gebruik dit om de opdracht onder een bestaand project te hangen in plaats van een nieuw project te maken."},
 					"naam": {"type": "string"},
 					"fase": {"type": "string"},
 					"status": {"type": "string"},

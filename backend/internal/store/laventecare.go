@@ -447,6 +447,27 @@ func (s *LaventeCareStore) ListProjects(ctx context.Context, userID string, limi
 	return pgx.CollectRows(rows, scanProject)
 }
 
+func (s *LaventeCareStore) GetProject(ctx context.Context, userID string, id uuid.UUID) (*model.LCProject, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, company_id, lead_id, naam, fase, status,
+		        waarde_indicatie, start_datum, deadline, samenvatting,
+		        created_at, updated_at
+		 FROM lc_projects WHERE user_id = $1 AND id = $2`,
+		userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	projects, err := pgx.CollectRows(rows, scanProject)
+	if err != nil {
+		return nil, err
+	}
+	if len(projects) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &projects[0], nil
+}
+
 func (s *LaventeCareStore) CreateProject(ctx context.Context, userID string, p model.LCProject) (*model.LCProject, error) {
 	p.ID = uuid.New()
 	p.UserID = userID
@@ -551,6 +572,18 @@ func (s *LaventeCareStore) ListWorkstreams(ctx context.Context, userID string, l
 func (s *LaventeCareStore) CreateWorkstream(ctx context.Context, userID string, input model.LCWorkstreamCreate) (*model.LCWorkstream, error) {
 	id := uuid.New()
 	now := time.Now().UTC()
+	if input.ProjectID != nil {
+		project, err := s.GetProject(ctx, userID, *input.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if input.CompanyID != nil && project.CompanyID != nil && *input.CompanyID != *project.CompanyID {
+			return nil, fmt.Errorf("opdracht en project horen niet bij dezelfde klant")
+		}
+		if input.CompanyID == nil {
+			input.CompanyID = project.CompanyID
+		}
+	}
 	companyID, companyName, err := s.ResolveCompanyReference(ctx, userID, input.CompanyID, input.KlantNaam, nil)
 	if err != nil {
 		return nil, err
@@ -627,6 +660,18 @@ func (s *LaventeCareStore) CreateWorkstream(ctx context.Context, userID string, 
 
 func (s *LaventeCareStore) UpdateWorkstream(ctx context.Context, userID string, id uuid.UUID, input model.LCWorkstreamUpdate) error {
 	now := time.Now().UTC()
+	if input.ProjectID != nil {
+		project, err := s.GetProject(ctx, userID, *input.ProjectID)
+		if err != nil {
+			return err
+		}
+		if input.CompanyID != nil && project.CompanyID != nil && *input.CompanyID != *project.CompanyID {
+			return fmt.Errorf("opdracht en project horen niet bij dezelfde klant")
+		}
+		if input.CompanyID == nil {
+			input.CompanyID = project.CompanyID
+		}
+	}
 	stackTags := cleanTags(input.StackTags)
 	tags := cleanTags(input.Tags)
 	var stackTagsParam any
@@ -641,28 +686,29 @@ func (s *LaventeCareStore) UpdateWorkstream(ctx context.Context, userID string, 
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_workstreams SET
 			company_id = COALESCE($3, company_id),
-			type = COALESCE($4, type),
-			status = COALESCE($5, status),
-			prioriteit = COALESCE($6, prioriteit),
-			klant_naam = COALESCE($7, klant_naam),
-			doel = COALESCE($8, doel),
-			scope = COALESCE($9, scope),
-			deliverable = COALESCE($10, deliverable),
-			bevindingen = COALESCE($11, bevindingen),
-			volgende_stap = COALESCE($12, volgende_stap),
-			deadline = COALESCE($13, deadline),
-			geschatte_minuten = COALESCE($14, geschatte_minuten),
-			waarde_indicatie = COALESCE($15, waarde_indicatie),
-			stack_tags = COALESCE($16, stack_tags),
-			tags = COALESCE($17, tags),
+			project_id = COALESCE($4, project_id),
+			type = COALESCE($5, type),
+			status = COALESCE($6, status),
+			prioriteit = COALESCE($7, prioriteit),
+			klant_naam = COALESCE($8, klant_naam),
+			doel = COALESCE($9, doel),
+			scope = COALESCE($10, scope),
+			deliverable = COALESCE($11, deliverable),
+			bevindingen = COALESCE($12, bevindingen),
+			volgende_stap = COALESCE($13, volgende_stap),
+			deadline = COALESCE($14, deadline),
+			geschatte_minuten = COALESCE($15, geschatte_minuten),
+			waarde_indicatie = COALESCE($16, waarde_indicatie),
+			stack_tags = COALESCE($17, stack_tags),
+			tags = COALESCE($18, tags),
 			completed_at = CASE
-				WHEN $5 IN ('afgerond','done','gesloten','gearchiveerd','omgezet_project') THEN COALESCE(completed_at, $18)
-				WHEN $5 IS NOT NULL THEN NULL
+				WHEN $6 IN ('afgerond','done','gesloten','gearchiveerd','omgezet_project') THEN COALESCE(completed_at, $19)
+				WHEN $6 IS NOT NULL THEN NULL
 				ELSE completed_at
 			END,
-			updated_at = $18
+			updated_at = $19
 		 WHERE id = $1 AND user_id = $2`,
-		id, userID, input.CompanyID, input.Type, input.Status, input.Prioriteit, input.KlantNaam,
+		id, userID, input.CompanyID, input.ProjectID, input.Type, input.Status, input.Prioriteit, input.KlantNaam,
 		input.Doel, input.Scope, input.Deliverable, input.Bevindingen,
 		input.VolgendeStap, input.Deadline, input.GeschatteMinuten,
 		input.WaardeIndicatie, stackTagsParam, tagsParam, now)
@@ -695,6 +741,25 @@ func (s *LaventeCareStore) ConvertWorkstreamToProject(ctx context.Context, userI
 		return nil, pgx.ErrNoRows
 	}
 	workstream := workstreams[0]
+
+	targetProjectID := input.ProjectID
+	if targetProjectID == nil {
+		targetProjectID = workstream.ProjectID
+	}
+	if targetProjectID != nil {
+		project, err := s.GetProject(ctx, userID, *targetProjectID)
+		if err != nil {
+			return nil, err
+		}
+		done := "omgezet_project"
+		if err := s.UpdateWorkstream(ctx, userID, input.WorkstreamID, model.LCWorkstreamUpdate{
+			ProjectID: &project.ID,
+			Status:    &done,
+		}); err != nil {
+			return nil, err
+		}
+		return project, nil
+	}
 
 	fase := "intake"
 	if input.Fase != nil {
@@ -731,7 +796,10 @@ func (s *LaventeCareStore) ConvertWorkstreamToProject(ctx context.Context, userI
 		return nil, err
 	}
 	done := "omgezet_project"
-	if err := s.UpdateWorkstream(ctx, userID, input.WorkstreamID, model.LCWorkstreamUpdate{Status: &done}); err != nil {
+	if err := s.UpdateWorkstream(ctx, userID, input.WorkstreamID, model.LCWorkstreamUpdate{
+		ProjectID: &project.ID,
+		Status:    &done,
+	}); err != nil {
 		return nil, err
 	}
 	return project, nil

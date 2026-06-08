@@ -1777,6 +1777,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if title == "" {
 			title = "Nieuwe notitie"
 		}
+		businessContextType, businessContextID, businessContextTitle := e.inferLaventeCareBusinessContext(
+			ctx,
+			args.BusinessContextType,
+			args.BusinessContextID,
+			args.BusinessContextTitle,
+			title,
+			args.Inhoud,
+			strings.Join(args.Tags, " "),
+		)
 		n, err := e.noteStore.Create(ctx, e.userID, model.Note{
 			Titel:                &title,
 			Inhoud:               args.Inhoud,
@@ -1785,9 +1794,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Symbol:               strPtr(args.Symbol),
 			Deadline:             deadline,
 			TriageFlag:           args.TriageFlag,
-			BusinessContextType:  optionalStringPtr(args.BusinessContextType),
-			BusinessContextID:    optionalStringPtr(args.BusinessContextID),
-			BusinessContextTitle: optionalStringPtr(args.BusinessContextTitle),
+			BusinessContextType:  optionalStringPtr(businessContextType),
+			BusinessContextID:    optionalStringPtr(businessContextID),
+			BusinessContextTitle: optionalStringPtr(businessContextTitle),
 		})
 		if err != nil {
 			return e.jsonResponse(nil, err)
@@ -1843,6 +1852,10 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id"))
 		}
+		currentNote, err := e.noteStore.GetForUser(ctx, e.userID, id)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
 		fields := map[string]any{}
 		if args.Titel != nil {
 			fields["titel"] = strings.TrimSpace(*args.Titel)
@@ -1878,14 +1891,34 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if args.TriageFlag != nil {
 			fields["triage_flag"] = *args.TriageFlag
 		}
-		if args.BusinessContextType != nil {
-			fields["business_context_type"] = optionalStringPtr(*args.BusinessContextType)
-		}
-		if args.BusinessContextID != nil {
-			fields["business_context_id"] = optionalStringPtr(*args.BusinessContextID)
-		}
-		if args.BusinessContextTitle != nil {
-			fields["business_context_title"] = optionalStringPtr(*args.BusinessContextTitle)
+		contextTouched := args.BusinessContextType != nil || args.BusinessContextID != nil || args.BusinessContextTitle != nil
+		contextCleared := contextTouched &&
+			optionalPtrValue(args.BusinessContextType) == "" &&
+			optionalPtrValue(args.BusinessContextID) == "" &&
+			optionalPtrValue(args.BusinessContextTitle) == ""
+		if contextCleared {
+			fields["business_context_type"] = nil
+			fields["business_context_id"] = nil
+			fields["business_context_title"] = nil
+		} else if contextTouched || args.Titel != nil || args.Inhoud != nil || args.Tags != nil {
+			requestedType := firstNonEmpty(optionalPtrValue(args.BusinessContextType), optionalPtrValue(currentNote.BusinessContextType))
+			requestedID := firstNonEmpty(optionalPtrValue(args.BusinessContextID), optionalPtrValue(currentNote.BusinessContextID))
+			requestedTitle := firstNonEmpty(optionalPtrValue(args.BusinessContextTitle), optionalPtrValue(currentNote.BusinessContextTitle))
+			sourceTitle := firstNonEmpty(optionalPtrValue(args.Titel), optionalPtrValue(currentNote.Titel))
+			sourceContent := currentNote.Inhoud
+			if args.Inhoud != nil {
+				sourceContent = *args.Inhoud
+			}
+			sourceTags := currentNote.Tags
+			if args.Tags != nil {
+				sourceTags = args.Tags
+			}
+			nextType, nextID, nextTitle := e.inferLaventeCareBusinessContext(ctx, requestedType, requestedID, requestedTitle, sourceTitle, sourceContent, strings.Join(sourceTags, " "))
+			if nextType != "" || contextTouched {
+				fields["business_context_type"] = optionalStringPtr(nextType)
+				fields["business_context_id"] = optionalStringPtr(nextID)
+				fields["business_context_title"] = optionalStringPtr(nextTitle)
+			}
 		}
 		if args.IsCompleted != nil {
 			fields["is_completed"] = *args.IsCompleted
@@ -2092,6 +2125,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if args.AllDay != nil {
 			allDay = *args.AllDay
 		}
+		businessContextType, businessContextID, businessContextTitle := e.inferLaventeCareBusinessContext(
+			ctx,
+			args.BusinessContextType,
+			args.BusinessContextID,
+			args.BusinessContextTitle,
+			title,
+			args.Beschrijving,
+			args.Locatie,
+		)
 		eventID := "ai-" + uuid.NewString()
 		event := model.PersonalEvent{
 			UserID:               e.userID,
@@ -2105,9 +2147,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Locatie:              optionalStringPtr(args.Locatie),
 			Beschrijving:         optionalStringPtr(args.Beschrijving),
 			Symbol:               optionalStringPtr(args.Symbol),
-			BusinessContextType:  optionalStringPtr(args.BusinessContextType),
-			BusinessContextID:    optionalStringPtr(args.BusinessContextID),
-			BusinessContextTitle: optionalStringPtr(args.BusinessContextTitle),
+			BusinessContextType:  optionalStringPtr(businessContextType),
+			BusinessContextID:    optionalStringPtr(businessContextID),
+			BusinessContextTitle: optionalStringPtr(businessContextTitle),
 			Status:               store.PersonalEventStatusPendingCreate,
 			Kalender:             "AI",
 		}
@@ -2203,6 +2245,21 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		if strings.TrimSpace(args.BusinessContextTitle) != "" {
 			event.BusinessContextTitle = optionalStringPtr(args.BusinessContextTitle)
+		}
+		businessContextType, businessContextID, businessContextTitle := e.inferLaventeCareBusinessContext(
+			ctx,
+			optionalPtrValue(event.BusinessContextType),
+			optionalPtrValue(event.BusinessContextID),
+			optionalPtrValue(event.BusinessContextTitle),
+			event.Titel,
+			optionalPtrValue(event.Beschrijving),
+			optionalPtrValue(event.Locatie),
+			args.BusinessContextTitle,
+		)
+		if strings.TrimSpace(businessContextType) != "" {
+			event.BusinessContextType = optionalStringPtr(businessContextType)
+			event.BusinessContextID = optionalStringPtr(businessContextID)
+			event.BusinessContextTitle = optionalStringPtr(businessContextTitle)
 		}
 		event.Status = store.PersonalEventStatusPendingUpdate
 		if err := e.personalEvStore.Upsert(ctx, event); err != nil {
@@ -2919,6 +2976,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		var args struct {
 			ID               string   `json:"id"`
 			CompanyID        string   `json:"company_id"`
+			ProjectID        string   `json:"project_id"`
 			Type             *string  `json:"type"`
 			Status           *string  `json:"status"`
 			Prioriteit       *string  `json:"prioriteit"`
@@ -2945,8 +3003,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
 		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+		}
 		if err := e.laventeCareStore.UpdateWorkstream(ctx, e.userID, id, model.LCWorkstreamUpdate{
 			CompanyID:        companyID,
+			ProjectID:        projectID,
 			Type:             args.Type,
 			Status:           args.Status,
 			Prioriteit:       args.Prioriteit,
@@ -2969,6 +3032,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	case "laventecareOpdrachtNaarProject":
 		var args struct {
 			WorkstreamID string  `json:"workstream_id"`
+			ProjectID    string  `json:"project_id"`
 			Naam         string  `json:"naam"`
 			Fase         *string `json:"fase"`
 			Status       *string `json:"status"`
@@ -2981,8 +3045,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		projectID, err := parseOptionalUUID(args.ProjectID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+		}
 		project, err := e.laventeCareStore.ConvertWorkstreamToProject(ctx, e.userID, model.LCConvertWorkstreamToProject{
 			WorkstreamID: workstreamID,
+			ProjectID:    projectID,
 			Naam:         args.Naam,
 			Fase:         args.Fase,
 			Status:       args.Status,

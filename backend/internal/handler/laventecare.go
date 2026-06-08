@@ -222,7 +222,7 @@ Toon: %s
 Context JSON:
 %s
 
-Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
+Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, proposal.scope, proposal.current_state, proposal.value, proposal.ai, proposal.security, proposal.costs, proposal.next_step, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
 		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
 
 	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
@@ -1894,6 +1894,7 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		mailAIAddVariable(variables, "project.status", mailAIMapString(contextBundle.Project, "status"))
 		mailAIAddVariable(variables, "project.update", mailAIMapString(contextBundle.Project, "samenvatting"))
 		mailAIAddVariable(variables, "pilot.scope", mailAIMapString(contextBundle.Project, "samenvatting"))
+		mailAIAddVariable(variables, "proposal.scope", mailAIMapString(contextBundle.Project, "samenvatting"))
 		mailAIAddVariable(variables, "project.risk", "Geen expliciete risico's gevonden in de gekoppelde context.")
 	}
 	if contextBundle.Workstream != nil {
@@ -1903,6 +1904,13 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 			mailAIMapString(contextBundle.Workstream, "scope"),
 			mailAIMapString(contextBundle.Workstream, "deliverable"),
 		}, " "))
+		mailAIAddVariable(variables, "proposal.scope", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Workstream, "doel"),
+			mailAIMapString(contextBundle.Workstream, "scope"),
+			mailAIMapString(contextBundle.Workstream, "deliverable"),
+		}, " "))
+		mailAIAddVariable(variables, "proposal.current_state", mailAIMapString(contextBundle.Workstream, "bevindingen"))
+		mailAIAddVariable(variables, "proposal.next_step", mailAIMapString(contextBundle.Workstream, "volgende_stap"))
 		mailAIAddVariable(variables, "project.update", mailAIJoinNonEmpty([]string{
 			mailAIMapString(contextBundle.Workstream, "bevindingen"),
 			mailAIMapString(contextBundle.Workstream, "volgende_stap"),
@@ -1942,6 +1950,27 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 	}
 	if variables["delivery.done"] == "" {
 		mailAIAddVariable(variables, "delivery.done", mailAIItemsLine(contextBundle.Dossier, 2))
+	}
+	if variables["proposal.current_state"] == "" {
+		mailAIAddVariable(variables, "proposal.current_state", "Er is een werkende basis, maar productieafspraken, beveiliging, AVG, onderhoud en fasering moeten nog expliciet worden vastgelegd.")
+	}
+	if variables["proposal.scope"] == "" {
+		mailAIAddVariable(variables, "proposal.scope", "een afgebakend eerste werkpakket met demo, kandidaatbeheer, AI-score, import/export en overdracht")
+	}
+	if variables["proposal.value"] == "" {
+		mailAIAddVariable(variables, "proposal.value", "minder handmatig werk, sneller kandidaten verwerken, beter overzicht en beter onderbouwde matches")
+	}
+	if variables["proposal.ai"] == "" {
+		mailAIAddVariable(variables, "proposal.ai", "de AI-score is adviserend, uitlegbaar en blijft onder menselijke controle")
+	}
+	if variables["proposal.security"] == "" {
+		mailAIAddVariable(variables, "proposal.security", "broncode, export, eigendom en AVG-afspraken worden expliciet vastgelegd voordat productie live gaat")
+	}
+	if variables["proposal.costs"] == "" {
+		mailAIAddVariable(variables, "proposal.costs", "projectkosten en maandelijkse kosten worden apart gemaakt, inclusief hosting, AI, opslag en onderhoud")
+	}
+	if variables["proposal.next_step"] == "" {
+		mailAIAddVariable(variables, "proposal.next_step", "demo tonen, vragen afstemmen en daarna scope/offerte definitief maken")
 	}
 	if variables["pilot.scope"] == "" {
 		mailAIAddVariable(variables, "pilot.scope", "de afgesproken testscope")
