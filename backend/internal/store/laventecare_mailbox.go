@@ -115,6 +115,47 @@ func (s *LaventeCareStore) BuildMailAIContext(ctx context.Context, userID string
 		companyID = invoiceCompanyID
 		company, _ = s.GetCompany(ctx, userID, *companyID)
 	}
+	if invoice != nil {
+		if input.ProjectID == nil {
+			input.ProjectID = uuidPtrFromMapValue(invoice, "project_id")
+		}
+		if input.WorkstreamID == nil {
+			input.WorkstreamID = uuidPtrFromMapValue(invoice, "workstream_id")
+		}
+	}
+	if project == nil && input.ProjectID != nil {
+		project, projectCompanyID, err = s.mailAIProject(ctx, userID, input.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil && projectCompanyID != nil {
+			companyID = projectCompanyID
+			company, _ = s.GetCompany(ctx, userID, *companyID)
+		}
+	}
+	if workstream == nil && input.WorkstreamID != nil {
+		workstream, workstreamCompanyID, workstreamProjectID, err = s.mailAIWorkstream(ctx, userID, input.WorkstreamID)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil && workstreamCompanyID != nil {
+			companyID = workstreamCompanyID
+			company, _ = s.GetCompany(ctx, userID, *companyID)
+		}
+		if input.ProjectID == nil && workstreamProjectID != nil {
+			input.ProjectID = workstreamProjectID
+		}
+	}
+	if project == nil && input.ProjectID != nil {
+		project, projectCompanyID, err = s.mailAIProject(ctx, userID, input.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil && projectCompanyID != nil {
+			companyID = projectCompanyID
+			company, _ = s.GetCompany(ctx, userID, *companyID)
+		}
+	}
 
 	ids, keywords := mailAIContextKeys(company, contact, project, workstream)
 	notes, err := s.mailAINotes(ctx, userID, ids, keywords)
@@ -1501,6 +1542,18 @@ func uuidPtrString(id *uuid.UUID) *string {
 	}
 	value := id.String()
 	return &value
+}
+
+func uuidPtrFromMapValue(values map[string]any, key string) *uuid.UUID {
+	value := stringMapValue(values, key)
+	if value == "" {
+		return nil
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return nil
+	}
+	return &id
 }
 
 func stringMapValue(values map[string]any, key string) string {
