@@ -26,6 +26,33 @@ type Config struct {
 	DeviceDescription string
 }
 
+type PaymentRequestInput struct {
+	UserID            int
+	MonetaryAccountID int
+	AmountCents       int
+	Currency          string
+	Description       string
+	MerchantReference string
+	RedirectURL       string
+}
+
+type PaymentRequest struct {
+	ID                int     `json:"id"`
+	Status            string  `json:"status,omitempty"`
+	AmountValue       string  `json:"amountValue,omitempty"`
+	Currency          string  `json:"currency,omitempty"`
+	Description       string  `json:"description,omitempty"`
+	MerchantReference *string `json:"merchantReference,omitempty"`
+	BunqMeShareURL    *string `json:"bunqmeShareUrl,omitempty"`
+}
+
+type sessionContext struct {
+	client  *Client
+	token   string
+	userID  int
+	userTyp string
+}
+
 type Introspection struct {
 	Environment      string    `json:"environment"`
 	UserID           int       `json:"userId"`
@@ -53,6 +80,110 @@ type Client struct {
 }
 
 func Discover(ctx context.Context, cfg Config) (*Introspection, error) {
+	env := normalizeEnvironment(cfg.Environment)
+	session, err := authenticate(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	accountsEnvelope, err := session.client.do(ctx, http.MethodGet, fmt.Sprintf("/user/%d/monetary-account-bank", session.userID), session.token, nil, false)
+	if err != nil {
+		return nil, fmt.Errorf("monetary-account-bank ophalen: %w", err)
+	}
+	accounts := findAccounts(accountsEnvelope)
+
+	var primary *int
+	for _, account := range accounts {
+		if account.Status == "" || strings.EqualFold(account.Status, "ACTIVE") {
+			id := account.ID
+			primary = &id
+			break
+		}
+	}
+	if primary == nil && len(accounts) > 0 {
+		id := accounts[0].ID
+		primary = &id
+	}
+
+	return &Introspection{
+		Environment:      env,
+		UserID:           session.userID,
+		UserType:         session.userTyp,
+		PrimaryAccountID: primary,
+		Accounts:         accounts,
+	}, nil
+}
+
+func CreatePaymentRequest(ctx context.Context, cfg Config, input PaymentRequestInput) (*PaymentRequest, error) {
+	if input.AmountCents <= 0 {
+		return nil, errors.New("bedrag moet groter zijn dan 0")
+	}
+	if input.MonetaryAccountID <= 0 {
+		return nil, errors.New("BUNQ_MONETARY_ACCOUNT_ID ontbreekt")
+	}
+	session, err := authenticate(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	userID := input.UserID
+	if userID <= 0 {
+		userID = session.userID
+	}
+	if userID <= 0 {
+		return nil, errors.New("BUNQ_USER_ID ontbreekt")
+	}
+
+	currency := strings.ToUpper(strings.TrimSpace(input.Currency))
+	if currency == "" {
+		currency = "EUR"
+	}
+	body := map[string]any{
+		"amount_inquired": map[string]string{
+			"value":    centsString(input.AmountCents),
+			"currency": currency,
+		},
+		"description":        trimMax(input.Description, 9000),
+		"merchant_reference": trimMax(input.MerchantReference, 100),
+		"allow_bunqme":       true,
+	}
+	if redirectURL := strings.TrimSpace(input.RedirectURL); redirectURL != "" {
+		body["redirect_url"] = redirectURL
+	}
+
+	env, err := session.client.do(
+		ctx,
+		http.MethodPost,
+		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry", userID, input.MonetaryAccountID),
+		session.token,
+		body,
+		true,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request-inquiry: %w", err)
+	}
+	request, ok := findPaymentRequest(env)
+	if !ok {
+		return nil, errors.New("request-inquiry ontbreekt in bunq response")
+	}
+	if request.ID > 0 && (request.BunqMeShareURL == nil || request.AmountValue == "" || request.Status == "") {
+		detailEnv, detailErr := session.client.do(
+			ctx,
+			http.MethodGet,
+			fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry/%d", userID, input.MonetaryAccountID, request.ID),
+			session.token,
+			nil,
+			false,
+		)
+		if detailErr == nil {
+			if detail, detailOK := findPaymentRequest(detailEnv); detailOK {
+				request = mergePaymentRequest(request, detail)
+			}
+		}
+	}
+	return request, nil
+}
+
+func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" {
 		return nil, errors.New("BUNQ_API_KEY ontbreekt")
@@ -121,32 +252,7 @@ func Discover(ctx context.Context, cfg Config) (*Introspection, error) {
 		}
 	}
 
-	accountsEnvelope, err := client.do(ctx, http.MethodGet, fmt.Sprintf("/user/%d/monetary-account-bank", userID), sessionToken, nil, false)
-	if err != nil {
-		return nil, fmt.Errorf("monetary-account-bank ophalen: %w", err)
-	}
-	accounts := findAccounts(accountsEnvelope)
-
-	var primary *int
-	for _, account := range accounts {
-		if account.Status == "" || strings.EqualFold(account.Status, "ACTIVE") {
-			id := account.ID
-			primary = &id
-			break
-		}
-	}
-	if primary == nil && len(accounts) > 0 {
-		id := accounts[0].ID
-		primary = &id
-	}
-
-	return &Introspection{
-		Environment:      env,
-		UserID:           userID,
-		UserType:         userType,
-		PrimaryAccountID: primary,
-		Accounts:         accounts,
-	}, nil
+	return &sessionContext{client: client, token: sessionToken, userID: userID, userTyp: userType}, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, body any, signed bool) (*envelope, error) {
@@ -248,6 +354,20 @@ type monetaryAlias struct {
 	Name  string `json:"name"`
 }
 
+type requestInquiry struct {
+	ID                int           `json:"id"`
+	Status            string        `json:"status"`
+	Description       string        `json:"description"`
+	MerchantReference *string       `json:"merchant_reference"`
+	BunqMeShareURL    *string       `json:"bunqme_share_url"`
+	AmountInquired    *amountObject `json:"amount_inquired"`
+}
+
+type amountObject struct {
+	Value    string `json:"value"`
+	Currency string `json:"currency"`
+}
+
 func publicKeyPEM(privateKey *rsa.PrivateKey) (string, error) {
 	der, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
@@ -312,6 +432,73 @@ func findAccounts(env *envelope) []Account {
 	return accounts
 }
 
+func findPaymentRequest(env *envelope) (*PaymentRequest, bool) {
+	for _, item := range env.Response {
+		raw, ok := item["RequestInquiry"]
+		if !ok {
+			continue
+		}
+		var inquiry requestInquiry
+		if err := json.Unmarshal(raw, &inquiry); err != nil || inquiry.ID <= 0 {
+			continue
+		}
+		result := &PaymentRequest{
+			ID:                inquiry.ID,
+			Status:            inquiry.Status,
+			Description:       inquiry.Description,
+			MerchantReference: inquiry.MerchantReference,
+			BunqMeShareURL:    inquiry.BunqMeShareURL,
+		}
+		if inquiry.AmountInquired != nil {
+			result.AmountValue = inquiry.AmountInquired.Value
+			result.Currency = inquiry.AmountInquired.Currency
+		}
+		return result, true
+	}
+	for _, item := range env.Response {
+		raw, ok := item["Id"]
+		if !ok {
+			continue
+		}
+		var id idObject
+		if err := json.Unmarshal(raw, &id); err == nil && id.ID > 0 {
+			return &PaymentRequest{ID: id.ID}, true
+		}
+	}
+	return nil, false
+}
+
+func mergePaymentRequest(base, detail *PaymentRequest) *PaymentRequest {
+	if base == nil {
+		return detail
+	}
+	if detail == nil {
+		return base
+	}
+	if base.ID <= 0 {
+		base.ID = detail.ID
+	}
+	if base.Status == "" {
+		base.Status = detail.Status
+	}
+	if base.AmountValue == "" {
+		base.AmountValue = detail.AmountValue
+	}
+	if base.Currency == "" {
+		base.Currency = detail.Currency
+	}
+	if base.Description == "" {
+		base.Description = detail.Description
+	}
+	if base.MerchantReference == nil {
+		base.MerchantReference = detail.MerchantReference
+	}
+	if base.BunqMeShareURL == nil {
+		base.BunqMeShareURL = detail.BunqMeShareURL
+	}
+	return base
+}
+
 func bunqError(raw []byte, status int) string {
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err == nil && len(env.Error) > 0 {
@@ -333,6 +520,18 @@ func bunqError(raw []byte, status int) string {
 		}
 	}
 	return fmt.Sprintf("bunq HTTP %d", status)
+}
+
+func centsString(cents int) string {
+	return fmt.Sprintf("%d.%02d", cents/100, cents%100)
+}
+
+func trimMax(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return strings.TrimSpace(value[:max])
 }
 
 func maskedIBAN(aliases []monetaryAlias) string {

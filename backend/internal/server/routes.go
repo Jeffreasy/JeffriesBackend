@@ -196,6 +196,7 @@ func registerRoutes(
 				r.With(authMw).Post("/time-entries", lcH.CreateTimeEntry)
 				r.With(authMw).Post("/invoices", lcH.CreateInvoice)
 				r.With(authMw).Patch("/invoices/{id}/status", lcH.UpdateInvoiceStatus)
+				r.With(authMw).Post("/invoices/{id}/payment-request", lcH.CreateInvoicePaymentRequestAction)
 				r.Get("/documents", lcH.ListDocuments)
 				r.Get("/dossier-documents", lcH.ListDossierDocuments)
 				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)

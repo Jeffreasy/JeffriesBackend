@@ -1031,6 +1031,23 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareBetaalverzoekMaken",
+			Description: "Maakt voor een bestaande LaventeCare factuur een bunq betaalverzoek en markeert de factuur als verstuurd. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"invoice_id": {
+						"type": "string",
+						"description": "UUID van de LaventeCare factuur waarvoor een bunq betaalverzoek moet worden gemaakt."
+					}
+				},
+				"required": ["invoice_id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareKlantMaken",
 			Description: "Maakt een LaventeCare klant/company dossier. Deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{

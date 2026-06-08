@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -76,6 +77,26 @@ func (s *PendingStore) ListPending(ctx context.Context, userID string) ([]Pendin
 		actions = append(actions, a)
 	}
 	return actions, nil
+}
+
+// FindPendingByToolArgs returns an existing pending action for the same tool call.
+func (s *PendingStore) FindPendingByToolArgs(ctx context.Context, userID, toolName, argsJSON string) (*PendingAction, error) {
+	var pa PendingAction
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at
+		 FROM ai_pending_actions
+		 WHERE user_id = $1 AND tool_name = $2 AND args_json = $3 AND status = 'pending' AND expires_at > now()
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		userID, toolName, argsJSON,
+	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &pa, nil
 }
 
 // Claim atomically claims a pending action for execution.

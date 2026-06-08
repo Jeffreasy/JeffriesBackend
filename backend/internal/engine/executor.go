@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/bunq"
 	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
@@ -269,6 +271,85 @@ func optionalStringPtr(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func createBunqPaymentRequestForInvoice(ctx context.Context, invoice *model.LCInvoice) (*bunq.PaymentRequest, error) {
+	if invoice == nil {
+		return nil, fmt.Errorf("factuur ontbreekt")
+	}
+	amountCents := invoice.TotalCents - invoice.PaidCents
+	if amountCents <= 0 {
+		return nil, fmt.Errorf("factuur %s heeft geen open bedrag", invoice.InvoiceNumber)
+	}
+	monetaryAccountID, err := requiredEnvInt("BUNQ_MONETARY_ACCOUNT_ID")
+	if err != nil {
+		return nil, err
+	}
+	userID, err := optionalEnvInt("BUNQ_USER_ID")
+	if err != nil {
+		return nil, err
+	}
+	return bunq.CreatePaymentRequest(ctx, bunq.Config{
+		Environment:       envOrDefault("BUNQ_ENVIRONMENT", "sandbox"),
+		APIKey:            strings.TrimSpace(os.Getenv("BUNQ_API_KEY")),
+		DeviceDescription: envOrDefault("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
+	}, bunq.PaymentRequestInput{
+		UserID:            userID,
+		MonetaryAccountID: monetaryAccountID,
+		AmountCents:       amountCents,
+		Currency:          invoice.Currency,
+		Description:       invoicePaymentDescription(invoice, amountCents),
+		MerchantReference: invoice.InvoiceNumber,
+	})
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func requiredEnvInt(key string) (int, error) {
+	value, err := optionalEnvInt(key)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%s ontbreekt", key)
+	}
+	return value, nil
+}
+
+func optionalEnvInt(key string) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s is ongeldig", key)
+	}
+	return value, nil
+}
+
+func invoicePaymentDescription(invoice *model.LCInvoice, amountCents int) string {
+	parts := []string{"LaventeCare", "factuur", strings.TrimSpace(invoice.InvoiceNumber)}
+	if invoice.CompanyName != nil && strings.TrimSpace(*invoice.CompanyName) != "" {
+		parts = append(parts, "voor", strings.TrimSpace(*invoice.CompanyName))
+	}
+	parts = append(parts, fmt.Sprintf("(%s)", euroCents(amountCents)))
+	return strings.Join(parts, " ")
+}
+
+func euroCents(cents int) string {
+	prefix := "EUR "
+	if cents < 0 {
+		prefix = "-EUR "
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d", prefix, cents/100, cents%100)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -2553,6 +2634,66 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"billing":     billing,
 			"instruction": "Gebruik summary als hoofdbron. Offertes, urenregels en facturen zijn interne LaventeCare waarheid. BunqReady betekent alleen dat de API-key aanwezig lijkt; maak geen betaalverzoeken zonder expliciete bevestigingsflow.",
 		}, err)
+
+	case "laventecareBetaalverzoekMaken":
+		var args struct {
+			InvoiceID string `json:"invoice_id"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		invoiceID, err := uuid.Parse(strings.TrimSpace(args.InvoiceID))
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige invoice_id: %w", err))
+		}
+		invoice, err := e.laventeCareStore.GetInvoice(ctx, e.userID, invoiceID)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if invoice.Status == "betaald" || invoice.Status == "geannuleerd" {
+			return e.jsonResponse(nil, fmt.Errorf("factuur %s is %s en kan geen betaalverzoek krijgen", invoice.InvoiceNumber, invoice.Status))
+		}
+		if invoice.TotalCents <= 0 {
+			return e.jsonResponse(nil, fmt.Errorf("factuur %s heeft geen positief bedrag", invoice.InvoiceNumber))
+		}
+		if invoice.ProviderRequestID != nil || invoice.PaymentURL != nil {
+			return e.jsonResponse(map[string]any{
+				"ok":      true,
+				"invoice": invoice,
+				"message": "Factuur heeft al een gekoppeld bunq betaalverzoek.",
+			}, nil)
+		}
+
+		request, err := createBunqPaymentRequestForInvoice(ctx, invoice)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		providerID := strconv.Itoa(request.ID)
+		paymentProvider := "bunq"
+		merchantReference := invoice.InvoiceNumber
+		paymentURL := ""
+		if request.BunqMeShareURL != nil {
+			paymentURL = strings.TrimSpace(*request.BunqMeShareURL)
+		}
+		if request.MerchantReference != nil && strings.TrimSpace(*request.MerchantReference) != "" {
+			merchantReference = strings.TrimSpace(*request.MerchantReference)
+		}
+		if err := e.laventeCareStore.UpdateInvoiceStatus(ctx, e.userID, invoice.ID, model.LCInvoiceStatusUpdate{
+			Status:            "verstuurd",
+			PaymentProvider:   &paymentProvider,
+			ProviderRequestID: &providerID,
+			MerchantReference: &merchantReference,
+			PaymentURL:        optionalStringPtr(paymentURL),
+		}); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		updated, _ := e.laventeCareStore.GetInvoice(ctx, e.userID, invoice.ID)
+		return e.jsonResponse(map[string]any{
+			"ok":             true,
+			"invoice":        updated,
+			"paymentRequest": request,
+			"message":        "Bunq betaalverzoek aangemaakt en factuur gemarkeerd als verstuurd.",
+		}, nil)
 
 	case "laventecareKlantMaken":
 		var args model.LCCompanyCreate

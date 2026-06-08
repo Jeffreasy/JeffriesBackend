@@ -179,6 +179,8 @@ func summarizePendingTool(toolName, argsJSON string) string {
 		return cleanSummary("Notitie archiveren", value("id"))
 	case "bulkArchiveerNotities":
 		return cleanSummary("Meerdere notities archiveren", value("ids"))
+	case "laventecareBetaalverzoekMaken":
+		return cleanSummary("LaventeCare betaalverzoek maken", value("invoice_id"))
 	case "laventecareKlantMaken":
 		return cleanSummary("LaventeCare klant maken", value("naam"))
 	case "laventecareKlantBijwerken":

@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -13,13 +16,14 @@ import (
 
 // LaventeCareHandler handles LaventeCare CRM endpoints.
 type LaventeCareHandler struct {
-	store  *store.LaventeCareStore
-	userID string
+	store   *store.LaventeCareStore
+	pending *store.PendingStore
+	userID  string
 }
 
 // NewLaventeCareHandler creates a new LaventeCareHandler.
-func NewLaventeCareHandler(s *store.LaventeCareStore, userID string) *LaventeCareHandler {
-	return &LaventeCareHandler{store: s, userID: userID}
+func NewLaventeCareHandler(s *store.LaventeCareStore, pending *store.PendingStore, userID string) *LaventeCareHandler {
+	return &LaventeCareHandler{store: s, pending: pending, userID: userID}
 }
 
 func parseOptionalUUIDQuery(r *http.Request, key string) (*uuid.UUID, error) {
@@ -289,6 +293,115 @@ func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// CreateInvoicePaymentRequestAction queues a confirmed bunq payment request for an invoice.
+// @Summary Queue Invoice Payment Request
+// @Description Creates a pending confirmation action that creates a bunq RequestInquiry after approval
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Invoice ID (UUID)"
+// @Success 202 {object} map[string]interface{} "pending action"
+// @Failure 400 {string} string "Invalid invoice"
+// @Failure 404 {string} string "Invoice not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/invoices/{id}/payment-request [post]
+func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		return
+	}
+	invoice, err := h.store.GetInvoice(r.Context(), h.userID, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Factuur niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if invoice.Status == "betaald" || invoice.Status == "geannuleerd" {
+		Error(w, http.StatusBadRequest, "Voor betaalde of geannuleerde facturen kan geen betaalverzoek worden gemaakt")
+		return
+	}
+	if invoice.TotalCents <= 0 {
+		Error(w, http.StatusBadRequest, "Factuurbedrag moet groter zijn dan 0")
+		return
+	}
+	if invoice.ProviderRequestID != nil || invoice.PaymentURL != nil {
+		JSON(w, http.StatusOK, map[string]any{
+			"confirmationRequired": false,
+			"alreadyCreated":       true,
+			"invoice":              invoice,
+			"message":              "Factuur heeft al een gekoppeld betaalverzoek.",
+		})
+		return
+	}
+	if h.pending == nil {
+		Error(w, http.StatusInternalServerError, "Bevestigingswachtrij niet beschikbaar")
+		return
+	}
+
+	args, err := json.Marshal(map[string]string{"invoice_id": id.String()})
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	toolName := "laventecareBetaalverzoekMaken"
+	summary := cleanPendingSummary(fmt.Sprintf(
+		"LaventeCare betaalverzoek maken: %s - %s - %s",
+		invoice.InvoiceNumber,
+		formatCents(invoice.TotalCents),
+		derefString(invoice.CompanyName, "geen klant"),
+	))
+	existing, err := h.pending.FindPendingByToolArgs(r.Context(), h.userID, toolName, string(args))
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing != nil {
+		JSON(w, http.StatusAccepted, map[string]any{
+			"confirmationRequired": true,
+			"pendingActionId":      existing.ID,
+			"code":                 existing.Code,
+			"toolName":             existing.ToolName,
+			"summary":              existing.Summary,
+			"expiresAt":            existing.ExpiresAt,
+			"message":              fmt.Sprintf("Betaalverzoek stond al klaar. Bevestig via Settings of Telegram met /approve %s.", existing.Code),
+		})
+		return
+	}
+	action, err := h.pending.Create(r.Context(), h.userID, "laventecare", toolName, string(args), summary)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusAccepted, map[string]any{
+		"confirmationRequired": true,
+		"pendingActionId":      action.ID,
+		"code":                 action.Code,
+		"toolName":             action.ToolName,
+		"summary":              action.Summary,
+		"expiresAt":            action.ExpiresAt,
+		"message":              fmt.Sprintf("Betaalverzoek staat klaar. Bevestig via Settings of Telegram met /approve %s.", action.Code),
+	})
+}
+
+func derefString(value *string, fallback string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(*value)
+}
+
+func cleanPendingSummary(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func formatCents(cents int) string {
+	return fmt.Sprintf("EUR %d.%02d", cents/100, cents%100)
 }
 
 // ListCompanies returns LaventeCare companies/customer dossiers.
