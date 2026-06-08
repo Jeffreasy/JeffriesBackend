@@ -701,7 +701,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"pilot.scope":            "de afgesproken testscope",
 		"pilot.criteria":         "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
 		"pilot.feedback_moment":  "na de eerste testperiode",
-		"pilot.access_summary":   "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal",
+		"pilot.access_summary":   "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
 		"meeting.topic":          "afstemming",
 		"meeting.summary":        "De besproken punten zijn vastgelegd in het klantdossier.",
 		"meeting.actions":        "de vervolgstap wordt opgepakt",
