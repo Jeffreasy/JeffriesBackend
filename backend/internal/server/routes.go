@@ -184,6 +184,10 @@ func registerRoutes(
 			r.Route("/laventecare", func(r chi.Router) {
 				r.Get("/cockpit", lcH.Cockpit)
 				r.Get("/billing", lcH.Billing)
+				r.Get("/mailbox", lcH.Mailbox)
+				r.With(authMw).Post("/mailbox/templates", lcH.CreateMailTemplate)
+				r.With(authMw).Patch("/mailbox/templates/{id}", lcH.UpdateMailTemplate)
+				r.With(authMw).Post("/mailbox/send-template", lcH.SendTemplatedMail)
 				r.Get("/companies", lcH.ListCompanies)
 				r.With(authMw).Post("/companies", lcH.CreateCompany)
 				r.With(authMw).Patch("/companies/{id}", lcH.UpdateCompany)

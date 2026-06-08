@@ -2078,6 +2078,9 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	_ = s.SeedDefaultMailTemplates(ctx, userID)
+	mailTemplates, _ := s.ListMailTemplates(ctx, userID, 80)
+	mailboxSummary, _ := s.GetMailboxSummary(ctx, userID, mailTemplates, laventeCareMailConfiguredFromEnv(), strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")))
 
 	activeLeads := filterOpen(leads, func(l model.LCLead) string { return l.Status })
 	activeWorkstreams := filterOpen(workstreams, func(w model.LCWorkstream) string { return w.Status })
@@ -2110,6 +2113,9 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 			ActionItems:       len(actions),
 			DossierDocuments:  dossierDocumentCount,
 			ActivityEvents:    activityEventCount,
+			MailTemplates:     mailboxSummary.ActiveTemplates,
+			MailOutbox:        mailboxSummary.Outbox,
+			MailConfigured:    mailboxSummary.Configured,
 			DocumentsSeeded:   len(documents) > 0,
 			BusinessSignals:   len(signals),
 			FollowUps:         len(followUps),
@@ -2126,6 +2132,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 		DocumentCatalog:   documents,
 		DossierDocuments:  dossierDocuments,
 		ActivityEvents:    activityEvents,
+		Mailbox:           &mailboxSummary,
 		BusinessSignals:   signals,
 		FollowUps:         followUps,
 	}, nil

@@ -368,6 +368,109 @@ type LCBilling struct {
 	InvoiceLines []LCInvoiceLine  `json:"invoiceLines"`
 }
 
+type LCMailbox struct {
+	Summary   LCMailboxSummary   `json:"summary"`
+	Templates []LCMailTemplate   `json:"templates"`
+	Outbox    []LCMailOutboxItem `json:"outbox"`
+}
+
+type LCMailboxSummary struct {
+	Templates       int    `json:"templates"`
+	ActiveTemplates int    `json:"activeTemplates"`
+	Outbox          int    `json:"outbox"`
+	Drafts          int    `json:"drafts"`
+	Sent            int    `json:"sent"`
+	Failed          int    `json:"failed"`
+	Provider        string `json:"provider"`
+	SenderEmail     string `json:"senderEmail"`
+	Configured      bool   `json:"configured"`
+	NextStep        string `json:"nextStep"`
+}
+
+type LCMailTemplate struct {
+	ID              uuid.UUID `json:"id" db:"id"`
+	UserID          string    `json:"user_id" db:"user_id"`
+	TemplateKey     string    `json:"template_key" db:"template_key"`
+	Name            string    `json:"name" db:"name"`
+	Category        string    `json:"category" db:"category"`
+	Status          string    `json:"status" db:"status"`
+	SubjectTemplate string    `json:"subject_template" db:"subject_template"`
+	BodyHTML        string    `json:"body_html" db:"body_html"`
+	BodyText        *string   `json:"body_text" db:"body_text"`
+	DefaultCC       []string  `json:"default_cc" db:"default_cc"`
+	DefaultBCC      []string  `json:"default_bcc" db:"default_bcc"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+}
+
+type LCMailTemplateCreate struct {
+	TemplateKey     string   `json:"template_key"`
+	Name            string   `json:"name"`
+	Category        string   `json:"category"`
+	Status          string   `json:"status"`
+	SubjectTemplate string   `json:"subject_template"`
+	BodyHTML        string   `json:"body_html"`
+	BodyText        *string  `json:"body_text"`
+	DefaultCC       []string `json:"default_cc"`
+	DefaultBCC      []string `json:"default_bcc"`
+}
+
+type LCMailTemplateUpdate struct {
+	Name            *string  `json:"name,omitempty"`
+	Category        *string  `json:"category,omitempty"`
+	Status          *string  `json:"status,omitempty"`
+	SubjectTemplate *string  `json:"subject_template,omitempty"`
+	BodyHTML        *string  `json:"body_html,omitempty"`
+	BodyText        *string  `json:"body_text,omitempty"`
+	DefaultCC       []string `json:"default_cc,omitempty"`
+	DefaultBCC      []string `json:"default_bcc,omitempty"`
+}
+
+type LCMailOutboxItem struct {
+	ID                uuid.UUID  `json:"id" db:"id"`
+	UserID            string     `json:"user_id" db:"user_id"`
+	TemplateID        *uuid.UUID `json:"template_id" db:"template_id"`
+	CompanyID         *uuid.UUID `json:"company_id" db:"company_id"`
+	ContactID         *uuid.UUID `json:"contact_id" db:"contact_id"`
+	ProjectID         *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID      *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	QuoteID           *uuid.UUID `json:"quote_id" db:"quote_id"`
+	InvoiceID         *uuid.UUID `json:"invoice_id" db:"invoice_id"`
+	ToEmail           string     `json:"to_email" db:"to_email"`
+	ToName            *string    `json:"to_name" db:"to_name"`
+	CC                []string   `json:"cc" db:"cc"`
+	BCC               []string   `json:"bcc" db:"bcc"`
+	Subject           string     `json:"subject" db:"subject"`
+	BodyHTML          string     `json:"body_html" db:"body_html"`
+	BodyText          *string    `json:"body_text" db:"body_text"`
+	Status            string     `json:"status" db:"status"`
+	Provider          string     `json:"provider" db:"provider"`
+	ProviderMessageID *string    `json:"provider_message_id" db:"provider_message_id"`
+	ErrorMessage      *string    `json:"error_message" db:"error_message"`
+	SentAt            *time.Time `json:"sent_at" db:"sent_at"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
+	TemplateName      *string    `json:"template_name,omitempty"`
+	CompanyName       *string    `json:"company_name,omitempty"`
+	ContactName       *string    `json:"contact_name,omitempty"`
+}
+
+type LCMailSendRequest struct {
+	TemplateID   uuid.UUID         `json:"template_id"`
+	CompanyID    *uuid.UUID        `json:"company_id"`
+	ContactID    *uuid.UUID        `json:"contact_id"`
+	ProjectID    *uuid.UUID        `json:"project_id"`
+	WorkstreamID *uuid.UUID        `json:"workstream_id"`
+	QuoteID      *uuid.UUID        `json:"quote_id"`
+	InvoiceID    *uuid.UUID        `json:"invoice_id"`
+	ToEmail      *string           `json:"to_email"`
+	ToName       *string           `json:"to_name"`
+	CC           []string          `json:"cc"`
+	BCC          []string          `json:"bcc"`
+	Variables    map[string]string `json:"variables"`
+	Send         bool              `json:"send"`
+}
+
 type LCBillingSummary struct {
 	Quotes              int    `json:"quotes"`
 	OpenQuotes          int    `json:"openQuotes"`
@@ -615,6 +718,7 @@ type LCCockpit struct {
 	DocumentCatalog   []LCDocument        `json:"documentCatalog"`
 	DossierDocuments  []LCDossierDocument `json:"dossierDocuments"`
 	ActivityEvents    []LCActivityEvent   `json:"activityEvents"`
+	Mailbox           *LCMailboxSummary   `json:"mailbox,omitempty"`
 	BusinessSignals   []LCBusinessSignal  `json:"businessSignals"`
 	FollowUps         []LCFollowUpSignal  `json:"followUps"`
 }
@@ -635,6 +739,9 @@ type LCCockpitSummary struct {
 	ActionItems       int  `json:"actionItems"`
 	DossierDocuments  int  `json:"dossierDocuments"`
 	ActivityEvents    int  `json:"activityEvents"`
+	MailTemplates     int  `json:"mailTemplates"`
+	MailOutbox        int  `json:"mailOutbox"`
+	MailConfigured    bool `json:"mailConfigured"`
 	DocumentsSeeded   bool `json:"documentsSeeded"`
 	BusinessSignals   int  `json:"businessSignals"`
 	FollowUps         int  `json:"followUps"`

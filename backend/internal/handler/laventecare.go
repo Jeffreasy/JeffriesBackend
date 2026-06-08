@@ -11,20 +11,30 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/config"
+	"github.com/Jeffreasy/JeffriesBackend/internal/mail"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
 // LaventeCareHandler handles LaventeCare CRM endpoints.
 type LaventeCareHandler struct {
-	store   *store.LaventeCareStore
-	pending *store.PendingStore
-	userID  string
+	store      *store.LaventeCareStore
+	pending    *store.PendingStore
+	userID     string
+	cfg        *config.Config
+	mailSender *mail.Sender
 }
 
 // NewLaventeCareHandler creates a new LaventeCareHandler.
-func NewLaventeCareHandler(s *store.LaventeCareStore, pending *store.PendingStore, userID string) *LaventeCareHandler {
-	return &LaventeCareHandler{store: s, pending: pending, userID: userID}
+func NewLaventeCareHandler(s *store.LaventeCareStore, pending *store.PendingStore, userID string, cfg *config.Config) *LaventeCareHandler {
+	return &LaventeCareHandler{
+		store:      s,
+		pending:    pending,
+		userID:     userID,
+		cfg:        cfg,
+		mailSender: mail.NewSender(cfg),
+	}
 }
 
 func parseOptionalUUIDQuery(r *http.Request, key string) (*uuid.UUID, error) {
@@ -80,6 +90,161 @@ func (h *LaventeCareHandler) Billing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, billing)
+}
+
+// Mailbox returns LaventeCare mail templates and outbound message history.
+// @Summary Get LaventeCare Mailbox
+// @Description Returns templated mail workspace and outbox history
+// @Tags LaventeCare
+// @Produce json
+// @Success 200 {object} model.LCMailbox
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/mailbox [get]
+func (h *LaventeCareHandler) Mailbox(w http.ResponseWriter, r *http.Request) {
+	mailbox, err := h.store.GetMailbox(
+		r.Context(),
+		h.userID,
+		queryInt(r, "limit", 40),
+		h.cfg.LaventeCareMailConfigured(),
+		h.cfg.MicrosoftSenderEmail,
+	)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, mailbox)
+}
+
+func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.Request) {
+	var input model.LCMailTemplateCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.SubjectTemplate == "" || input.BodyHTML == "" {
+		Error(w, http.StatusBadRequest, "subject_template en body_html zijn verplicht")
+		return
+	}
+	template, err := h.store.CreateMailTemplate(r.Context(), h.userID, input)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, template)
+}
+
+func (h *LaventeCareHandler) UpdateMailTemplate(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid template ID")
+		return
+	}
+	var input model.LCMailTemplateUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := h.store.UpdateMailTemplate(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Template niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SendTemplatedMail creates a rendered outbound mail and optionally sends it via Microsoft Graph.
+// @Summary Create or send LaventeCare templated mail
+// @Description Renders a LaventeCare mail template with customer context. If send=true, sends through Microsoft Graph.
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCMailSendRequest true "Mail send request"
+// @Success 201 {object} model.LCMailOutboxItem
+// @Failure 400 {string} string "Invalid request body"
+// @Failure 404 {string} string "Template or related customer object not found"
+// @Failure 503 {string} string "Mail provider not configured"
+// @Router /laventecare/mailbox/send-template [post]
+func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Request) {
+	var input model.LCMailSendRequest
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.TemplateID == uuid.Nil {
+		Error(w, http.StatusBadRequest, "template_id is verplicht")
+		return
+	}
+
+	item, err := h.store.CreateMailFromTemplate(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Template of gekoppelde klant niet gevonden")
+			return
+		}
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !input.Send {
+		JSON(w, http.StatusCreated, item)
+		return
+	}
+	if !h.cfg.LaventeCareMailConfigured() {
+		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, "Microsoft Graph mail is niet geconfigureerd")
+		failed, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
+		if failed != nil {
+			JSON(w, http.StatusServiceUnavailable, failed)
+			return
+		}
+		Error(w, http.StatusServiceUnavailable, "Microsoft Graph mail is niet geconfigureerd")
+		return
+	}
+
+	result, err := h.mailSender.Send(r.Context(), mail.SendInput{
+		To:      []string{item.ToEmail},
+		CC:      item.CC,
+		BCC:     item.BCC,
+		Subject: item.Subject,
+		HTML:    item.BodyHTML,
+		Text:    derefModelString(item.BodyText),
+	})
+	if err != nil {
+		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, err.Error())
+		failed, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
+		if failed != nil {
+			JSON(w, http.StatusBadGateway, failed)
+			return
+		}
+		Error(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if item.CompanyID != nil {
+		body := fmt.Sprintf("Aan: %s\nTemplate: %s", item.ToEmail, derefModelString(item.TemplateName))
+		_, _ = h.store.CreateActivityEvent(r.Context(), h.userID, model.LCActivityEventCreate{
+			CompanyID:    *item.CompanyID,
+			ContactID:    item.ContactID,
+			ProjectID:    item.ProjectID,
+			WorkstreamID: item.WorkstreamID,
+			EventType:    "email",
+			Channel:      "email",
+			Title:        "Mail verstuurd: " + item.Subject,
+			Body:         &body,
+		})
+	}
+	sent, err := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, sent)
 }
 
 // CreateQuote creates a LaventeCare quote.
@@ -1623,4 +1788,11 @@ func (h *LaventeCareHandler) SeedDocuments(w http.ResponseWriter, r *http.Reques
 		Inserted: inserted,
 		Updated:  updated,
 	})
+}
+
+func derefModelString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

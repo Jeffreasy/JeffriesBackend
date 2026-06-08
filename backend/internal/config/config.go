@@ -69,6 +69,15 @@ type Config struct {
 	BunqCallbackSecret    string
 	BunqDeviceDescription string
 
+	// LaventeCare mailbox (Microsoft Graph application permissions)
+	LaventeCareMailEnabled  bool
+	LaventeCareMailProvider string
+	LaventeCareMailFromName string
+	MicrosoftTenantID       string
+	MicrosoftClientID       string
+	MicrosoftClientSecret   string
+	MicrosoftSenderEmail    string
+
 	// CORS
 	CORSOrigins []string
 
@@ -134,6 +143,14 @@ func Load() *Config {
 		BunqCallbackSecret:    envOr("BUNQ_CALLBACK_SECRET", ""),
 		BunqDeviceDescription: envOr("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
 
+		LaventeCareMailEnabled:  envBoolOr("LAVENTECARE_MAIL_ENABLED", false),
+		LaventeCareMailProvider: envOr("LAVENTECARE_MAIL_PROVIDER", "microsoft_graph"),
+		LaventeCareMailFromName: envOr("LAVENTECARE_MAIL_FROM_NAME", "LaventeCare"),
+		MicrosoftTenantID:       envOr("MICROSOFT_TENANT_ID", ""),
+		MicrosoftClientID:       envOr("MICROSOFT_CLIENT_ID", ""),
+		MicrosoftClientSecret:   envOr("MICROSOFT_CLIENT_SECRET", ""),
+		MicrosoftSenderEmail:    strings.ToLower(envOr("MICROSOFT_SENDER_EMAIL", "")),
+
 		CORSOrigins: envSliceOr("CORS_ORIGINS", []string{"http://localhost:3000"}),
 
 		LogLevel: envOr("LOG_LEVEL", "INFO"),
@@ -170,6 +187,16 @@ func (c *Config) Addr() string {
 // commands instead of trying to reach WiZ devices over the local network.
 func (c *Config) QueueLightCommands() bool {
 	return strings.EqualFold(c.LightCommandMode, "queue")
+}
+
+// LaventeCareMailConfigured returns true when outbound LaventeCare mail can use
+// Microsoft Graph application permissions.
+func (c *Config) LaventeCareMailConfigured() bool {
+	return c.LaventeCareMailEnabled &&
+		c.MicrosoftTenantID != "" &&
+		c.MicrosoftClientID != "" &&
+		c.MicrosoftClientSecret != "" &&
+		c.MicrosoftSenderEmail != ""
 }
 
 // --- helpers ---

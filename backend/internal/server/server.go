@@ -61,7 +61,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	noteH := handler.NewNoteHandler(store.NewNoteStore(db))
 	habitH := handler.NewHabitHandler(store.NewHabitStore(db))
 	pendingH := handler.NewPendingActionHandler(db, cfg)
-	lcH := handler.NewLaventeCareHandler(store.NewLaventeCareStore(db), store.NewPendingStore(db.Pool), cfg.HomeappUserID)
+	lcH := handler.NewLaventeCareHandler(store.NewLaventeCareStore(db), store.NewPendingStore(db.Pool), cfg.HomeappUserID, cfg)
 
 	var telegramClient *telegram.Client
 	if cfg.TelegramBotToken != "" {
