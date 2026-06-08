@@ -323,6 +323,42 @@ type LCDossierDocumentCreate struct {
 	Notes         *string    `json:"notes"`
 }
 
+type LCActivityEvent struct {
+	ID             uuid.UUID  `json:"id" db:"id"`
+	UserID         string     `json:"user_id" db:"user_id"`
+	CompanyID      uuid.UUID  `json:"company_id" db:"company_id"`
+	ContactID      *uuid.UUID `json:"contact_id" db:"contact_id"`
+	LeadID         *uuid.UUID `json:"lead_id" db:"lead_id"`
+	ProjectID      *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID   *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	ActionItemID   *uuid.UUID `json:"action_item_id" db:"action_item_id"`
+	EventType      string     `json:"event_type" db:"event_type"`
+	Channel        string     `json:"channel" db:"channel"`
+	Title          string     `json:"title" db:"title"`
+	Body           *string    `json:"body" db:"body"`
+	OccurredAt     time.Time  `json:"occurred_at" db:"occurred_at"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName    *string    `json:"company_name,omitempty"`
+	ContactName    *string    `json:"contact_name,omitempty"`
+	ProjectName    *string    `json:"project_name,omitempty"`
+	WorkstreamName *string    `json:"workstream_name,omitempty"`
+}
+
+type LCActivityEventCreate struct {
+	CompanyID    uuid.UUID  `json:"company_id"`
+	ContactID    *uuid.UUID `json:"contact_id"`
+	LeadID       *uuid.UUID `json:"lead_id"`
+	ProjectID    *uuid.UUID `json:"project_id"`
+	WorkstreamID *uuid.UUID `json:"workstream_id"`
+	ActionItemID *uuid.UUID `json:"action_item_id"`
+	EventType    string     `json:"event_type"`
+	Channel      string     `json:"channel"`
+	Title        string     `json:"title"`
+	Body         *string    `json:"body"`
+	OccurredAt   *string    `json:"occurred_at"`
+}
+
 type LCDecision struct {
 	ID        uuid.UUID  `json:"id" db:"id"`
 	UserID    string     `json:"user_id" db:"user_id"`
@@ -378,6 +414,7 @@ type LCCockpit struct {
 	RecentDecisions   []LCDecision        `json:"recentDecisions"`
 	DocumentCatalog   []LCDocument        `json:"documentCatalog"`
 	DossierDocuments  []LCDossierDocument `json:"dossierDocuments"`
+	ActivityEvents    []LCActivityEvent   `json:"activityEvents"`
 	BusinessSignals   []LCBusinessSignal  `json:"businessSignals"`
 	FollowUps         []LCFollowUpSignal  `json:"followUps"`
 }
@@ -397,6 +434,7 @@ type LCCockpitSummary struct {
 	Decisions         int  `json:"decisions"`
 	ActionItems       int  `json:"actionItems"`
 	DossierDocuments  int  `json:"dossierDocuments"`
+	ActivityEvents    int  `json:"activityEvents"`
 	DocumentsSeeded   bool `json:"documentsSeeded"`
 	BusinessSignals   int  `json:"businessSignals"`
 	FollowUps         int  `json:"followUps"`

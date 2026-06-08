@@ -806,6 +806,77 @@ func (h *LaventeCareHandler) CreateDossierDocument(w http.ResponseWriter, r *htt
 	JSON(w, http.StatusCreated, doc)
 }
 
+// ListActivityEvents returns recent customer timeline events.
+// @Summary List Activity Events
+// @Description Returns recent LaventeCare customer dossier activity events
+// @Tags LaventeCare
+// @Produce json
+// @Param companyId query string false "Company ID (UUID)"
+// @Param limit query int false "Limit count" default(30)
+// @Success 200 {array} model.LCActivityEvent
+// @Failure 400 {string} string "Invalid companyId"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/activity [get]
+func (h *LaventeCareHandler) ListActivityEvents(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	var companyID *uuid.UUID
+	if raw := r.URL.Query().Get("companyId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			Error(w, http.StatusBadRequest, "Invalid companyId")
+			return
+		}
+		companyID = &id
+	}
+
+	events, err := h.store.ListActivityEvents(r.Context(), h.userID, limit, companyID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, events)
+}
+
+// CreateActivityEvent logs a manual customer dossier timeline event.
+// @Summary Create Activity Event
+// @Description Logs a customer contact moment, note, decision or project update in the customer dossier timeline
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCActivityEventCreate true "Activity Event"
+// @Success 201 {object} model.LCActivityEvent
+// @Failure 400 {string} string "Invalid request body or missing required field"
+// @Failure 404 {string} string "Related customer object not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/activity [post]
+func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.Request) {
+	var input model.LCActivityEventCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.CompanyID == uuid.Nil {
+		Error(w, http.StatusBadRequest, "company_id is verplicht")
+		return
+	}
+	if input.Title == "" {
+		Error(w, http.StatusBadRequest, "title is verplicht")
+		return
+	}
+
+	event, err := h.store.CreateActivityEvent(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant of gekoppeld object niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, event)
+}
+
 // ConvertSignalToLead creates a lead from a business signal.
 // @Summary Convert Signal to Lead
 // @Description Converts a business signal into a CRM lead

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -931,6 +932,106 @@ func (s *LaventeCareStore) CountDossierDocuments(ctx context.Context, userID str
 	return count, err
 }
 
+func (s *LaventeCareStore) ListActivityEvents(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCActivityEvent, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+
+	query := `SELECT e.id, e.user_id, e.company_id, e.contact_id, e.lead_id,
+		        e.project_id, e.workstream_id, e.action_item_id, e.event_type, e.channel,
+		        e.title, e.body, e.occurred_at, e.created_at, e.updated_at,
+		        c.naam, ct.naam, p.naam, w.titel
+		   FROM lc_activity_events e
+		   JOIN lc_companies c ON c.id = e.company_id AND c.user_id = e.user_id
+		   LEFT JOIN lc_contacts ct ON ct.id = e.contact_id AND ct.user_id = e.user_id
+		   LEFT JOIN lc_projects p ON p.id = e.project_id AND p.user_id = e.user_id
+		   LEFT JOIN lc_workstreams w ON w.id = e.workstream_id AND w.user_id = e.user_id
+		  WHERE e.user_id = $1`
+	args := []any{userID}
+	if companyID != nil {
+		args = append(args, *companyID)
+		query += ` AND e.company_id = $2`
+	}
+	args = append(args, limit)
+	query += ` ORDER BY e.occurred_at DESC, e.created_at DESC LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := s.db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanActivityEvent)
+}
+
+func (s *LaventeCareStore) CountActivityEvents(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM lc_activity_events WHERE user_id = $1`,
+		userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (s *LaventeCareStore) CreateActivityEvent(ctx context.Context, userID string, input model.LCActivityEventCreate) (*model.LCActivityEvent, error) {
+	if err := s.validateActivityEventTarget(ctx, userID, input); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	occurredAt := now
+	if parsed := parseDateTimePtr(input.OccurredAt); parsed != nil {
+		occurredAt = parsed.UTC()
+	}
+	eventType := strings.TrimSpace(input.EventType)
+	if eventType == "" {
+		eventType = "notitie"
+	}
+	channel := strings.TrimSpace(input.Channel)
+	if channel == "" {
+		channel = "manual"
+	}
+	body := cleanStringPtr(input.Body)
+	id := uuid.New()
+
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_activity_events (id, user_id, company_id, contact_id, lead_id,
+		        project_id, workstream_id, action_item_id, event_type, channel, title, body,
+		        occurred_at, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)`,
+		id, userID, input.CompanyID, input.ContactID, input.LeadID, input.ProjectID,
+		input.WorkstreamID, input.ActionItemID, eventType, channel, strings.TrimSpace(input.Title),
+		body, occurredAt, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if shouldActivityUpdateLastContact(eventType) {
+		_, _ = s.db.Pool.Exec(ctx,
+			`UPDATE lc_companies
+			    SET laatste_contact = $1, updated_at = $2
+			  WHERE user_id = $3 AND id = $4`,
+			occurredAt, now, userID, input.CompanyID)
+	}
+
+	return &model.LCActivityEvent{
+		ID:           id,
+		UserID:       userID,
+		CompanyID:    input.CompanyID,
+		ContactID:    input.ContactID,
+		LeadID:       input.LeadID,
+		ProjectID:    input.ProjectID,
+		WorkstreamID: input.WorkstreamID,
+		ActionItemID: input.ActionItemID,
+		EventType:    eventType,
+		Channel:      channel,
+		Title:        strings.TrimSpace(input.Title),
+		Body:         body,
+		OccurredAt:   occurredAt,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
 func (s *LaventeCareStore) CreateDossierDocument(ctx context.Context, userID string, input model.LCDossierDocumentCreate) (*model.LCDossierDocument, error) {
 	companyID, err := s.resolveDossierCompanyID(ctx, userID, input.CompanyID, input.LeadID, input.ProjectID, input.WorkstreamID)
 	if err != nil {
@@ -1045,6 +1146,50 @@ func (s *LaventeCareStore) validateDossierDocumentTarget(ctx context.Context, us
 	return nil
 }
 
+func (s *LaventeCareStore) validateActivityEventTarget(ctx context.Context, userID string, input model.LCActivityEventCreate) error {
+	var companyExists bool
+	if err := s.db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM lc_companies WHERE user_id = $1 AND id = $2)`,
+		userID, input.CompanyID,
+	).Scan(&companyExists); err != nil {
+		return err
+	}
+	if !companyExists {
+		return pgx.ErrNoRows
+	}
+
+	check := func(query string, id *uuid.UUID) error {
+		if id == nil {
+			return nil
+		}
+		var exists bool
+		if err := s.db.Pool.QueryRow(ctx, query, userID, *id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return pgx.ErrNoRows
+		}
+		return nil
+	}
+
+	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_contacts WHERE user_id = $1 AND id = $2)`, input.ContactID); err != nil {
+		return err
+	}
+	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_leads WHERE user_id = $1 AND id = $2)`, input.LeadID); err != nil {
+		return err
+	}
+	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_projects WHERE user_id = $1 AND id = $2)`, input.ProjectID); err != nil {
+		return err
+	}
+	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_workstreams WHERE user_id = $1 AND id = $2)`, input.WorkstreamID); err != nil {
+		return err
+	}
+	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_action_items WHERE user_id = $1 AND id = $2)`, input.ActionItemID); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *LaventeCareStore) resolveDossierCompanyID(ctx context.Context, userID string, companyID, leadID, projectID, workstreamID *uuid.UUID) (*uuid.UUID, error) {
 	if companyID != nil {
 		return companyID, nil
@@ -1124,6 +1269,14 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	activityEvents, err := s.ListActivityEvents(ctx, userID, 30, nil)
+	if err != nil {
+		return nil, err
+	}
+	activityEventCount, err := s.CountActivityEvents(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	activeLeads := filterOpen(leads, func(l model.LCLead) string { return l.Status })
 	activeWorkstreams := filterOpen(workstreams, func(w model.LCWorkstream) string { return w.Status })
@@ -1154,6 +1307,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 			Decisions:         len(decisions),
 			ActionItems:       len(actions),
 			DossierDocuments:  dossierDocumentCount,
+			ActivityEvents:    activityEventCount,
 			DocumentsSeeded:   len(documents) > 0,
 			BusinessSignals:   len(signals),
 			FollowUps:         len(followUps),
@@ -1169,6 +1323,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 		RecentDecisions:   decisions,
 		DocumentCatalog:   documents,
 		DossierDocuments:  dossierDocuments,
+		ActivityEvents:    activityEvents,
 		BusinessSignals:   signals,
 		FollowUps:         followUps,
 	}, nil
@@ -1589,6 +1744,15 @@ func scanDossierDocument(row pgx.CollectableRow) (model.LCDossierDocument, error
 	return d, err
 }
 
+func scanActivityEvent(row pgx.CollectableRow) (model.LCActivityEvent, error) {
+	var e model.LCActivityEvent
+	err := row.Scan(&e.ID, &e.UserID, &e.CompanyID, &e.ContactID, &e.LeadID,
+		&e.ProjectID, &e.WorkstreamID, &e.ActionItemID, &e.EventType, &e.Channel,
+		&e.Title, &e.Body, &e.OccurredAt, &e.CreatedAt, &e.UpdatedAt,
+		&e.CompanyName, &e.ContactName, &e.ProjectName, &e.WorkstreamName)
+	return e, err
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func filterOpen[T any](items []T, statusFn func(T) string) []T {
@@ -1648,6 +1812,15 @@ func parseDateTimePtr(value *string) *time.Time {
 		}
 	}
 	return nil
+}
+
+func shouldActivityUpdateLastContact(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "contact", "gesprek", "call", "meeting", "afspraak", "email":
+		return true
+	default:
+		return false
+	}
 }
 
 func deref(value *string) string {

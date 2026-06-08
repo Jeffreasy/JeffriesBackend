@@ -192,6 +192,8 @@ func registerRoutes(
 				r.Get("/documents", lcH.ListDocuments)
 				r.Get("/dossier-documents", lcH.ListDossierDocuments)
 				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)
+				r.Get("/activity", lcH.ListActivityEvents)
+				r.With(authMw).Post("/activity", lcH.CreateActivityEvent)
 				r.Get("/leads", lcH.ListLeads)
 				r.With(authMw).Post("/leads", lcH.CreateLead)
 				r.With(authMw).Patch("/leads/{id}", lcH.UpdateLead)
