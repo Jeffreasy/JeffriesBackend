@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -402,6 +403,314 @@ func cleanPendingSummary(value string) string {
 
 func formatCents(cents int) string {
 	return fmt.Sprintf("EUR %d.%02d", cents/100, cents%100)
+}
+
+// ListDecisions returns recent LaventeCare decisions.
+// @Summary List LaventeCare Decisions
+// @Description Returns recent decision log records
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(30)
+// @Success 200 {array} model.LCDecision
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/decisions [get]
+func (h *LaventeCareHandler) ListDecisions(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	decisions, err := h.store.ListDecisions(r.Context(), h.userID, limit)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, decisions)
+}
+
+// CreateDecision stores a LaventeCare decision log record.
+// @Summary Create LaventeCare Decision
+// @Description Creates a decision log record for governance/audit trail
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCDecision true "Decision"
+// @Success 201 {object} model.LCDecision
+// @Failure 400 {string} string "Invalid request body or missing fields"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/decisions [post]
+func (h *LaventeCareHandler) CreateDecision(w http.ResponseWriter, r *http.Request) {
+	var input model.LCDecision
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Titel) == "" || strings.TrimSpace(input.Besluit) == "" {
+		Error(w, http.StatusBadRequest, "titel en besluit zijn verplicht")
+		return
+	}
+	if strings.TrimSpace(input.Reden) == "" {
+		input.Reden = "Niet gespecificeerd"
+	}
+	decision, err := h.store.CreateDecision(r.Context(), h.userID, input)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, decision)
+}
+
+// UpdateDecisionStatus updates the status of a LaventeCare decision record.
+// @Summary Update LaventeCare Decision Status
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Decision ID"
+// @Param request body map[string]string true "Status update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {string} string "Invalid request"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/decisions/{id}/status [patch]
+func (h *LaventeCareHandler) UpdateDecisionStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "ongeldig besluit id")
+		return
+	}
+	var input struct {
+		Status string `json:"status"`
+	}
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Status) == "" {
+		Error(w, http.StatusBadRequest, "status is verplicht")
+		return
+	}
+	if err := h.store.UpdateDecisionStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListChangeRequests returns open LaventeCare change requests.
+// @Summary List LaventeCare Change Requests
+// @Description Returns open change requests
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(30)
+// @Success 200 {array} model.LCChangeRequest
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/changes [get]
+func (h *LaventeCareHandler) ListChangeRequests(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	changes, err := h.store.ListChangeRequests(r.Context(), h.userID, limit)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, changes)
+}
+
+// CreateChangeRequest stores a LaventeCare change request.
+// @Summary Create LaventeCare Change Request
+// @Description Creates a scope/planning/budget change request
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCChangeRequest true "Change request"
+// @Success 201 {object} model.LCChangeRequest
+// @Failure 400 {string} string "Invalid request body or missing fields"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/changes [post]
+func (h *LaventeCareHandler) CreateChangeRequest(w http.ResponseWriter, r *http.Request) {
+	var input model.LCChangeRequest
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Titel) == "" || strings.TrimSpace(input.Impact) == "" {
+		Error(w, http.StatusBadRequest, "titel en impact zijn verplicht")
+		return
+	}
+	change, err := h.store.CreateChangeRequest(r.Context(), h.userID, input)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, change)
+}
+
+// UpdateChangeRequestStatus updates the lifecycle status of a change request.
+// @Summary Update LaventeCare Change Request Status
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Change request ID"
+// @Param request body map[string]string true "Status update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {string} string "Invalid request"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/changes/{id}/status [patch]
+func (h *LaventeCareHandler) UpdateChangeRequestStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "ongeldig change id")
+		return
+	}
+	var input struct {
+		Status string `json:"status"`
+	}
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Status) == "" {
+		Error(w, http.StatusBadRequest, "status is verplicht")
+		return
+	}
+	if err := h.store.UpdateChangeRequestStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListSlaIncidents returns open LaventeCare SLA/support incidents.
+// @Summary List LaventeCare SLA Incidents
+// @Description Returns open SLA/support incidents
+// @Tags LaventeCare
+// @Produce json
+// @Param limit query int false "Limit count" default(30)
+// @Success 200 {array} model.LCSlaIncident
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/sla-incidents [get]
+func (h *LaventeCareHandler) ListSlaIncidents(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 30)
+	incidents, err := h.store.ListSlaIncidents(r.Context(), h.userID, limit)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, incidents)
+}
+
+// CreateSlaIncident stores a LaventeCare SLA/support incident.
+// @Summary Create LaventeCare SLA Incident
+// @Description Creates an incident for support/SLA tracking
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body map[string]interface{} true "SLA incident"
+// @Success 201 {object} model.LCSlaIncident
+// @Failure 400 {string} string "Invalid request body or missing fields"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/sla-incidents [post]
+func (h *LaventeCareHandler) CreateSlaIncident(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ProjectID       *uuid.UUID `json:"project_id"`
+		Titel           string     `json:"titel"`
+		Prioriteit      string     `json:"prioriteit"`
+		Status          string     `json:"status"`
+		Kanaal          string     `json:"kanaal"`
+		GemeldOp        *string    `json:"gemeld_op"`
+		ReactieDeadline *string    `json:"reactie_deadline"`
+		Samenvatting    *string    `json:"samenvatting"`
+	}
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Titel) == "" {
+		Error(w, http.StatusBadRequest, "titel is verplicht")
+		return
+	}
+	gemeldOp, err := parseLaventeCareTime(input.GemeldOp)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "gemeld_op is ongeldig")
+		return
+	}
+	deadline, err := parseLaventeCareTime(input.ReactieDeadline)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "reactie_deadline is ongeldig")
+		return
+	}
+	incident := model.LCSlaIncident{
+		ProjectID:       input.ProjectID,
+		Titel:           input.Titel,
+		Prioriteit:      input.Prioriteit,
+		Status:          input.Status,
+		Kanaal:          input.Kanaal,
+		ReactieDeadline: deadline,
+		Samenvatting:    input.Samenvatting,
+	}
+	if gemeldOp != nil {
+		incident.GemeldOp = *gemeldOp
+	}
+	created, err := h.store.CreateSlaIncident(r.Context(), h.userID, incident)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, created)
+}
+
+// UpdateSlaIncidentStatus updates the lifecycle status of an SLA/support incident.
+// @Summary Update LaventeCare SLA Incident Status
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Incident ID"
+// @Param request body map[string]string true "Status update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {string} string "Invalid request"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/sla-incidents/{id}/status [patch]
+func (h *LaventeCareHandler) UpdateSlaIncidentStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "ongeldig incident id")
+		return
+	}
+	var input struct {
+		Status string `json:"status"`
+	}
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.Status) == "" {
+		Error(w, http.StatusBadRequest, "status is verplicht")
+		return
+	}
+	if err := h.store.UpdateSlaIncidentStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func parseLaventeCareTime(value *string) (*time.Time, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(*value)
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02T15:04",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid time")
 }
 
 // ListCompanies returns LaventeCare companies/customer dossiers.

@@ -2050,7 +2050,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
-	workstreams, err := s.ListWorkstreams(ctx, userID, 30, false)
+	workstreams, err := s.ListWorkstreams(ctx, userID, 30, true)
 	if err != nil {
 		return nil, err
 	}
@@ -2087,7 +2087,8 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	changes, _ := s.listChangeRequests(ctx, userID, 5)
 	decisions, _ := s.listDecisions(ctx, userID, 5)
 
-	// Business signals: scan emails for business-term matches
+	// Business signals: scan emails for business-term matches. Historical/converted
+	// opdrachten still carry useful customer and system terms for matching.
 	signals := s.buildBusinessSignals(ctx, userID, companies, leads, projects, workstreams)
 	// Follow-ups: leads, opdrachten and projects with upcoming deadlines
 	followUps := s.buildFollowUps(companies, activeLeads, activeProjects, activeWorkstreams)
@@ -2362,6 +2363,10 @@ func (s *LaventeCareStore) listSlaIncidents(ctx context.Context, userID string, 
 	})
 }
 
+func (s *LaventeCareStore) ListSlaIncidents(ctx context.Context, userID string, limit int) ([]model.LCSlaIncident, error) {
+	return s.listSlaIncidents(ctx, userID, limit)
+}
+
 func (s *LaventeCareStore) CreateSlaIncident(ctx context.Context, userID string, input model.LCSlaIncident) (*model.LCSlaIncident, error) {
 	now := time.Now().UTC()
 	input.ID = uuid.New()
@@ -2395,11 +2400,30 @@ func (s *LaventeCareStore) CreateSlaIncident(ctx context.Context, userID string,
 	return &input, nil
 }
 
+func (s *LaventeCareStore) UpdateSlaIncidentStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return fmt.Errorf("status is verplicht")
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_sla_incidents
+		 SET status = $1, updated_at = NOW()
+		 WHERE id = $2 AND user_id = $3`,
+		status, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("incident niet gevonden")
+	}
+	return nil
+}
+
 func (s *LaventeCareStore) listChangeRequests(ctx context.Context, userID string, limit int) ([]model.LCChangeRequest, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, project_id, titel, impact, planning_impact,
 		        budget_impact, status, created_at, updated_at
-		 FROM lc_change_requests WHERE user_id = $1 AND status IN ('nieuw','beoordeeld')
+		 FROM lc_change_requests WHERE user_id = $1 AND status IN ('nieuw','beoordeeld','goedgekeurd')
 		 ORDER BY updated_at DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
@@ -2411,6 +2435,10 @@ func (s *LaventeCareStore) listChangeRequests(ctx context.Context, userID string
 			&c.PlanningImpact, &c.BudgetImpact, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 		return c, err
 	})
+}
+
+func (s *LaventeCareStore) ListChangeRequests(ctx context.Context, userID string, limit int) ([]model.LCChangeRequest, error) {
+	return s.listChangeRequests(ctx, userID, limit)
 }
 
 func (s *LaventeCareStore) CreateChangeRequest(ctx context.Context, userID string, input model.LCChangeRequest) (*model.LCChangeRequest, error) {
@@ -2435,6 +2463,25 @@ func (s *LaventeCareStore) CreateChangeRequest(ctx context.Context, userID strin
 	return &input, nil
 }
 
+func (s *LaventeCareStore) UpdateChangeRequestStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return fmt.Errorf("status is verplicht")
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_change_requests
+		 SET status = $1, updated_at = NOW()
+		 WHERE id = $2 AND user_id = $3`,
+		status, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("change request niet gevonden")
+	}
+	return nil
+}
+
 func (s *LaventeCareStore) listDecisions(ctx context.Context, userID string, limit int) ([]model.LCDecision, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, project_id, titel, besluit, reden, impact, status, datum, created_at
@@ -2450,6 +2497,10 @@ func (s *LaventeCareStore) listDecisions(ctx context.Context, userID string, lim
 			&d.Reden, &d.Impact, &d.Status, &d.Datum, &d.CreatedAt)
 		return d, err
 	})
+}
+
+func (s *LaventeCareStore) ListDecisions(ctx context.Context, userID string, limit int) ([]model.LCDecision, error) {
+	return s.listDecisions(ctx, userID, limit)
 }
 
 func (s *LaventeCareStore) CreateDecision(ctx context.Context, userID string, input model.LCDecision) (*model.LCDecision, error) {
@@ -2474,6 +2525,25 @@ func (s *LaventeCareStore) CreateDecision(ctx context.Context, userID string, in
 		return nil, err
 	}
 	return &input, nil
+}
+
+func (s *LaventeCareStore) UpdateDecisionStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return fmt.Errorf("status is verplicht")
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_decisions
+		 SET status = $1
+		 WHERE id = $2 AND user_id = $3`,
+		status, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("besluit niet gevonden")
+	}
+	return nil
 }
 
 // ─── Row scanners ────────────────────────────────────────────────────────────
