@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -578,11 +579,12 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 	if err != nil {
 		return nil, err
 	}
-	subject := renderTemplate(template.SubjectTemplate, contextValues)
-	bodyHTML := renderTemplate(template.BodyHTML, contextValues)
+	subject := cleanupRenderedMailSubject(renderTemplate(template.SubjectTemplate, contextValues))
+	bodyHTML := cleanupRenderedMailHTML(renderTemplate(template.BodyHTML, contextValues))
 	bodyText := cleanStringPtr(template.BodyText)
 	if bodyText != nil {
 		rendered := renderTemplate(*bodyText, contextValues)
+		rendered = cleanupRenderedMailText(rendered)
 		bodyText = &rendered
 	}
 
@@ -652,6 +654,7 @@ func (s *LaventeCareStore) MarkMailOutboxFailed(ctx context.Context, userID stri
 }
 
 func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
+	inputVars := safeStringMap(input.Variables)
 	values := map[string]string{
 		"laventecare.name":       "LaventeCare",
 		"laventecare.owner":      "Jeffrey Lavente",
@@ -659,38 +662,35 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"laventecare.phone":      "+31 6 39 03 40 85",
 		"laventecare.website":    "https://www.laventecare.nl",
 		"cta.label":              "Afstemmen",
-		"cta.url":                "https://www.laventecare.nl/contact",
+		"cta.url":                "",
 		"quote.number":           "concept",
 		"quote.summary":          "de afgesproken scope",
-		"quote.url":              "https://www.laventecare.nl/contact",
+		"quote.url":              "",
 		"invoice.number":         "concept",
 		"invoice.amount":         "zie factuur",
 		"invoice.due_date":       "14 dagen",
-		"invoice.payment_url":    "https://www.laventecare.nl/contact",
+		"invoice.payment_url":    "",
 		"project.naam":           "het project",
 		"project.status":         "in uitvoering",
 		"project.update":         "De voortgang loopt volgens afspraak.",
 		"project.risk":           "geen bijzonderheden",
-		"project.url":            "https://www.laventecare.nl/contact",
+		"project.url":            "",
 		"meeting.topic":          "afstemming",
 		"meeting.summary":        "De besproken punten zijn vastgelegd in het klantdossier.",
 		"meeting.actions":        "de vervolgstap wordt opgepakt",
-		"meeting.url":            "https://www.laventecare.nl/contact",
+		"meeting.url":            "",
 		"delivery.done":          "de afgesproken werkzaamheden",
 		"delivery.check":         "laatste controle door klant",
 		"support.priority":       "normaal",
 		"support.status":         "in behandeling",
 		"support.summary":        "De melding is geregistreerd en wordt opgevolgd.",
-		"support.url":            "https://www.laventecare.nl/contact",
+		"support.url":            "",
 		"change.title":           "wijziging",
 		"change.summary":         "De wijziging is vastgelegd ter bevestiging.",
 		"change.planning_impact": "nog te bepalen",
 		"change.budget_impact":   "nog te bepalen",
-		"change.url":             "https://www.laventecare.nl/contact",
-		"next_step":              valueOr(input.Variables["next_step"], "Ik hoor graag wat voor jou het beste moment is om dit op te pakken."),
-	}
-	for key, value := range input.Variables {
-		values[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+		"change.url":             "",
+		"next_step":              "Ik hoor graag wat voor jou het beste moment is om dit op te pakken.",
 	}
 
 	var company *model.LCCompany
@@ -712,6 +712,70 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		values["contact.rol"] = deref(c.Rol)
 	}
 	if companyID != nil {
+		c, err := s.GetCompany(ctx, userID, *companyID)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
+		}
+		company = c
+		values["company.naam"] = c.Naam
+		values["company.website"] = deref(c.Website)
+		values["company.sector"] = deref(c.Sector)
+		values["company.volgende_actie"] = deref(c.VolgendeActie)
+	}
+	if input.ProjectID != nil {
+		project, _, err := s.mailAIProject(ctx, userID, input.ProjectID)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
+		}
+		setMailValue(values, "project.naam", stringMapValue(project, "naam"))
+		setMailValue(values, "project.status", stringMapValue(project, "status"))
+		setMailValue(values, "project.update", stringMapValue(project, "samenvatting"))
+	}
+	if input.WorkstreamID != nil {
+		workstream, _, projectID, err := s.mailAIWorkstream(ctx, userID, input.WorkstreamID)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
+		}
+		if input.ProjectID == nil && projectID != nil {
+			input.ProjectID = projectID
+		}
+		setMailValue(values, "meeting.topic", stringMapValue(workstream, "titel"))
+		setMailValue(values, "quote.summary", joinMailParts([]string{
+			stringMapValue(workstream, "doel"),
+			stringMapValue(workstream, "scope"),
+			stringMapValue(workstream, "deliverable"),
+		}, " "))
+		setMailValue(values, "project.update", joinMailParts([]string{
+			stringMapValue(workstream, "bevindingen"),
+			stringMapValue(workstream, "volgende_stap"),
+		}, " "))
+		setMailValue(values, "next_step", stringMapValue(workstream, "volgende_stap"))
+	}
+	if input.QuoteID != nil {
+		quote, err := s.GetQuote(ctx, userID, *input.QuoteID)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
+		}
+		setMailValue(values, "quote.number", quote.QuoteNumber)
+		setMailValue(values, "quote.summary", joinMailParts([]string{quote.Titel, centsDisplay(quote.Currency, quote.TotalCents), deref(quote.Notes)}, " - "))
+		if companyID == nil && quote.CompanyID != nil {
+			companyID = quote.CompanyID
+		}
+	}
+	if input.InvoiceID != nil {
+		invoice, err := s.GetInvoice(ctx, userID, *input.InvoiceID)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
+		}
+		setMailValue(values, "invoice.number", invoice.InvoiceNumber)
+		setMailValue(values, "invoice.amount", centsDisplay(invoice.Currency, invoice.TotalCents))
+		setMailValue(values, "invoice.due_date", deref(invoice.DueDate))
+		setMailValue(values, "invoice.payment_url", deref(invoice.PaymentURL))
+		if companyID == nil && invoice.CompanyID != nil {
+			companyID = invoice.CompanyID
+		}
+	}
+	if company == nil && companyID != nil {
 		c, err := s.GetCompany(ctx, userID, *companyID)
 		if err != nil {
 			return nil, nil, nil, "", nil, err
@@ -747,6 +811,9 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		} else {
 			values["company.naam"] = "je organisatie"
 		}
+	}
+	for key, value := range inputVars {
+		values[key] = value
 	}
 
 	return values, companyID, contactID, toEmail, toName, nil
@@ -1472,6 +1539,80 @@ func renderTemplate(input string, values map[string]string) string {
 		result = strings.ReplaceAll(result, "{{ "+key+" }}", value)
 	}
 	return result
+}
+
+var (
+	mailTemplateTokenRe = regexp.MustCompile(`\{\{\s*[a-zA-Z0-9_.-]+\s*\}\}`)
+	mailCTAButtonRe     = regexp.MustCompile(`(?is)<tr>\s*<td\s+align="center"[^>]*>\s*<a\s+href="([^"]*)"[^>]*>.*?</a>\s*</td>\s*</tr>`)
+)
+
+func cleanupRenderedMailSubject(value string) string {
+	value = mailTemplateTokenRe.ReplaceAllString(value, "")
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func cleanupRenderedMailHTML(value string) string {
+	value = mailCTAButtonRe.ReplaceAllStringFunc(value, func(block string) string {
+		match := mailCTAButtonRe.FindStringSubmatch(block)
+		if len(match) < 2 || !isSafeMailCTAURL(match[1]) {
+			return ""
+		}
+		return block
+	})
+	return mailTemplateTokenRe.ReplaceAllString(value, "")
+}
+
+func cleanupRenderedMailText(value string) string {
+	lines := strings.Split(value, "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(trimmed, "{{") || strings.Contains(trimmed, "}}") {
+			continue
+		}
+		if strings.HasPrefix(lower, "betalen kan via:") && !strings.Contains(lower, "http://") && !strings.Contains(lower, "https://") {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	result := strings.TrimSpace(strings.Join(cleaned, "\n"))
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
+	return result
+}
+
+func isSafeMailCTAURL(value string) bool {
+	value = strings.TrimSpace(html.UnescapeString(value))
+	lower := strings.ToLower(value)
+	if value == "" || strings.Contains(value, "{{") || strings.Contains(value, "}}") {
+		return false
+	}
+	if strings.TrimRight(lower, "/") == "https://www.laventecare.nl/contact" || strings.TrimRight(lower, "/") == "http://www.laventecare.nl/contact" {
+		return false
+	}
+	return strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
+}
+
+func setMailValue(values map[string]string, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "<nil>" {
+		return
+	}
+	values[key] = value
+}
+
+func joinMailParts(values []string, separator string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, separator)
 }
 
 func cleanEmails(values []string) []string {
