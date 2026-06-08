@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/mail"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
@@ -153,6 +154,85 @@ func (h *LaventeCareHandler) UpdateMailTemplate(w http.ResponseWriter, r *http.R
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SuggestMailContent creates an AI-assisted variable proposal for a LaventeCare mail template.
+// @Summary Suggest LaventeCare mail content
+// @Description Builds a safe draft context from LaventeCare, agenda, rooster and notes. It does not create or send mail.
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body model.LCMailAISuggestionRequest true "Mail AI suggestion request"
+// @Success 200 {object} model.LCMailAISuggestion
+// @Failure 400 {string} string "Invalid request body"
+// @Failure 404 {string} string "Template or context object not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/mailbox/ai-suggest [post]
+func (h *LaventeCareHandler) SuggestMailContent(w http.ResponseWriter, r *http.Request) {
+	var input model.LCMailAISuggestionRequest
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.TemplateID == uuid.Nil {
+		Error(w, http.StatusBadRequest, "template_id is verplicht")
+		return
+	}
+
+	contextBundle, err := h.store.BuildMailAIContext(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Template of gekoppelde context niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	suggestion := mailAISuggestionFallback(contextBundle, input)
+	if strings.TrimSpace(h.cfg.GrokAPIKey) == "" {
+		JSON(w, http.StatusOK, suggestion)
+		return
+	}
+
+	payload, err := json.Marshal(contextBundle)
+	if err != nil {
+		JSON(w, http.StatusOK, suggestion)
+		return
+	}
+
+	systemPrompt := `Je bent de LaventeCare mail-assistent van Jeffrey Lavente.
+Maak uitsluitend een JSON-object voor een professioneel klantmail-concept.
+Gebruik alleen de aangeleverde context. Verzin geen afspraken, bedragen, betaalurls, contactgegevens of toezeggingen.
+Vul alleen korte, bruikbare templatevariabelen. Schrijf in helder Nederlands, zakelijk warm, concreet en zonder markdown.
+Antwoord exact met JSON in dit schema:
+{
+  "variables": {"placeholder": "waarde"},
+  "subject_hint": "optionele onderwerpregel",
+  "briefing": "korte interne samenvatting voor Jeffrey",
+  "sources": [{"type":"note|agenda|schedule|action|activity|billing|dossier|laventecare","title":"bron","date":"optioneel","summary":"waarom gebruikt"}],
+  "confidence": "hoog|normaal|laag"
+}`
+	userPrompt := fmt.Sprintf(`Template intent: %s
+Toon: %s
+
+Context JSON:
+%s
+
+Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
+		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
+
+	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
+	result := client.Chat(r.Context(), systemPrompt, userPrompt, nil, nil, nil)
+	if result.OK {
+		if parsed, err := parseMailAISuggestion(result.Antwoord, suggestion); err == nil {
+			JSON(w, http.StatusOK, parsed)
+			return
+		}
+	}
+
+	JSON(w, http.StatusOK, suggestion)
 }
 
 // SendTemplatedMail creates a rendered outbound mail and optionally sends it via Microsoft Graph.
@@ -1788,6 +1868,252 @@ func (h *LaventeCareHandler) SeedDocuments(w http.ResponseWriter, r *http.Reques
 		Inserted: inserted,
 		Updated:  updated,
 	})
+}
+
+func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.LCMailAISuggestionRequest) model.LCMailAISuggestion {
+	variables := map[string]string{}
+	for key, value := range contextBundle.ExistingVars {
+		mailAIAddVariable(variables, key, value)
+	}
+
+	if contextBundle.Company != nil {
+		mailAIAddVariable(variables, "company.naam", contextBundle.Company.Naam)
+		mailAIAddVariable(variables, "company.website", derefModelString(contextBundle.Company.Website))
+		mailAIAddVariable(variables, "company.sector", derefModelString(contextBundle.Company.Sector))
+		mailAIAddVariable(variables, "company.volgende_actie", derefModelString(contextBundle.Company.VolgendeActie))
+	}
+	if contextBundle.Contact != nil {
+		mailAIAddVariable(variables, "contact.naam", contextBundle.Contact.Naam)
+		mailAIAddVariable(variables, "contact.email", derefModelString(contextBundle.Contact.Email))
+		mailAIAddVariable(variables, "contact.rol", derefModelString(contextBundle.Contact.Rol))
+	}
+	if contextBundle.Project != nil {
+		mailAIAddVariable(variables, "project.naam", mailAIMapString(contextBundle.Project, "naam"))
+		mailAIAddVariable(variables, "project.status", mailAIMapString(contextBundle.Project, "status"))
+		mailAIAddVariable(variables, "project.update", mailAIMapString(contextBundle.Project, "samenvatting"))
+		mailAIAddVariable(variables, "project.risk", "Geen expliciete risico's gevonden in de gekoppelde context.")
+	}
+	if contextBundle.Workstream != nil {
+		mailAIAddVariable(variables, "meeting.topic", mailAIMapString(contextBundle.Workstream, "titel"))
+		mailAIAddVariable(variables, "quote.summary", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Workstream, "doel"),
+			mailAIMapString(contextBundle.Workstream, "scope"),
+			mailAIMapString(contextBundle.Workstream, "deliverable"),
+		}, " "))
+		mailAIAddVariable(variables, "project.update", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Workstream, "bevindingen"),
+			mailAIMapString(contextBundle.Workstream, "volgende_stap"),
+		}, " "))
+		mailAIAddVariable(variables, "next_step", mailAIMapString(contextBundle.Workstream, "volgende_stap"))
+	}
+	if contextBundle.Quote != nil {
+		mailAIAddVariable(variables, "quote.number", mailAIMapString(contextBundle.Quote, "quote_number"))
+		mailAIAddVariable(variables, "quote.summary", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Quote, "titel"),
+			mailAIMapString(contextBundle.Quote, "total"),
+			mailAIMapString(contextBundle.Quote, "notes"),
+		}, " - "))
+	}
+	if contextBundle.Invoice != nil {
+		mailAIAddVariable(variables, "invoice.number", mailAIMapString(contextBundle.Invoice, "invoice_number"))
+		mailAIAddVariable(variables, "invoice.amount", mailAIMapString(contextBundle.Invoice, "total"))
+		mailAIAddVariable(variables, "invoice.due_date", mailAIMapString(contextBundle.Invoice, "due_date"))
+		mailAIAddVariable(variables, "invoice.payment_url", mailAIMapString(contextBundle.Invoice, "payment_url"))
+	}
+
+	if variables["meeting.summary"] == "" {
+		mailAIAddVariable(variables, "meeting.summary", mailAIItemsLine(contextBundle.Activity, 2))
+	}
+	if variables["meeting.actions"] == "" {
+		mailAIAddVariable(variables, "meeting.actions", mailAIItemsLine(contextBundle.Actions, 3))
+	}
+	if variables["delivery.done"] == "" {
+		mailAIAddVariable(variables, "delivery.done", mailAIItemsLine(contextBundle.Dossier, 2))
+	}
+	if variables["support.summary"] == "" {
+		mailAIAddVariable(variables, "support.summary", mailAIItemsLine(contextBundle.Notes, 2))
+	}
+	if variables["next_step"] == "" && len(contextBundle.Actions) > 0 {
+		mailAIAddVariable(variables, "next_step", contextBundle.Actions[0].Title)
+	}
+	if variables["next_step"] == "" {
+		mailAIAddVariable(variables, "next_step", "Ik hoor graag welke vervolgstap voor jou het beste past.")
+	}
+
+	sources := mailAISourcesFromContext(contextBundle)
+	confidence := "laag"
+	if contextBundle.Company != nil || contextBundle.Contact != nil {
+		confidence = "normaal"
+	}
+	if len(sources) >= 3 && (contextBundle.Project != nil || contextBundle.Workstream != nil) {
+		confidence = "hoog"
+	}
+
+	subjectHint := ""
+	if contextBundle.Template != nil {
+		target := "LaventeCare"
+		if contextBundle.Company != nil {
+			target = contextBundle.Company.Naam
+		}
+		subjectHint = fmt.Sprintf("%s - %s", contextBundle.Template.Name, target)
+	}
+	briefing := fmt.Sprintf("Contextvoorstel op basis van %d bron(nen). Controleer bedragen, deadlines en klantafspraken voordat je verzendt.", len(sources))
+	if strings.TrimSpace(input.Intent) != "" {
+		briefing = briefing + " Intent: " + strings.TrimSpace(input.Intent) + "."
+	}
+
+	return model.LCMailAISuggestion{
+		Variables:   variables,
+		SubjectHint: cleanMailAIStringPtr(&subjectHint),
+		Briefing:    briefing,
+		Sources:     sources,
+		Confidence:  confidence,
+		GeneratedAt: time.Now().UTC(),
+	}
+}
+
+func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion) (model.LCMailAISuggestion, error) {
+	payload := extractMailAIJSON(raw)
+	var parsed model.LCMailAISuggestion
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return fallback, err
+	}
+	if parsed.GeneratedAt.IsZero() {
+		parsed.GeneratedAt = time.Now().UTC()
+	}
+	merged := fallback
+	for key, value := range parsed.Variables {
+		mailAIAddVariable(merged.Variables, key, value)
+	}
+	if parsed.SubjectHint != nil && strings.TrimSpace(*parsed.SubjectHint) != "" {
+		merged.SubjectHint = cleanMailAIStringPtr(parsed.SubjectHint)
+	}
+	if strings.TrimSpace(parsed.Briefing) != "" {
+		merged.Briefing = strings.TrimSpace(parsed.Briefing)
+	}
+	if len(parsed.Sources) > 0 {
+		merged.Sources = parsed.Sources
+	}
+	merged.Confidence = mailAIConfidence(parsed.Confidence, fallback.Confidence)
+	merged.GeneratedAt = parsed.GeneratedAt
+	return merged, nil
+}
+
+func extractMailAIJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "```") {
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+	}
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		return raw[start : end+1]
+	}
+	return raw
+}
+
+func mailAISourcesFromContext(contextBundle *model.LCMailAIContext) []model.LCMailAISource {
+	sources := []model.LCMailAISource{}
+	addItems := func(items []model.LCMailAIContextItem, max int) {
+		for _, item := range items {
+			if len(sources) >= 10 || max <= 0 {
+				return
+			}
+			max--
+			sources = append(sources, model.LCMailAISource{
+				Type:    item.Type,
+				Title:   item.Title,
+				Date:    item.Date,
+				Summary: mailAIJoinNonEmpty([]string{item.Status, item.Priority, item.Summary}, " - "),
+			})
+		}
+	}
+	addItems(contextBundle.Actions, 3)
+	addItems(contextBundle.Agenda, 2)
+	addItems(contextBundle.Notes, 3)
+	addItems(contextBundle.Activity, 2)
+	addItems(contextBundle.Billing, 2)
+	addItems(contextBundle.Dossier, 1)
+	addItems(contextBundle.Schedule, 1)
+	if len(sources) == 0 {
+		title := "LaventeCare context"
+		if contextBundle.Company != nil {
+			title = contextBundle.Company.Naam
+		}
+		sources = append(sources, model.LCMailAISource{Type: "laventecare", Title: title, Summary: "Geen extra notities of agenda-items gevonden."})
+	}
+	return sources
+}
+
+func mailAIItemsLine(items []model.LCMailAIContextItem, max int) string {
+	parts := []string{}
+	for _, item := range items {
+		if len(parts) >= max {
+			break
+		}
+		parts = append(parts, mailAIJoinNonEmpty([]string{item.Title, item.Date, item.Summary}, " - "))
+	}
+	return mailAIJoinNonEmpty(parts, "; ")
+}
+
+func mailAIAddVariable(values map[string]string, key, value string) {
+	key = strings.ToLower(strings.TrimSpace(key))
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	values[key] = value
+}
+
+func mailAIMapString(values map[string]any, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case *string:
+		return derefModelString(value)
+	case []string:
+		return strings.Join(value, ", ")
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func mailAIJoinNonEmpty(values []string, separator string) string {
+	parts := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && value != "<nil>" {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, separator)
+}
+
+func mailAIConfidence(value, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "hoog", "normaal", "laag":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return fallback
+	}
+}
+
+func cleanMailAIStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func derefModelString(value *string) string {

@@ -39,6 +39,136 @@ func (s *LaventeCareStore) GetMailbox(ctx context.Context, userID string, limit 
 	}, nil
 }
 
+func (s *LaventeCareStore) BuildMailAIContext(ctx context.Context, userID string, input model.LCMailAISuggestionRequest) (*model.LCMailAIContext, error) {
+	template, err := s.GetMailTemplate(ctx, userID, input.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+
+	var company *model.LCCompany
+	var contact *model.LCContact
+	companyID := input.CompanyID
+	contactID := input.ContactID
+
+	if contactID != nil {
+		contact, err = s.GetContact(ctx, userID, *contactID)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil && contact.CompanyID != nil {
+			companyID = contact.CompanyID
+		}
+	}
+	if companyID != nil {
+		company, err = s.GetCompany(ctx, userID, *companyID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	project, projectCompanyID, err := s.mailAIProject(ctx, userID, input.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if companyID == nil && projectCompanyID != nil {
+		companyID = projectCompanyID
+		company, _ = s.GetCompany(ctx, userID, *companyID)
+	}
+
+	workstream, workstreamCompanyID, workstreamProjectID, err := s.mailAIWorkstream(ctx, userID, input.WorkstreamID)
+	if err != nil {
+		return nil, err
+	}
+	if companyID == nil && workstreamCompanyID != nil {
+		companyID = workstreamCompanyID
+		company, _ = s.GetCompany(ctx, userID, *companyID)
+	}
+	if input.ProjectID == nil && workstreamProjectID != nil {
+		input.ProjectID = workstreamProjectID
+	}
+	if project == nil && input.ProjectID != nil {
+		project, projectCompanyID, err = s.mailAIProject(ctx, userID, input.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if companyID == nil && projectCompanyID != nil {
+			companyID = projectCompanyID
+			company, _ = s.GetCompany(ctx, userID, *companyID)
+		}
+	}
+
+	quote, quoteCompanyID, err := s.mailAIQuote(ctx, userID, input.QuoteID)
+	if err != nil {
+		return nil, err
+	}
+	if companyID == nil && quoteCompanyID != nil {
+		companyID = quoteCompanyID
+		company, _ = s.GetCompany(ctx, userID, *companyID)
+	}
+
+	invoice, invoiceCompanyID, err := s.mailAIInvoice(ctx, userID, input.InvoiceID)
+	if err != nil {
+		return nil, err
+	}
+	if companyID == nil && invoiceCompanyID != nil {
+		companyID = invoiceCompanyID
+		company, _ = s.GetCompany(ctx, userID, *companyID)
+	}
+
+	ids, keywords := mailAIContextKeys(company, contact, project, workstream)
+	notes, err := s.mailAINotes(ctx, userID, ids, keywords)
+	if err != nil {
+		return nil, err
+	}
+	agenda, err := s.mailAIAgenda(ctx, userID, ids, keywords)
+	if err != nil {
+		return nil, err
+	}
+	schedule, err := s.mailAISchedule(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	actions, err := s.mailAIActions(ctx, userID, companyID, input.ProjectID, input.WorkstreamID)
+	if err != nil {
+		return nil, err
+	}
+	activity, err := s.mailAIActivity(ctx, userID, companyID, input.ProjectID, input.WorkstreamID)
+	if err != nil {
+		return nil, err
+	}
+	billing, err := s.mailAIBilling(ctx, userID, companyID, input.ProjectID, input.WorkstreamID)
+	if err != nil {
+		return nil, err
+	}
+	dossier, err := s.mailAIDossier(ctx, userID, companyID, input.ProjectID, input.WorkstreamID)
+	if err != nil {
+		return nil, err
+	}
+
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	return &model.LCMailAIContext{
+		Template:     template,
+		Company:      company,
+		Contact:      contact,
+		Project:      project,
+		Workstream:   workstream,
+		Quote:        quote,
+		Invoice:      invoice,
+		Notes:        notes,
+		Agenda:       agenda,
+		Schedule:     schedule,
+		Actions:      actions,
+		Activity:     activity,
+		Billing:      billing,
+		Dossier:      dossier,
+		ExistingVars: safeStringMap(input.Variables),
+		Today:        time.Now().In(loc).Format("2006-01-02"),
+	}, nil
+}
+
 func (s *LaventeCareStore) GetMailboxSummary(ctx context.Context, userID string, templates []model.LCMailTemplate, configured bool, senderEmail string) (model.LCMailboxSummary, error) {
 	var activeTemplates int
 	for _, template := range templates {
@@ -620,6 +750,547 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 	}
 
 	return values, companyID, contactID, toEmail, toName, nil
+}
+
+func (s *LaventeCareStore) mailAIProject(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, error) {
+	if id == nil {
+		return nil, nil, nil
+	}
+	var companyID, leadID *uuid.UUID
+	var naam, fase, status string
+	var waardeIndicatie *int
+	var startDatum, deadline, samenvatting *string
+	var createdAt, updatedAt time.Time
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT company_id, lead_id, naam, fase, status, waarde_indicatie,
+		        start_datum, deadline, samenvatting, created_at, updated_at
+		   FROM lc_projects
+		  WHERE user_id = $1 AND id = $2
+		  LIMIT 1`,
+		userID, *id,
+	).Scan(&companyID, &leadID, &naam, &fase, &status, &waardeIndicatie,
+		&startDatum, &deadline, &samenvatting, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return map[string]any{
+		"id":                id.String(),
+		"company_id":        uuidPtrString(companyID),
+		"lead_id":           uuidPtrString(leadID),
+		"naam":              naam,
+		"fase":              fase,
+		"status":            status,
+		"waarde_indicatie":  waardeIndicatie,
+		"start_datum":       startDatum,
+		"deadline":          deadline,
+		"samenvatting":      samenvatting,
+		"aangemaakt":        createdAt.Format(time.RFC3339),
+		"laatst_bijgewerkt": updatedAt.Format(time.RFC3339),
+	}, companyID, nil
+}
+
+func (s *LaventeCareStore) mailAIWorkstream(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, *uuid.UUID, error) {
+	if id == nil {
+		return nil, nil, nil, nil
+	}
+	var companyID, leadID, projectID *uuid.UUID
+	var titel, typ, status, prioriteit, bron string
+	var klantNaam, sourceID, doel, scope, deliverable, bevindingen, volgendeStap, deadline *string
+	var geschatteMinuten, waardeIndicatie *int
+	var stackTags, tags []string
+	var completedAt *time.Time
+	var createdAt, updatedAt time.Time
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT company_id, lead_id, project_id, titel, type, status, prioriteit,
+		        klant_naam, bron, source_id, doel, scope, deliverable, bevindingen,
+		        volgende_stap, deadline, geschatte_minuten, waarde_indicatie,
+		        stack_tags, tags, completed_at, created_at, updated_at
+		   FROM lc_workstreams
+		  WHERE user_id = $1 AND id = $2
+		  LIMIT 1`,
+		userID, *id,
+	).Scan(&companyID, &leadID, &projectID, &titel, &typ, &status, &prioriteit,
+		&klantNaam, &bron, &sourceID, &doel, &scope, &deliverable, &bevindingen,
+		&volgendeStap, &deadline, &geschatteMinuten, &waardeIndicatie,
+		&stackTags, &tags, &completedAt, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return map[string]any{
+		"id":                id.String(),
+		"company_id":        uuidPtrString(companyID),
+		"lead_id":           uuidPtrString(leadID),
+		"project_id":        uuidPtrString(projectID),
+		"titel":             titel,
+		"type":              typ,
+		"status":            status,
+		"prioriteit":        prioriteit,
+		"klant_naam":        klantNaam,
+		"bron":              bron,
+		"source_id":         sourceID,
+		"doel":              doel,
+		"scope":             scope,
+		"deliverable":       deliverable,
+		"bevindingen":       bevindingen,
+		"volgende_stap":     volgendeStap,
+		"deadline":          deadline,
+		"geschatte_minuten": geschatteMinuten,
+		"waarde_indicatie":  waardeIndicatie,
+		"stack_tags":        stackTags,
+		"tags":              tags,
+		"completed_at":      completedAt,
+		"aangemaakt":        createdAt.Format(time.RFC3339),
+		"laatst_bijgewerkt": updatedAt.Format(time.RFC3339),
+	}, companyID, projectID, nil
+}
+
+func (s *LaventeCareStore) mailAIQuote(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, error) {
+	if id == nil {
+		return nil, nil, nil
+	}
+	quote, err := s.GetQuote(ctx, userID, *id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return map[string]any{
+		"id":                quote.ID.String(),
+		"company_id":        uuidPtrString(quote.CompanyID),
+		"project_id":        uuidPtrString(quote.ProjectID),
+		"workstream_id":     uuidPtrString(quote.WorkstreamID),
+		"quote_number":      quote.QuoteNumber,
+		"titel":             quote.Titel,
+		"status":            quote.Status,
+		"issue_date":        quote.IssueDate,
+		"valid_until":       quote.ValidUntil,
+		"currency":          quote.Currency,
+		"total":             centsDisplay(quote.Currency, quote.TotalCents),
+		"notes":             quote.Notes,
+		"company_name":      quote.CompanyName,
+		"project_name":      quote.ProjectName,
+		"workstream_title":  quote.WorkstreamTitle,
+		"laatst_bijgewerkt": quote.UpdatedAt.Format(time.RFC3339),
+	}, quote.CompanyID, nil
+}
+
+func (s *LaventeCareStore) mailAIInvoice(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, error) {
+	if id == nil {
+		return nil, nil, nil
+	}
+	invoice, err := s.GetInvoice(ctx, userID, *id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return map[string]any{
+		"id":                 invoice.ID.String(),
+		"company_id":         uuidPtrString(invoice.CompanyID),
+		"project_id":         uuidPtrString(invoice.ProjectID),
+		"workstream_id":      uuidPtrString(invoice.WorkstreamID),
+		"quote_id":           uuidPtrString(invoice.QuoteID),
+		"invoice_number":     invoice.InvoiceNumber,
+		"status":             invoice.Status,
+		"issue_date":         invoice.IssueDate,
+		"due_date":           invoice.DueDate,
+		"currency":           invoice.Currency,
+		"total":              centsDisplay(invoice.Currency, invoice.TotalCents),
+		"paid":               centsDisplay(invoice.Currency, invoice.PaidCents),
+		"payment_provider":   invoice.PaymentProvider,
+		"merchant_reference": invoice.MerchantReference,
+		"payment_url":        invoice.PaymentURL,
+		"notes":              invoice.Notes,
+		"company_name":       invoice.CompanyName,
+		"project_name":       invoice.ProjectName,
+		"workstream_title":   invoice.WorkstreamTitle,
+		"laatst_bijgewerkt":  invoice.UpdatedAt.Format(time.RFC3339),
+	}, invoice.CompanyID, nil
+}
+
+func (s *LaventeCareStore) mailAINotes(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
+	if len(ids) == 0 && len(keywords) == 0 {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id::text,
+		        COALESCE(NULLIF(TRIM(titel), ''), 'Notitie'),
+		        COALESCE(deadline::date::text, gewijzigd::date::text),
+		        COALESCE(prioriteit, ''),
+		        LEFT(TRIM(COALESCE(inhoud, '')), 520)
+		   FROM notes
+		  WHERE user_id = $1
+		    AND is_archived = false
+		    AND (
+		      business_context_id = ANY($2::text[])
+		      OR EXISTS (
+		        SELECT 1
+		          FROM unnest($3::text[]) q
+		         WHERE LOWER(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
+		                     COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' || COALESCE(array_to_string(tags, ' '), ''))
+		               LIKE '%' || q || '%'
+		      )
+		    )
+		  ORDER BY is_pinned DESC, COALESCE(triage_flag, false) DESC, gewijzigd DESC
+		  LIMIT 12`,
+		userID, ids, keywords)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "note"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Priority, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIAgenda(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
+	if len(ids) == 0 && len(keywords) == 0 {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	today := time.Now().In(loc)
+	from := today.AddDate(0, 0, -21).Format("2006-01-02")
+	until := today.AddDate(0, 0, 45).Format("2006-01-02")
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT event_id,
+		        titel,
+		        start_datum::text || CASE WHEN COALESCE(start_tijd, '') = '' THEN '' ELSE ' ' || start_tijd END,
+		        status,
+		        LEFT(TRIM(COALESCE(beschrijving, locatie, '')), 420)
+		   FROM personal_events
+		  WHERE user_id = $1
+		    AND start_datum >= $2::date
+		    AND start_datum <= $3::date
+		    AND status NOT IN ('VERWIJDERD', 'PendingDelete')
+		    AND (
+		      business_context_id = ANY($4::text[])
+		      OR EXISTS (
+		        SELECT 1
+		          FROM unnest($5::text[]) q
+		         WHERE LOWER(COALESCE(business_context_title, '') || ' ' || titel || ' ' ||
+		                     COALESCE(beschrijving, '') || ' ' || COALESCE(locatie, '') || ' ' || COALESCE(symbol, ''))
+		               LIKE '%' || q || '%'
+		      )
+		    )
+		  ORDER BY start_datum DESC, COALESCE(start_tijd, '00:00') DESC
+		  LIMIT 12`,
+		userID, from, until, ids, keywords)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "agenda"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Status, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAISchedule(ctx context.Context, userID string) ([]model.LCMailAIContextItem, error) {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT event_id,
+		        titel,
+		        start_datum::text || CASE WHEN COALESCE(start_tijd, '') = '' THEN '' ELSE ' ' || start_tijd END,
+		        status,
+		        LEFT(TRIM(COALESCE(shift_type, '') || ' ' || COALESCE(locatie, '') || ' ' || COALESCE(werktijd, '')), 360)
+		   FROM schedule
+		  WHERE user_id = $1
+		    AND start_datum >= $2::date
+		  ORDER BY start_datum, start_tijd
+		  LIMIT 8`,
+		userID, time.Now().In(loc).Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "schedule"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Status, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIActions(ctx context.Context, userID string, companyID, projectID, workstreamID *uuid.UUID) ([]model.LCMailAIContextItem, error) {
+	if companyID == nil && projectID == nil && workstreamID == nil {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id::text, title, COALESCE(due_date, updated_at::date::text),
+		        status, priority, LEFT(TRIM(COALESCE(summary, '')), 420)
+		   FROM lc_action_items
+		  WHERE user_id = $1
+		    AND status NOT IN ('afgerond', 'done', 'gesloten', 'gearchiveerd')
+		    AND (
+		      ($2::uuid IS NOT NULL AND linked_company_id = $2)
+		      OR ($3::uuid IS NOT NULL AND linked_project_id = $3)
+		      OR ($4::uuid IS NOT NULL AND linked_workstream_id = $4)
+		    )
+		  ORDER BY CASE priority WHEN 'hoog' THEN 1 WHEN 'normaal' THEN 2 ELSE 3 END, updated_at DESC
+		  LIMIT 12`,
+		userID, companyID, projectID, workstreamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "action"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Status, &item.Priority, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIActivity(ctx context.Context, userID string, companyID, projectID, workstreamID *uuid.UUID) ([]model.LCMailAIContextItem, error) {
+	if companyID == nil && projectID == nil && workstreamID == nil {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id::text, title, occurred_at::date::text, event_type,
+		        LEFT(TRIM(COALESCE(body, '')), 460)
+		   FROM lc_activity_events
+		  WHERE user_id = $1
+		    AND (
+		      ($2::uuid IS NOT NULL AND company_id = $2)
+		      OR ($3::uuid IS NOT NULL AND project_id = $3)
+		      OR ($4::uuid IS NOT NULL AND workstream_id = $4)
+		    )
+		  ORDER BY occurred_at DESC
+		  LIMIT 12`,
+		userID, companyID, projectID, workstreamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "activity"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Status, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIBilling(ctx context.Context, userID string, companyID, projectID, workstreamID *uuid.UUID) ([]model.LCMailAIContextItem, error) {
+	if companyID == nil && projectID == nil && workstreamID == nil {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT type, id, title, date, status, summary
+		   FROM (
+		     SELECT 'quote' AS type,
+		            id::text AS id,
+		            quote_number || ' - ' || titel AS title,
+		            issue_date::text AS date,
+		            status,
+		            CONCAT(currency, ' ', ROUND(total_cents::numeric / 100, 2), ' ', COALESCE(notes, '')) AS summary,
+		            updated_at
+		       FROM lc_quotes
+		      WHERE user_id = $1
+		        AND (($2::uuid IS NOT NULL AND company_id = $2)
+		          OR ($3::uuid IS NOT NULL AND project_id = $3)
+		          OR ($4::uuid IS NOT NULL AND workstream_id = $4))
+		     UNION ALL
+		     SELECT 'invoice' AS type,
+		            id::text AS id,
+		            invoice_number AS title,
+		            COALESCE(due_date, issue_date)::text AS date,
+		            status,
+		            CONCAT(currency, ' ', ROUND(total_cents::numeric / 100, 2), ' betaald ', ROUND(paid_cents::numeric / 100, 2), ' ', COALESCE(notes, '')) AS summary,
+		            updated_at
+		       FROM lc_invoices
+		      WHERE user_id = $1
+		        AND (($2::uuid IS NOT NULL AND company_id = $2)
+		          OR ($3::uuid IS NOT NULL AND project_id = $3)
+		          OR ($4::uuid IS NOT NULL AND workstream_id = $4))
+		   ) billing
+		  ORDER BY updated_at DESC
+		  LIMIT 10`,
+		userID, companyID, projectID, workstreamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		if err := rows.Scan(&item.Type, &item.ID, &item.Title, &item.Date, &item.Status, &item.Summary); err != nil {
+			return nil, err
+		}
+		item.Type = "billing_" + item.Type
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *LaventeCareStore) mailAIDossier(ctx context.Context, userID string, companyID, projectID, workstreamID *uuid.UUID) ([]model.LCMailAIContextItem, error) {
+	if companyID == nil && projectID == nil && workstreamID == nil {
+		return []model.LCMailAIContextItem{}, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id::text, titel, generated_at::date::text, context_type,
+		        LEFT(TRIM(COALESCE(notes, context_title, template_label, '')), 380)
+		   FROM lc_dossier_documents
+		  WHERE user_id = $1
+		    AND (
+		      ($2::uuid IS NOT NULL AND company_id = $2)
+		      OR ($3::uuid IS NOT NULL AND project_id = $3)
+		      OR ($4::uuid IS NOT NULL AND workstream_id = $4)
+		    )
+		  ORDER BY generated_at DESC
+		  LIMIT 8`,
+		userID, companyID, projectID, workstreamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.LCMailAIContextItem{}
+	for rows.Next() {
+		var item model.LCMailAIContextItem
+		item.Type = "dossier"
+		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Status, &item.Summary); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func mailAIContextKeys(company *model.LCCompany, contact *model.LCContact, project map[string]any, workstream map[string]any) ([]string, []string) {
+	ids := []string{}
+	keywords := []string{"laventecare"}
+	if company != nil {
+		ids = append(ids, company.ID.String())
+		keywords = append(keywords, company.Naam, deref(company.Website), deref(company.Sector))
+	}
+	if contact != nil {
+		ids = append(ids, contact.ID.String())
+		keywords = append(keywords, contact.Naam, deref(contact.Email), deref(contact.Rol))
+	}
+	if project != nil {
+		ids = append(ids, stringMapValue(project, "id"))
+		keywords = append(keywords, stringMapValue(project, "naam"), stringMapValue(project, "fase"), stringMapValue(project, "status"))
+	}
+	if workstream != nil {
+		ids = append(ids, stringMapValue(workstream, "id"))
+		keywords = append(keywords, stringMapValue(workstream, "titel"), stringMapValue(workstream, "klant_naam"),
+			stringMapValue(workstream, "type"), stringMapValue(workstream, "status"), stringMapValue(workstream, "doel"),
+			stringMapValue(workstream, "scope"), stringMapValue(workstream, "deliverable"))
+		for _, key := range []string{"stack_tags", "tags"} {
+			if values, ok := workstream[key].([]string); ok {
+				keywords = append(keywords, values...)
+			}
+		}
+	}
+	return dedupeNonEmpty(ids), dedupeLowerKeywords(keywords)
+}
+
+func safeStringMap(values map[string]string) map[string]string {
+	result := map[string]string{}
+	for key, value := range values {
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func uuidPtrString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	value := id.String()
+	return &value
+}
+
+func stringMapValue(values map[string]any, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case *string:
+		return deref(value)
+	case []string:
+		return strings.Join(value, " ")
+	case *uuid.UUID:
+		if value == nil {
+			return ""
+		}
+		return value.String()
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func dedupeNonEmpty(values []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func dedupeLowerKeywords(values []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if len(value) < 3 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func centsDisplay(currency string, cents int) string {
+	currency = valueOr(strings.TrimSpace(currency), "EUR")
+	return fmt.Sprintf("%s %.2f", currency, float64(cents)/100)
 }
 
 func mailOutboxSelectSQL() string {

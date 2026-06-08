@@ -471,6 +471,66 @@ type LCMailSendRequest struct {
 	Send         bool              `json:"send"`
 }
 
+type LCMailAISuggestionRequest struct {
+	TemplateID   uuid.UUID         `json:"template_id"`
+	CompanyID    *uuid.UUID        `json:"company_id"`
+	ContactID    *uuid.UUID        `json:"contact_id"`
+	ProjectID    *uuid.UUID        `json:"project_id"`
+	WorkstreamID *uuid.UUID        `json:"workstream_id"`
+	QuoteID      *uuid.UUID        `json:"quote_id"`
+	InvoiceID    *uuid.UUID        `json:"invoice_id"`
+	ToEmail      *string           `json:"to_email"`
+	ToName       *string           `json:"to_name"`
+	Intent       string            `json:"intent"`
+	Tone         string            `json:"tone"`
+	Variables    map[string]string `json:"variables"`
+}
+
+type LCMailAISuggestion struct {
+	Variables   map[string]string `json:"variables"`
+	SubjectHint *string           `json:"subject_hint,omitempty"`
+	Briefing    string            `json:"briefing"`
+	Sources     []LCMailAISource  `json:"sources"`
+	Confidence  string            `json:"confidence"`
+	GeneratedAt time.Time         `json:"generated_at"`
+}
+
+type LCMailAISource struct {
+	Type    string `json:"type"`
+	Title   string `json:"title"`
+	Date    string `json:"date,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+type LCMailAIContext struct {
+	Template     *LCMailTemplate       `json:"template,omitempty"`
+	Company      *LCCompany            `json:"company,omitempty"`
+	Contact      *LCContact            `json:"contact,omitempty"`
+	Project      map[string]any        `json:"project,omitempty"`
+	Workstream   map[string]any        `json:"workstream,omitempty"`
+	Quote        map[string]any        `json:"quote,omitempty"`
+	Invoice      map[string]any        `json:"invoice,omitempty"`
+	Notes        []LCMailAIContextItem `json:"notes"`
+	Agenda       []LCMailAIContextItem `json:"agenda"`
+	Schedule     []LCMailAIContextItem `json:"schedule"`
+	Actions      []LCMailAIContextItem `json:"actions"`
+	Activity     []LCMailAIContextItem `json:"activity"`
+	Billing      []LCMailAIContextItem `json:"billing"`
+	Dossier      []LCMailAIContextItem `json:"dossier"`
+	ExistingVars map[string]string     `json:"existing_vars"`
+	Today        string                `json:"today"`
+}
+
+type LCMailAIContextItem struct {
+	Type     string `json:"type"`
+	ID       string `json:"id,omitempty"`
+	Title    string `json:"title"`
+	Date     string `json:"date,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Priority string `json:"priority,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+}
+
 type LCBillingSummary struct {
 	Quotes              int    `json:"quotes"`
 	OpenQuotes          int    `json:"openQuotes"`
