@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -19,6 +20,11 @@ import (
 type LaventeCareStore struct {
 	db *DB
 }
+
+var (
+	ErrQuoteNotAccepted = errors.New("quote must be accepted before invoice conversion")
+	ErrQuoteHasNoLines  = errors.New("quote has no lines to invoice")
+)
 
 // NewLaventeCareStore creates a new LaventeCareStore.
 func NewLaventeCareStore(db *DB) *LaventeCareStore {
@@ -1348,6 +1354,22 @@ func (s *LaventeCareStore) ListQuoteLines(ctx context.Context, userID string, co
 	return pgx.CollectRows(rows, scanQuoteLine)
 }
 
+func (s *LaventeCareStore) ListQuoteLinesByQuote(ctx context.Context, userID string, quoteID uuid.UUID) ([]model.LCQuoteLine, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT l.id, l.quote_id, l.user_id, l.description, l.quantity,
+		        l.unit_amount_cents, l.total_cents, l.sort_order
+		   FROM lc_quote_lines l
+		   JOIN lc_quotes q ON q.id = l.quote_id
+		  WHERE l.user_id = $1 AND q.user_id = $1 AND l.quote_id = $2
+		  ORDER BY l.sort_order ASC`,
+		userID, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanQuoteLine)
+}
+
 func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input model.LCQuoteCreate) (*model.LCQuote, error) {
 	if strings.TrimSpace(input.Titel) == "" {
 		return nil, pgx.ErrNoRows
@@ -1570,7 +1592,7 @@ func (s *LaventeCareStore) ListInvoices(ctx context.Context, userID string, limi
 		limit = 40
 	}
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id,
+		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id, i.quote_id,
 		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
 		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
 		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
@@ -1611,6 +1633,29 @@ func (s *LaventeCareStore) ListInvoiceLines(ctx context.Context, userID string, 
 }
 
 func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, input model.LCInvoiceCreate) (*model.LCInvoice, error) {
+	if input.QuoteID != nil {
+		existing, err := s.GetInvoiceByQuote(ctx, userID, *input.QuoteID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, nil
+		}
+		quote, err := s.GetQuote(ctx, userID, *input.QuoteID)
+		if err != nil {
+			return nil, err
+		}
+		if input.CompanyID == nil {
+			input.CompanyID = quote.CompanyID
+		}
+		if input.ProjectID == nil {
+			input.ProjectID = quote.ProjectID
+		}
+		if input.WorkstreamID == nil {
+			input.WorkstreamID = quote.WorkstreamID
+		}
+	}
+
 	companyID, err := s.resolveBillingCompanyID(ctx, userID, input.CompanyID, input.ProjectID, input.WorkstreamID, nil)
 	if err != nil {
 		return nil, err
@@ -1666,13 +1711,14 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO lc_invoices (id, user_id, company_id, project_id, workstream_id,
+		`INSERT INTO lc_invoices (id, user_id, company_id, project_id, workstream_id, quote_id,
 		        invoice_number, status, issue_date, due_date, currency, subtotal_cents,
 		        vat_rate_bps, vat_cents, total_cents, paid_cents, payment_provider,
 		        merchant_reference, notes, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,'bunq',$15,$16,$17,$17)`,
-		id, userID, companyID, input.ProjectID, input.WorkstreamID, number, status, issueDate,
-		dueDate, currency, subtotal, vatRate, vat, total, merchantReference, cleanStringPtr(input.Notes), now)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,'bunq',$16,$17,$18,$18)`,
+		id, userID, companyID, input.ProjectID, input.WorkstreamID, input.QuoteID, number, status,
+		issueDate, dueDate, currency, subtotal, vatRate, vat, total, merchantReference,
+		cleanStringPtr(input.Notes), now)
 	if err != nil {
 		return nil, err
 	}
@@ -1712,9 +1758,68 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 	return s.GetInvoice(ctx, userID, id)
 }
 
+func (s *LaventeCareStore) CreateInvoiceFromQuote(ctx context.Context, userID string, quoteID uuid.UUID) (*model.LCInvoice, error) {
+	existing, err := s.GetInvoiceByQuote(ctx, userID, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	quote, err := s.GetQuote(ctx, userID, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	if quote.Status != "geaccepteerd" {
+		return nil, ErrQuoteNotAccepted
+	}
+
+	quoteLines, err := s.ListQuoteLinesByQuote(ctx, userID, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	if len(quoteLines) == 0 {
+		return nil, ErrQuoteHasNoLines
+	}
+
+	lines := make([]model.LCInvoiceLineCreate, 0, len(quoteLines))
+	for idx, line := range quoteLines {
+		sortOrder := line.SortOrder
+		if sortOrder == 0 {
+			sortOrder = idx + 1
+		}
+		lines = append(lines, model.LCInvoiceLineCreate{
+			Description:     line.Description,
+			QuantityMinutes: maxInt(line.Quantity, 1) * 60,
+			UnitAmountCents: line.UnitAmountCents,
+			VatRateBps:      &quote.VatRateBps,
+			TotalCents:      line.TotalCents,
+			SortOrder:       sortOrder,
+		})
+	}
+
+	notes := fmt.Sprintf("Aangemaakt vanuit offerte %s - %s.", quote.QuoteNumber, quote.Titel)
+	if quote.Notes != nil && strings.TrimSpace(*quote.Notes) != "" {
+		notes = notes + "\n\nOffertenotitie:\n" + strings.TrimSpace(*quote.Notes)
+	}
+
+	return s.CreateInvoice(ctx, userID, model.LCInvoiceCreate{
+		CompanyID:    quote.CompanyID,
+		ProjectID:    quote.ProjectID,
+		WorkstreamID: quote.WorkstreamID,
+		QuoteID:      &quote.ID,
+		Status:       "concept",
+		Currency:     quote.Currency,
+		VatRateBps:   &quote.VatRateBps,
+		Notes:        &notes,
+		Lines:        lines,
+	})
+}
+
 func (s *LaventeCareStore) GetInvoice(ctx context.Context, userID string, id uuid.UUID) (*model.LCInvoice, error) {
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id,
+		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id, i.quote_id,
 		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
 		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
 		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
@@ -1737,6 +1842,36 @@ func (s *LaventeCareStore) GetInvoice(ctx context.Context, userID string, id uui
 	}
 	if len(invoices) == 0 {
 		return nil, pgx.ErrNoRows
+	}
+	return &invoices[0], nil
+}
+
+func (s *LaventeCareStore) GetInvoiceByQuote(ctx context.Context, userID string, quoteID uuid.UUID) (*model.LCInvoice, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT i.id, i.user_id, i.company_id, i.project_id, i.workstream_id, i.quote_id,
+		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
+		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
+		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
+		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        c.naam, p.naam, w.titel
+		   FROM lc_invoices i
+		   LEFT JOIN lc_companies c ON c.id = i.company_id
+		   LEFT JOIN lc_projects p ON p.id = i.project_id
+		   LEFT JOIN lc_workstreams w ON w.id = i.workstream_id
+		  WHERE i.user_id = $1 AND i.quote_id = $2 AND i.status <> 'geannuleerd'
+		  ORDER BY i.created_at DESC
+		  LIMIT 1`,
+		userID, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	invoices, err := pgx.CollectRows(rows, scanInvoice)
+	if err != nil {
+		return nil, err
+	}
+	if len(invoices) == 0 {
+		return nil, nil
 	}
 	return &invoices[0], nil
 }
@@ -2449,7 +2584,7 @@ func scanTimeEntry(row pgx.CollectableRow) (model.LCTimeEntry, error) {
 func scanInvoice(row pgx.CollectableRow) (model.LCInvoice, error) {
 	var i model.LCInvoice
 	err := row.Scan(&i.ID, &i.UserID, &i.CompanyID, &i.ProjectID, &i.WorkstreamID,
-		&i.InvoiceNumber, &i.Status, &i.IssueDate, &i.DueDate, &i.Currency,
+		&i.QuoteID, &i.InvoiceNumber, &i.Status, &i.IssueDate, &i.DueDate, &i.Currency,
 		&i.SubtotalCents, &i.VatRateBps, &i.VatCents, &i.TotalCents, &i.PaidCents,
 		&i.PaymentProvider, &i.ProviderRequestID, &i.MerchantReference,
 		&i.PaymentURL, &i.SentAt, &i.PaidAt, &i.Notes, &i.CreatedAt, &i.UpdatedAt,

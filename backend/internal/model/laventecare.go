@@ -485,6 +485,7 @@ type LCInvoice struct {
 	CompanyID         *uuid.UUID `json:"company_id" db:"company_id"`
 	ProjectID         *uuid.UUID `json:"project_id" db:"project_id"`
 	WorkstreamID      *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	QuoteID           *uuid.UUID `json:"quote_id" db:"quote_id"`
 	InvoiceNumber     string     `json:"invoice_number" db:"invoice_number"`
 	Status            string     `json:"status" db:"status"`
 	IssueDate         string     `json:"issue_date" db:"issue_date"`
@@ -536,6 +537,7 @@ type LCInvoiceCreate struct {
 	CompanyID    *uuid.UUID            `json:"company_id"`
 	ProjectID    *uuid.UUID            `json:"project_id"`
 	WorkstreamID *uuid.UUID            `json:"workstream_id"`
+	QuoteID      *uuid.UUID            `json:"quote_id"`
 	Status       string                `json:"status"`
 	IssueDate    *string               `json:"issue_date"`
 	DueDate      *string               `json:"due_date"`

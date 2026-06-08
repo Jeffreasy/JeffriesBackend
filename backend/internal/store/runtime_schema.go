@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS lc_invoices (
     company_id          UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
     project_id          UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
     workstream_id       UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL,
+    quote_id            UUID REFERENCES lc_quotes(id) ON DELETE SET NULL,
     invoice_number      TEXT NOT NULL,
     status              TEXT NOT NULL DEFAULT 'concept',
     issue_date          DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -269,6 +270,7 @@ ALTER TABLE lc_time_entries
 
 ALTER TABLE lc_invoices
     ADD COLUMN IF NOT EXISTS workstream_id UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS quote_id UUID REFERENCES lc_quotes(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS payment_provider TEXT NOT NULL DEFAULT 'bunq',
     ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
     ADD COLUMN IF NOT EXISTS merchant_reference TEXT,
@@ -329,6 +331,14 @@ CREATE INDEX IF NOT EXISTS idx_lc_invoices_user_created
 CREATE INDEX IF NOT EXISTS idx_lc_invoices_company
     ON lc_invoices (company_id, created_at DESC)
     WHERE company_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_invoices_quote
+    ON lc_invoices (quote_id, created_at DESC)
+    WHERE quote_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lc_invoices_quote_unique_active
+    ON lc_invoices (user_id, quote_id)
+    WHERE quote_id IS NOT NULL AND status <> 'geannuleerd';
 
 CREATE INDEX IF NOT EXISTS idx_lc_invoice_lines_invoice
     ON lc_invoice_lines (invoice_id, sort_order);

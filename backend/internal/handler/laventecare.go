@@ -150,6 +150,41 @@ func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Re
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// CreateInvoiceFromQuote creates an invoice draft from an accepted LaventeCare quote.
+// @Summary Create Invoice From Quote
+// @Description Converts an accepted quote to one invoice draft and returns an existing active invoice if it was already converted
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Quote ID (UUID)"
+// @Success 201 {object} model.LCInvoice
+// @Failure 400 {string} string "Quote is not accepted or has no lines"
+// @Failure 404 {string} string "Quote not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/quotes/{id}/invoice [post]
+func (h *LaventeCareHandler) CreateInvoiceFromQuote(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid quote ID")
+		return
+	}
+	invoice, err := h.store.CreateInvoiceFromQuote(r.Context(), h.userID, id)
+	if err != nil {
+		switch err {
+		case store.ErrQuoteNotAccepted:
+			Error(w, http.StatusBadRequest, "Offerte moet eerst geaccepteerd zijn")
+		case store.ErrQuoteHasNoLines:
+			Error(w, http.StatusBadRequest, "Offerte heeft geen factuurregels")
+		case pgx.ErrNoRows:
+			Error(w, http.StatusNotFound, "Offerte niet gevonden")
+		default:
+			Error(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	JSON(w, http.StatusCreated, invoice)
+}
+
 // CreateTimeEntry creates a billable LaventeCare time entry.
 // @Summary Create Time Entry
 // @Description Logs billable or non-billable work time for a customer/project/workstream

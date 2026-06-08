@@ -192,6 +192,7 @@ func registerRoutes(
 				r.With(authMw).Patch("/contacts/{id}", lcH.UpdateContact)
 				r.With(authMw).Post("/quotes", lcH.CreateQuote)
 				r.With(authMw).Patch("/quotes/{id}/status", lcH.UpdateQuoteStatus)
+				r.With(authMw).Post("/quotes/{id}/invoice", lcH.CreateInvoiceFromQuote)
 				r.With(authMw).Post("/time-entries", lcH.CreateTimeEntry)
 				r.With(authMw).Post("/invoices", lcH.CreateInvoice)
 				r.With(authMw).Patch("/invoices/{id}/status", lcH.UpdateInvoiceStatus)
