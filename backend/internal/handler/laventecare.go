@@ -2122,6 +2122,7 @@ func mailAIAddVariable(values map[string]string, key, value string) {
 func mailAIIsDefaultPilotAccessSummary(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	return normalized == "" ||
+		normalized == "via het afgesproken veilige kanaal" ||
 		normalized == "pilottoegang stem ik voor de start af via het afgesproken kanaal" ||
 		normalized == "pilottoegang stemmen we voor de start af via het afgesproken kanaal" ||
 		normalized == "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal"

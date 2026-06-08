@@ -596,7 +596,7 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 		return nil, errors.New("mail template is not active")
 	}
 
-	contextValues, companyID, contactID, toEmail, toName, err := s.buildMailRenderContext(ctx, userID, input)
+	contextValues, companyID, contactID, toEmail, toName, err := s.buildMailRenderContext(ctx, userID, input, template.TemplateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +674,7 @@ func (s *LaventeCareStore) MarkMailOutboxFailed(ctx context.Context, userID stri
 	return nil
 }
 
-func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
+func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest, templateKey string) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
 	inputVars := safeStringMap(input.Variables)
 	values := map[string]string{
 		"laventecare.name":       "LaventeCare",
@@ -863,7 +863,16 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		return nil, nil, nil, "", nil, err
 	}
 	if hasAccessNote && isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
-		setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
+		if templateKey == "pilot_start" {
+			details, err := s.mailAIPilotAccessDetails(ctx, userID, accessIDs, accessKeywords)
+			if err != nil {
+				return nil, nil, nil, "", nil, err
+			}
+			setMailValue(values, "pilot.access_summary", details)
+		}
+		if isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
+			setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
+		}
 	}
 
 	return values, companyID, contactID, toEmail, toName, nil
@@ -1101,6 +1110,57 @@ func (s *LaventeCareStore) mailAIAccessNoteExists(ctx context.Context, userID st
 		userID, ids, keywords,
 	).Scan(&exists)
 	return exists, err
+}
+
+func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID string, ids, keywords []string) (string, error) {
+	keywords = mailAIUsefulKeywords(keywords)
+	if len(ids) == 0 && len(keywords) == 0 {
+		return "", nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT COALESCE(titel, ''), COALESCE(inhoud, '')
+		   FROM notes
+		  WHERE user_id = $1
+		    AND is_archived = false
+		    AND lower(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
+		              COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' ||
+		              COALESCE(array_to_string(tags, ' '), ''))
+		        ~ '(account|accounts|login|inlog|toegang|wachtwoord|password|gebruikersnaam|username|portal)'
+		    AND (
+		      business_context_id = ANY($2::text[])
+		      OR EXISTS (
+		        SELECT 1
+		          FROM unnest($3::text[]) q
+		         WHERE lower(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
+		                     COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' ||
+		                     COALESCE(array_to_string(tags, ' '), ''))
+		               LIKE '%' || q || '%'
+		      )
+		    )
+		  ORDER BY is_pinned DESC, COALESCE(triage_flag, false) DESC, gewijzigd DESC
+		  LIMIT 4`,
+		userID, ids, keywords,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	credentials := []mailAccessCredential{}
+	for rows.Next() {
+		var title, content string
+		if err := rows.Scan(&title, &content); err != nil {
+			return "", err
+		}
+		credentials = append(credentials, parseMailAccessCredentials(title+"\n"+content)...)
+		if len(credentials) >= 8 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return formatMailAccessCredentials(credentials), nil
 }
 
 func (s *LaventeCareStore) mailAIAgenda(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
@@ -1471,6 +1531,126 @@ func redactMailSensitiveText(value string) string {
 	return value
 }
 
+type mailAccessCredential struct {
+	LoginURL string
+	Email    string
+	Username string
+	Password string
+	Role     string
+}
+
+func parseMailAccessCredentials(value string) []mailAccessCredential {
+	credentials := []mailAccessCredential{}
+	current := mailAccessCredential{}
+	flush := func() {
+		if current.LoginURL == "" && current.Email == "" && current.Username == "" && current.Password == "" && current.Role == "" {
+			return
+		}
+		credentials = append(credentials, current)
+		current = mailAccessCredential{}
+	}
+
+	for _, rawLine := range strings.Split(value, "\n") {
+		line := strings.TrimSpace(strings.TrimLeft(rawLine, "-* "))
+		if line == "" {
+			continue
+		}
+		key, lineValue, ok := splitMailAccessLabel(line)
+		if !ok || lineValue == "" {
+			continue
+		}
+		switch key {
+		case "email":
+			if current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "" {
+				flush()
+			}
+			current.Email = lineValue
+		case "username":
+			if current.Username != "" && (current.Email != "" || current.Password != "" || current.Role != "") {
+				flush()
+			}
+			current.Username = lineValue
+		case "password":
+			current.Password = lineValue
+		case "role":
+			current.Role = lineValue
+		case "url":
+			if current.LoginURL != "" && (current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "") {
+				flush()
+			}
+			current.LoginURL = lineValue
+		}
+	}
+	flush()
+	if len(credentials) > 8 {
+		return credentials[:8]
+	}
+	return credentials
+}
+
+func splitMailAccessLabel(line string) (string, string, bool) {
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) != 2 {
+		parts = strings.SplitN(line, "=", 2)
+	}
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	key := strings.ToLower(strings.TrimSpace(parts[0]))
+	value := strings.TrimSpace(parts[1])
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.Join(strings.Fields(key), " ")
+	switch key {
+	case "e mail", "email", "mail", "account email":
+		return "email", value, true
+	case "gebruikersnaam", "username", "user", "login", "account", "accountnaam":
+		return "username", value, true
+	case "wachtwoord", "password", "pass", "ww":
+		return "password", value, true
+	case "rol", "role", "rechten", "rechten rol":
+		return "role", value, true
+	case "login url", "url", "portal", "portal url", "omgeving url":
+		return "url", value, true
+	default:
+		return "", "", false
+	}
+}
+
+func formatMailAccessCredentials(credentials []mailAccessCredential) string {
+	if len(credentials) == 0 {
+		return ""
+	}
+	lines := []string{"Pilotaccounts:"}
+	for index, credential := range credentials {
+		parts := []string{}
+		if credential.LoginURL != "" {
+			parts = append(parts, "Login URL: "+credential.LoginURL)
+		}
+		if credential.Email != "" {
+			parts = append(parts, "E-mail: "+credential.Email)
+		}
+		if credential.Username != "" && !strings.EqualFold(credential.Username, credential.Email) {
+			parts = append(parts, "Gebruikersnaam: "+credential.Username)
+		}
+		if credential.Password != "" {
+			parts = append(parts, "Wachtwoord: "+credential.Password)
+		}
+		if credential.Role != "" {
+			parts = append(parts, "Rol: "+credential.Role)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, strings.Join(parts, " - ")))
+	}
+	if len(lines) == 1 {
+		return ""
+	}
+	lines = append(lines, "Gebruik deze gegevens alleen voor de pilot/testfase; na afloop trekken we toegang in of zetten we deze om.")
+	return strings.Join(lines, "\n")
+}
+
 func isMailAccessContextText(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -1753,6 +1933,7 @@ func setMailValue(values map[string]string, key, value string) {
 func isDefaultPilotAccessSummary(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	return normalized == "" ||
+		normalized == "via het afgesproken veilige kanaal" ||
 		normalized == "pilottoegang stemmen we voor de start af via het afgesproken kanaal" ||
 		normalized == "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal"
 }
