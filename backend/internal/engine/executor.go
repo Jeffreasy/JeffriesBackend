@@ -2508,7 +2508,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"scope":       "laventecare klanten",
 			"count":       len(companies),
 			"items":       companies,
-			"instruction": "Gebruik klanten als centrale CRM-basis. Koppel leads, opdrachten, projecten, notities, agenda en dossierdocumenten via company_id waar mogelijk.",
+			"instruction": "Gebruik klantdossiers als centrale CRM-basis. Technisch heet dit company_id; koppel leads, opdrachten, projecten, notities, agenda en dossierdocumenten via company_id waar mogelijk.",
 		}, err)
 
 	case "laventecareContactenOpvragen":

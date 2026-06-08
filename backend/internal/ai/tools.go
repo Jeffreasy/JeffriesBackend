@@ -875,7 +875,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareKlantenOpvragen",
-			Description: "Haalt LaventeCare klanten/bedrijven op als centrale CRM-basis, inclusief aantallen leads, opdrachten, projecten, acties en dossierdocumenten.",
+			Description: "Haalt LaventeCare klantdossiers op als centrale CRM-basis. Technisch zijn dit companies; zakelijk zijn het klanten, prospects, partners, leveranciers of interne/eigen projectcontexten.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -1049,7 +1049,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareKlantMaken",
-			Description: "Maakt een LaventeCare klant/company dossier. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Description: "Maakt een LaventeCare klantdossier. Technisch wordt dit als company opgeslagen; deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -1057,7 +1057,7 @@ var AllTools = []ToolDefinition{
 					"website": {"type": "string"},
 					"sector": {"type": "string"},
 					"status": {"type": "string", "description": "Bijv. actief, prospect, inactief."},
-					"relatie_type": {"type": "string", "description": "Bijv. prospect, klant, partner, leverancier."},
+					"relatie_type": {"type": "string", "description": "Bijv. prospect, klant, partner, leverancier, intern of eigen_project."},
 					"notities": {"type": "string"},
 					"laatste_contact": {"type": "string", "description": "YYYY-MM-DD of RFC3339."},
 					"volgende_actie": {"type": "string", "description": "YYYY-MM-DD."}
@@ -1070,7 +1070,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareKlantBijwerken",
-			Description: "Werkt een LaventeCare klant/company dossier bij. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Description: "Werkt een LaventeCare klantdossier bij. Technisch wordt dit als company opgeslagen; deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -1092,7 +1092,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareContactMaken",
-			Description: "Maakt een LaventeCare contactpersoon, optioneel gekoppeld aan een klant/company. Deze mutatie komt eerst in de bevestigingswachtrij.",
+			Description: "Maakt een LaventeCare contactpersoon, optioneel gekoppeld aan een klantdossier/company_id. Deze mutatie komt eerst in de bevestigingswachtrij.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -1120,7 +1120,7 @@ var AllTools = []ToolDefinition{
 					"type": {"type": "string", "description": "Bijv. website_platform, integratie, automatisering, ai_workflow, crm_sales, data_reporting, security_privacy, support_beheer, discovery_advies."},
 					"status": {"type": "string", "description": "Default nieuw. Bijv. nieuw, intake, analyse, uitvoering, wacht_op_klant, afgerond."},
 					"prioriteit": {"type": "string"},
-					"company_id": {"type": "string", "description": "Bestaande klant/company UUID. Gebruik dit boven klant_naam wanneer bekend."},
+					"company_id": {"type": "string", "description": "Bestaand klantdossier/company UUID. Gebruik dit boven klant_naam wanneer bekend."},
 					"klant_naam": {"type": "string"},
 					"bron": {"type": "string"},
 					"source_id": {"type": "string"},

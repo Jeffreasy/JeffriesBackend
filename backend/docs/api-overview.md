@@ -90,8 +90,9 @@ When route behavior and Swagger disagree, fix the handler annotation or route mo
 
 ## LaventeCare Customer Dossiers
 
-- `lc_companies` is the first layer for existing customers, prospects, partners, and suppliers.
+- `lc_companies` is the technical table for LaventeCare klantdossiers: customers, prospects, partners, suppliers, and internal/eigen project contexts.
 - Leads, projects, workstreams, actions, and generated dossier documents can all carry `company_id`.
+- `company_id` is the canonical relationship key. Free-text fields such as `klant_naam` are only fallbacks for workstreams that are not linked yet.
 - `lc_contacts` stores reusable people per company, with one optional primary contact per company.
 - The cockpit includes `companies`, `contacts`, and summary counts so frontend, Telegram, and AI tools can reason from the customer base instead of loose names.
 
