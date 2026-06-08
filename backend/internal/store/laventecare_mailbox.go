@@ -346,6 +346,27 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nHierbij een korte update over {{project.naam}}.\n\n{{project.update}}\n\nNu belangrijk:\n- Status: {{project.status}}\n- Aandachtspunt: {{project.risk}}\n- Volgende stap: {{next_step}}\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
+			TemplateKey:     "pilot_start",
+			Name:            "Pilot / testfase start",
+			Category:        "delivery",
+			Status:          "active",
+			SubjectTemplate: "Start pilot - {{project.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "De pilot/testfase start met heldere scope, testcriteria en feedbackmoment.",
+				Eyebrow:     "Pilotfase",
+				Title:       "Pilot en testfase starten",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "We kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.",
+				Body:        "De focus ligt op een korte, controleerbare test: wat werkt goed, waar zit frictie en welke keuzes moeten we maken voor de volgende stap.",
+				FocusTitle:  "Pilotafspraken",
+				FocusItems:  []string{"Scope: {{pilot.scope}}", "Testcriteria: {{pilot.criteria}}", "Feedbackmoment: {{pilot.feedback_moment}}", "Toegang: {{pilot.access_summary}}", "Vervolg: {{next_step}}"},
+				CTAURL:      "{{project.url}}",
+				CTALabel:    "Pilot bekijken",
+				ClosingLine: "Na deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nWe kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.\n\nPilotafspraken:\n- Scope: {{pilot.scope}}\n- Testcriteria: {{pilot.criteria}}\n- Feedbackmoment: {{pilot.feedback_moment}}\n- Toegang: {{pilot.access_summary}}\n- Vervolg: {{next_step}}\n\nNa deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
 			TemplateKey:     "delivery_handover",
 			Name:            "Oplevering en overdracht",
 			Category:        "delivery",
@@ -677,6 +698,10 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"project.update":         "De voortgang loopt volgens afspraak.",
 		"project.risk":           "geen bijzonderheden",
 		"project.url":            "",
+		"pilot.scope":            "de afgesproken testscope",
+		"pilot.criteria":         "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
+		"pilot.feedback_moment":  "na de eerste testperiode",
+		"pilot.access_summary":   "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal",
 		"meeting.topic":          "afstemming",
 		"meeting.summary":        "De besproken punten zijn vastgelegd in het klantdossier.",
 		"meeting.actions":        "de vervolgstap wordt opgepakt",
@@ -732,6 +757,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		setMailValue(values, "project.naam", stringMapValue(project, "naam"))
 		setMailValue(values, "project.status", stringMapValue(project, "status"))
 		setMailValue(values, "project.update", stringMapValue(project, "samenvatting"))
+		setMailValue(values, "pilot.scope", stringMapValue(project, "samenvatting"))
 	}
 	if input.WorkstreamID != nil {
 		workstream, _, projectID, err := s.mailAIWorkstream(ctx, userID, input.WorkstreamID)
@@ -751,6 +777,16 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 			stringMapValue(workstream, "bevindingen"),
 			stringMapValue(workstream, "volgende_stap"),
 		}, " "))
+		setMailValue(values, "pilot.scope", joinMailParts([]string{
+			stringMapValue(workstream, "doel"),
+			stringMapValue(workstream, "scope"),
+			stringMapValue(workstream, "deliverable"),
+		}, " "))
+		setMailValue(values, "pilot.criteria", joinMailParts([]string{
+			stringMapValue(workstream, "deliverable"),
+			"functionele controle en feedback op de afgesproken scope",
+		}, " - "))
+		setMailValue(values, "pilot.feedback_moment", stringMapValue(workstream, "deadline"))
 		setMailValue(values, "next_step", stringMapValue(workstream, "volgende_stap"))
 	}
 	if input.QuoteID != nil {
@@ -1011,6 +1047,7 @@ func (s *LaventeCareStore) mailAINotes(ctx context.Context, userID string, ids, 
 		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Priority, &item.Summary); err != nil {
 			return nil, err
 		}
+		item.Summary = redactMailSensitiveText(item.Summary)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -1355,6 +1392,21 @@ func dedupeLowerKeywords(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func redactMailSensitiveText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(wachtwoord|password|pass|ww|token|api[-_ ]?key|client[-_ ]?secret|secret|refresh[-_ ]?token|bearer|pincode|pin)\b\s*[:=]\s*[^\s,;]+`),
+		regexp.MustCompile(`(?i)\b(authorization)\b\s*[:=]\s*[^\s,;]+`),
+	}
+	for _, pattern := range patterns {
+		value = pattern.ReplaceAllString(value, "$1: [afgeschermd]")
+	}
+	return value
 }
 
 func centsDisplay(currency string, cents int) string {

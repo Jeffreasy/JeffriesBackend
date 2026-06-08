@@ -206,6 +206,7 @@ func (h *LaventeCareHandler) SuggestMailContent(w http.ResponseWriter, r *http.R
 Maak uitsluitend een JSON-object voor een professioneel klantmail-concept.
 Gebruik alleen de aangeleverde context. Verzin geen afspraken, bedragen, betaalurls, contactgegevens of toezeggingen.
 Vul url-variabelen zoals cta.url, project.url, quote.url, invoice.payment_url, meeting.url, support.url en change.url alleen als die URL expliciet in de context of bestaande variabelen staat.
+Neem wachtwoorden, tokens, API keys, pincodes of secrets nooit letterlijk over in klantmailvariabelen. Vat toegang veilig samen en verwijs naar het afgesproken veilige kanaal.
 Vul alleen korte, bruikbare templatevariabelen. Schrijf in helder Nederlands, zakelijk warm, concreet en zonder markdown.
 Antwoord exact met JSON in dit schema:
 {
@@ -221,7 +222,7 @@ Toon: %s
 Context JSON:
 %s
 
-Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
+Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
 		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
 
 	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
@@ -1892,6 +1893,7 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		mailAIAddVariable(variables, "project.naam", mailAIMapString(contextBundle.Project, "naam"))
 		mailAIAddVariable(variables, "project.status", mailAIMapString(contextBundle.Project, "status"))
 		mailAIAddVariable(variables, "project.update", mailAIMapString(contextBundle.Project, "samenvatting"))
+		mailAIAddVariable(variables, "pilot.scope", mailAIMapString(contextBundle.Project, "samenvatting"))
 		mailAIAddVariable(variables, "project.risk", "Geen expliciete risico's gevonden in de gekoppelde context.")
 	}
 	if contextBundle.Workstream != nil {
@@ -1905,6 +1907,16 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 			mailAIMapString(contextBundle.Workstream, "bevindingen"),
 			mailAIMapString(contextBundle.Workstream, "volgende_stap"),
 		}, " "))
+		mailAIAddVariable(variables, "pilot.scope", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Workstream, "doel"),
+			mailAIMapString(contextBundle.Workstream, "scope"),
+			mailAIMapString(contextBundle.Workstream, "deliverable"),
+		}, " "))
+		mailAIAddVariable(variables, "pilot.criteria", mailAIJoinNonEmpty([]string{
+			mailAIMapString(contextBundle.Workstream, "deliverable"),
+			"functionele controle en feedback op de afgesproken scope",
+		}, " - "))
+		mailAIAddVariable(variables, "pilot.feedback_moment", mailAIMapString(contextBundle.Workstream, "deadline"))
 		mailAIAddVariable(variables, "next_step", mailAIMapString(contextBundle.Workstream, "volgende_stap"))
 	}
 	if contextBundle.Quote != nil {
@@ -1930,6 +1942,22 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 	}
 	if variables["delivery.done"] == "" {
 		mailAIAddVariable(variables, "delivery.done", mailAIItemsLine(contextBundle.Dossier, 2))
+	}
+	if variables["pilot.scope"] == "" {
+		mailAIAddVariable(variables, "pilot.scope", "de afgesproken testscope")
+	}
+	if variables["pilot.criteria"] == "" {
+		mailAIAddVariable(variables, "pilot.criteria", "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid")
+	}
+	if variables["pilot.feedback_moment"] == "" {
+		mailAIAddVariable(variables, "pilot.feedback_moment", "na de eerste testperiode")
+	}
+	if variables["pilot.access_summary"] == "" {
+		if mailAIHasPilotAccessContext(contextBundle.Notes) {
+			mailAIAddVariable(variables, "pilot.access_summary", "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal")
+		} else {
+			mailAIAddVariable(variables, "pilot.access_summary", "pilottoegang stem ik voor de start af via het afgesproken kanaal")
+		}
 	}
 	if variables["support.summary"] == "" {
 		mailAIAddVariable(variables, "support.summary", mailAIItemsLine(contextBundle.Notes, 2))
@@ -1959,6 +1987,9 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		subjectHint = fmt.Sprintf("%s - %s", contextBundle.Template.Name, target)
 	}
 	briefing := fmt.Sprintf("Contextvoorstel op basis van %d bron(nen). Controleer bedragen, deadlines en klantafspraken voordat je verzendt.", len(sources))
+	if mailAIHasPilotAccessContext(contextBundle.Notes) {
+		briefing = briefing + " Pilotaccount-notitie gevonden; gevoelige waarden zijn afgeschermd en horen alleen bewust via een veilig kanaal gedeeld te worden."
+	}
 	if strings.TrimSpace(input.Intent) != "" {
 		briefing = briefing + " Intent: " + strings.TrimSpace(input.Intent) + "."
 	}
@@ -2047,6 +2078,22 @@ func mailAISourcesFromContext(contextBundle *model.LCMailAIContext) []model.LCMa
 		sources = append(sources, model.LCMailAISource{Type: "laventecare", Title: title, Summary: "Geen extra notities of agenda-items gevonden."})
 	}
 	return sources
+}
+
+func mailAIHasPilotAccessContext(items []model.LCMailAIContextItem) bool {
+	for _, item := range items {
+		text := strings.ToLower(strings.Join([]string{item.Title, item.Summary}, " "))
+		hasAccessWord := strings.Contains(text, "account") ||
+			strings.Contains(text, "login") ||
+			strings.Contains(text, "inlog") ||
+			strings.Contains(text, "toegang") ||
+			strings.Contains(text, "wachtwoord") ||
+			strings.Contains(text, "password")
+		if hasAccessWord && (strings.Contains(text, "pilot") || strings.Contains(text, "test")) {
+			return true
+		}
+	}
+	return false
 }
 
 func mailAIItemsLine(items []model.LCMailAIContextItem, max int) string {
