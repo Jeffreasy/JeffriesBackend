@@ -1952,7 +1952,7 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 	if variables["pilot.feedback_moment"] == "" {
 		mailAIAddVariable(variables, "pilot.feedback_moment", "na de eerste testperiode")
 	}
-	if variables["pilot.access_summary"] == "" {
+	if mailAIIsDefaultPilotAccessSummary(variables["pilot.access_summary"]) {
 		if mailAIHasAccessContext(contextBundle.Notes) {
 			mailAIAddVariable(variables, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 		} else {
@@ -2117,6 +2117,14 @@ func mailAIAddVariable(values map[string]string, key, value string) {
 		return
 	}
 	values[key] = value
+}
+
+func mailAIIsDefaultPilotAccessSummary(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "" ||
+		normalized == "pilottoegang stem ik voor de start af via het afgesproken kanaal" ||
+		normalized == "pilottoegang stemmen we voor de start af via het afgesproken kanaal" ||
+		normalized == "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal"
 }
 
 func mailAIMapString(values map[string]any, key string) string {

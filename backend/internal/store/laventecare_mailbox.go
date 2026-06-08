@@ -854,16 +854,16 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 			values["company.naam"] = "je organisatie"
 		}
 	}
+	for key, value := range inputVars {
+		values[key] = value
+	}
 	accessIDs, accessKeywords := mailAIContextKeys(company, contact, mailProject, mailWorkstream)
 	hasAccessNote, err := s.mailAIAccessNoteExists(ctx, userID, accessIDs, accessKeywords)
 	if err != nil {
 		return nil, nil, nil, "", nil, err
 	}
-	if hasAccessNote {
+	if hasAccessNote && isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
 		setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
-	}
-	for key, value := range inputVars {
-		values[key] = value
 	}
 
 	return values, companyID, contactID, toEmail, toName, nil
@@ -1059,7 +1059,11 @@ func (s *LaventeCareStore) mailAINotes(ctx context.Context, userID string, ids, 
 		if err := rows.Scan(&item.ID, &item.Title, &item.Date, &item.Priority, &item.Summary); err != nil {
 			return nil, err
 		}
-		item.Summary = redactMailSensitiveText(item.Summary)
+		if isMailAccessContextText(strings.Join([]string{item.Title, item.Summary}, " ")) {
+			item.Summary = "Toegangsgegevens/accountcontext aanwezig in gekoppelde notitie. Gevoelige waarden zijn afgeschermd en mogen alleen via het afgesproken veilige kanaal worden gedeeld."
+		} else {
+			item.Summary = redactMailSensitiveText(item.Summary)
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -1080,7 +1084,7 @@ func (s *LaventeCareStore) mailAIAccessNoteExists(ctx context.Context, userID st
 		      AND lower(COALESCE(business_context_title, '') || ' ' || COALESCE(titel, '') || ' ' ||
 		                COALESCE(inhoud, '') || ' ' || COALESCE(symbol, '') || ' ' ||
 		                COALESCE(array_to_string(tags, ' '), ''))
-		          ~ '(account|accounts|login|inlog|toegang|wachtwoord|password|gebruikersnaam|username|portal|omgeving)'
+		          ~ '(account|accounts|login|inlog|toegang|wachtwoord|password|gebruikersnaam|username|portal)'
 		      AND (
 		        business_context_id = ANY($2::text[])
 		        OR EXISTS (
@@ -1467,6 +1471,31 @@ func redactMailSensitiveText(value string) string {
 	return value
 }
 
+func isMailAccessContextText(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	accessWords := []string{
+		"account",
+		"accounts",
+		"login",
+		"inlog",
+		"toegang",
+		"wachtwoord",
+		"password",
+		"gebruikersnaam",
+		"username",
+		"portal",
+	}
+	for _, word := range accessWords {
+		if strings.Contains(value, word) {
+			return true
+		}
+	}
+	return false
+}
+
 func centsDisplay(currency string, cents int) string {
 	currency = valueOr(strings.TrimSpace(currency), "EUR")
 	return fmt.Sprintf("%s %.2f", currency, float64(cents)/100)
@@ -1719,6 +1748,13 @@ func setMailValue(values map[string]string, key, value string) {
 		return
 	}
 	values[key] = value
+}
+
+func isDefaultPilotAccessSummary(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "" ||
+		normalized == "pilottoegang stemmen we voor de start af via het afgesproken kanaal" ||
+		normalized == "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal"
 }
 
 func joinMailParts(values []string, separator string) string {
