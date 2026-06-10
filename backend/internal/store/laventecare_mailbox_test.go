@@ -61,17 +61,35 @@ func TestFormatMailAccessCredentials(t *testing.T) {
 }
 
 func TestFormatMailAccessDetailsHTML(t *testing.T) {
-	details := formatMailAccessDetails([]mailAccessCredential{
+	details := formatMailAccessDetailsWithLoginURL([]mailAccessCredential{
 		{Email: "admin@example.test", Password: "ExamplePass1", Role: "Admin"},
-	})
+	}, "https://pilot.example.test/login")
 	if details.Intro == "" || details.Summary == "" || details.BlockHTML == "" {
 		t.Fatalf("expected complete access details: %#v", details)
 	}
-	if !containsText(details.BlockHTML, "Pilotaccounts") || !containsText(details.BlockHTML, "mailto:admin@example.test") {
+	if !containsText(details.BlockHTML, "Pilotaccounts") || !containsText(details.BlockHTML, "mailto:admin@example.test") || !containsText(details.BlockHTML, "https://pilot.example.test/login") {
 		t.Fatalf("expected structured access HTML, got:\n%s", details.BlockHTML)
+	}
+	if !containsText(details.Summary, "- Login URL: https://pilot.example.test/login") {
+		t.Fatalf("expected login URL in text fallback, got:\n%s", details.Summary)
 	}
 	if containsText(details.BlockHTML, "E-mail: admin@example.test - Wachtwoord") {
 		t.Fatalf("expected access HTML to avoid flat inline credential text:\n%s", details.BlockHTML)
+	}
+}
+
+func TestInferMailPilotLoginURLForHenkeWonen(t *testing.T) {
+	values := map[string]string{
+		"company.naam":    "Henke Wonen",
+		"project.naam":    "Pilot/realisatie",
+		"pilot.scope":     "account/toegang",
+		"project.url":     "",
+		"pilot.login_url": "",
+	}
+
+	url := inferMailPilotLoginURL(values, nil, nil, nil)
+	if url != "https://henke-wonen.vercel.app/login" {
+		t.Fatalf("expected Henke Wonen pilot login URL, got %q", url)
 	}
 }
 

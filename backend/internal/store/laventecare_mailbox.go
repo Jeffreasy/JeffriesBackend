@@ -424,11 +424,11 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 				FocusTitle:  "Pilotafspraken",
 				FocusItems:  []string{"Scope: {{pilot.scope}}", "Testcriteria: {{pilot.criteria}}", "Feedbackmoment: {{pilot.feedback_moment}}", "Toegang: {{pilot.access_intro}}", "Vervolg: {{next_step}}"},
 				ExtraHTML:   "{{pilot.access_block_html}}",
-				CTAURL:      "{{project.url}}",
-				CTALabel:    "Pilot bekijken",
+				CTAURL:      "{{pilot.login_url}}",
+				CTALabel:    "Pilot openen",
 				ClosingLine: "Na deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.",
 			}),
-			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nWe kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.\n\nPilotafspraken:\n- Scope: {{pilot.scope}}\n- Testcriteria: {{pilot.criteria}}\n- Feedbackmoment: {{pilot.feedback_moment}}\n- Toegang: {{pilot.access_intro}}\n{{pilot.access_summary}}\n- Vervolg: {{next_step}}\n\nNa deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nWe kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.\n\nPilotafspraken:\n- Scope: {{pilot.scope}}\n- Testcriteria: {{pilot.criteria}}\n- Feedbackmoment: {{pilot.feedback_moment}}\n- Pilotomgeving: {{pilot.login_url}}\n- Toegang: {{pilot.access_intro}}\n{{pilot.access_summary}}\n- Vervolg: {{next_step}}\n\nNa deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "delivery_handover",
@@ -794,6 +794,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"pilot.scope":               "de afgesproken testscope",
 		"pilot.criteria":            "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
 		"pilot.feedback_moment":     "na de eerste testperiode",
+		"pilot.login_url":           "",
 		"pilot.access_intro":        "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
 		"pilot.access_summary":      "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
 		"pilot.access_block_html":   "",
@@ -969,13 +970,16 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 	// The HTML access block is generated server-side from parsed credential fields.
 	values["pilot.access_block_html"] = ""
 	applyResolvedMailIdentity(values, company, contact, toName)
+	if strings.TrimSpace(values["pilot.login_url"]) == "" {
+		setMailValue(values, "pilot.login_url", inferMailPilotLoginURL(values, company, mailProject, mailWorkstream))
+	}
 	accessIDs, accessKeywords := mailAIContextKeys(company, contact, mailProject, mailWorkstream)
 	hasAccessNote, err := s.mailAIAccessNoteExists(ctx, userID, accessIDs, accessKeywords)
 	if err != nil {
 		return nil, nil, nil, "", nil, err
 	}
 	if hasAccessNote && templateKey == "pilot_start" {
-		details, err := s.mailAIPilotAccessDetails(ctx, userID, accessIDs, accessKeywords)
+		details, err := s.mailAIPilotAccessDetails(ctx, userID, accessIDs, accessKeywords, values["pilot.login_url"])
 		if err != nil {
 			return nil, nil, nil, "", nil, err
 		}
@@ -1054,6 +1058,50 @@ func applyResolvedMailIdentity(values map[string]string, company *model.LCCompan
 	} else if strings.TrimSpace(values["company.naam"]) == "" {
 		values["company.naam"] = "je organisatie"
 	}
+}
+
+func inferMailPilotLoginURL(values map[string]string, company *model.LCCompany, project map[string]any, workstream map[string]any) string {
+	for _, value := range []string{
+		values["pilot.login_url"],
+		values["project.url"],
+		stringMapValue(project, "url"),
+		stringMapValue(project, "login_url"),
+		stringMapValue(workstream, "url"),
+		stringMapValue(workstream, "login_url"),
+	} {
+		if url := cleanMailURL(value); url != "" {
+			return url
+		}
+	}
+	parts := []string{
+		values["company.naam"],
+		values["company.website"],
+		values["project.naam"],
+		values["pilot.scope"],
+		stringMapValue(project, "naam"),
+		stringMapValue(project, "samenvatting"),
+		stringMapValue(workstream, "titel"),
+		stringMapValue(workstream, "klant_naam"),
+		stringMapValue(workstream, "doel"),
+		stringMapValue(workstream, "scope"),
+		stringMapValue(workstream, "deliverable"),
+	}
+	if company != nil {
+		parts = append(parts, company.Naam, deref(company.Website), deref(company.Notities))
+	}
+	haystack := strings.ToLower(strings.Join(parts, " "))
+	if strings.Contains(haystack, "henke wonen") || strings.Contains(haystack, "henkewonen") || strings.Contains(haystack, "henke-wonen") {
+		return "https://henke-wonen.vercel.app/login"
+	}
+	return ""
+}
+
+func cleanMailURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !isSafeMailCTAURL(value) {
+		return ""
+	}
+	return value
 }
 
 func (s *LaventeCareStore) mailAIProject(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, error) {
@@ -1290,7 +1338,7 @@ func (s *LaventeCareStore) mailAIAccessNoteExists(ctx context.Context, userID st
 	return exists, err
 }
 
-func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID string, ids, keywords []string) (mailAccessDetails, error) {
+func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID string, ids, keywords []string, loginURL string) (mailAccessDetails, error) {
 	keywords = mailAIUsefulKeywords(keywords)
 	if len(ids) == 0 && len(keywords) == 0 {
 		return mailAccessDetails{}, nil
@@ -1338,7 +1386,7 @@ func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID 
 	if err := rows.Err(); err != nil {
 		return mailAccessDetails{}, err
 	}
-	return formatMailAccessDetails(credentials), nil
+	return formatMailAccessDetailsWithLoginURL(credentials, loginURL), nil
 }
 
 func (s *LaventeCareStore) mailAIAgenda(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
@@ -1916,6 +1964,11 @@ func formatMailAccessCredentials(credentials []mailAccessCredential) string {
 }
 
 func formatMailAccessDetails(credentials []mailAccessCredential) mailAccessDetails {
+	return formatMailAccessDetailsWithLoginURL(credentials, "")
+}
+
+func formatMailAccessDetailsWithLoginURL(credentials []mailAccessCredential, loginURL string) mailAccessDetails {
+	credentials = withMailAccessLoginURL(credentials, loginURL)
 	summary := formatMailAccessCredentialsText(credentials)
 	if summary == "" {
 		return mailAccessDetails{}
@@ -1925,6 +1978,21 @@ func formatMailAccessDetails(credentials []mailAccessCredential) mailAccessDetai
 		Summary:   summary,
 		BlockHTML: formatMailAccessCredentialsHTML(credentials),
 	}
+}
+
+func withMailAccessLoginURL(credentials []mailAccessCredential, loginURL string) []mailAccessCredential {
+	loginURL = strings.TrimSpace(loginURL)
+	if loginURL == "" {
+		return credentials
+	}
+	result := make([]mailAccessCredential, 0, len(credentials))
+	for _, credential := range credentials {
+		if strings.TrimSpace(credential.LoginURL) == "" {
+			credential.LoginURL = loginURL
+		}
+		result = append(result, credential)
+	}
+	return result
 }
 
 func formatMailAccessCredentialsText(credentials []mailAccessCredential) string {
@@ -2061,7 +2129,7 @@ func normalizeMailAccessVariables(values map[string]string) {
 		}
 		return
 	}
-	applyMailAccessDetails(values, formatMailAccessDetails(credentials))
+	applyMailAccessDetails(values, formatMailAccessDetailsWithLoginURL(credentials, values["pilot.login_url"]))
 }
 
 func isMailAccessContextText(value string) bool {
@@ -2315,6 +2383,9 @@ func cleanupRenderedMailText(value string) string {
 			continue
 		}
 		if strings.HasPrefix(lower, "betalen kan via:") && !strings.Contains(lower, "http://") && !strings.Contains(lower, "https://") {
+			continue
+		}
+		if strings.HasPrefix(lower, "- pilotomgeving:") && !strings.Contains(lower, "http://") && !strings.Contains(lower, "https://") {
 			continue
 		}
 		cleaned = append(cleaned, line)
