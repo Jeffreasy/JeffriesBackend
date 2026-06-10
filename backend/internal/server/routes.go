@@ -204,6 +204,7 @@ func registerRoutes(
 				r.With(authMw).Post("/invoices/{id}/payment-request", lcH.CreateInvoicePaymentRequestAction)
 				r.Get("/documents", lcH.ListDocuments)
 				r.Get("/dossier-documents", lcH.ListDossierDocuments)
+				r.Get("/ai/dossier-advice", lcH.DossierAdvice)
 				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)
 				r.Get("/activity", lcH.ListActivityEvents)
 				r.With(authMw).Post("/activity", lcH.CreateActivityEvent)

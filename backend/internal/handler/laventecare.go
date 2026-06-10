@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -1722,6 +1723,81 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 		return
 	}
 	JSON(w, http.StatusOK, docs)
+}
+
+// DossierAdvice returns deterministic AI guidance for customer/project dossiers.
+// @Summary Get LaventeCare Dossier Advice
+// @Description Returns read-only dossier completeness, document recommendations and evidence for a customer, lead, project or workstream.
+// @Tags LaventeCare
+// @Produce json
+// @Param companyId query string false "Company ID (UUID)"
+// @Param leadId query string false "Lead ID (UUID)"
+// @Param projectId query string false "Project ID (UUID)"
+// @Param workstreamId query string false "Workstream ID (UUID)"
+// @Param query query string false "Free text context"
+// @Param limit query int false "Recommendation limit" default(8)
+// @Success 200 {object} model.LCDossierAdvice
+// @Failure 400 {string} string "Invalid query parameter"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/ai/dossier-advice [get]
+func (h *LaventeCareHandler) DossierAdvice(w http.ResponseWriter, r *http.Request) {
+	companyID, err := parseUUIDQueryAliases(r, "companyId", "company_id")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	leadID, err := parseUUIDQueryAliases(r, "leadId", "lead_id")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid leadId")
+		return
+	}
+	projectID, err := parseUUIDQueryAliases(r, "projectId", "project_id")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid projectId")
+		return
+	}
+	workstreamID, err := parseUUIDQueryAliases(r, "workstreamId", "workstream_id")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid workstreamId")
+		return
+	}
+
+	advice, err := h.store.BuildDossierAdvice(r.Context(), h.userID, model.LCDossierAdviceRequest{
+		CompanyID:    companyID,
+		LeadID:       leadID,
+		ProjectID:    projectID,
+		WorkstreamID: workstreamID,
+		Query:        strings.TrimSpace(r.URL.Query().Get("query")),
+		Limit:        queryInt(r, "limit", 8),
+	})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Dossiercontext niet gevonden")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidDossierAdviceTarget) {
+			Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, advice)
+}
+
+func parseUUIDQueryAliases(r *http.Request, keys ...string) (*uuid.UUID, error) {
+	for _, key := range keys {
+		value := strings.TrimSpace(r.URL.Query().Get(key))
+		if value == "" {
+			continue
+		}
+		id, err := uuid.Parse(value)
+		if err != nil {
+			return nil, err
+		}
+		return &id, nil
+	}
+	return nil, nil
 }
 
 // CreateDossierDocument logs a generated PDF as a lead/project dossier document.

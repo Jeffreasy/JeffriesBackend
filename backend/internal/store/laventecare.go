@@ -22,8 +22,10 @@ type LaventeCareStore struct {
 }
 
 var (
-	ErrQuoteNotAccepted = errors.New("quote must be accepted before invoice conversion")
-	ErrQuoteHasNoLines  = errors.New("quote has no lines to invoice")
+	ErrQuoteNotAccepted             = errors.New("quote must be accepted before invoice conversion")
+	ErrQuoteHasNoLines              = errors.New("quote has no lines to invoice")
+	ErrInvalidDossierAdviceTarget   = errors.New("choose exactly one dossier context")
+	dossierAdviceResponseSampleSize = 25
 )
 
 // NewLaventeCareStore creates a new LaventeCareStore.
@@ -357,12 +359,17 @@ func (s *LaventeCareStore) GetLead(ctx context.Context, userID string, id uuid.U
 }
 
 func (s *LaventeCareStore) ListLeads(ctx context.Context, userID string, limit int) ([]model.LCLead, error) {
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
+	query := `SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
 		        fit_score, pijnpunt, prioriteit, volgende_stap, volgende_actie_datum,
 		        created_at, updated_at
 		 FROM lc_leads WHERE user_id = $1
-		 ORDER BY updated_at DESC LIMIT $2`, userID, limit)
+		 ORDER BY updated_at DESC`
+	args := []any{userID}
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` LIMIT $2`
+	}
+	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -434,12 +441,17 @@ func (s *LaventeCareStore) UpdateLead(ctx context.Context, userID string, id uui
 // ─── Projects ────────────────────────────────────────────────────────────────
 
 func (s *LaventeCareStore) ListProjects(ctx context.Context, userID string, limit int) ([]model.LCProject, error) {
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, user_id, company_id, lead_id, naam, fase, status,
+	query := `SELECT id, user_id, company_id, lead_id, naam, fase, status,
 		        waarde_indicatie, start_datum, deadline, samenvatting,
 		        created_at, updated_at
 		 FROM lc_projects WHERE user_id = $1
-		 ORDER BY updated_at DESC LIMIT $2`, userID, limit)
+		 ORDER BY updated_at DESC`
+	args := []any{userID}
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` LIMIT $2`
+	}
+	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -554,19 +566,46 @@ func (s *LaventeCareStore) ListWorkstreams(ctx context.Context, userID string, l
 	if !includeClosed {
 		statusClause = ` AND status NOT IN ('afgerond','done','gesloten','gearchiveerd','omgezet_project')`
 	}
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, user_id, company_id, lead_id, project_id, titel, type, status,
+	query := `SELECT id, user_id, company_id, lead_id, project_id, titel, type, status,
 		        prioriteit, klant_naam, bron, source_id, doel, scope, deliverable,
 		        bevindingen, volgende_stap, deadline, geschatte_minuten,
 		        waarde_indicatie, stack_tags, tags, completed_at, created_at, updated_at
-		 FROM lc_workstreams WHERE user_id = $1`+statusClause+`
+		 FROM lc_workstreams WHERE user_id = $1` + statusClause + `
 		 ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, updated_at DESC
-		 LIMIT $2`, userID, limit)
+		`
+	args := []any{userID}
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` LIMIT $2`
+	}
+	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return pgx.CollectRows(rows, scanWorkstream)
+}
+
+func (s *LaventeCareStore) GetWorkstream(ctx context.Context, userID string, id uuid.UUID) (*model.LCWorkstream, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, company_id, lead_id, project_id, titel, type, status,
+		        prioriteit, klant_naam, bron, source_id, doel, scope, deliverable,
+		        bevindingen, volgende_stap, deadline, geschatte_minuten,
+		        waarde_indicatie, stack_tags, tags, completed_at, created_at, updated_at
+		 FROM lc_workstreams WHERE user_id = $1 AND id = $2
+		 LIMIT 1`, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	workstreams, err := pgx.CollectRows(rows, scanWorkstream)
+	if err != nil {
+		return nil, err
+	}
+	if len(workstreams) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &workstreams[0], nil
 }
 
 func (s *LaventeCareStore) CreateWorkstream(ctx context.Context, userID string, input model.LCWorkstreamCreate) (*model.LCWorkstream, error) {
@@ -909,7 +948,15 @@ func (s *LaventeCareStore) SearchDocuments(ctx context.Context, userID string, q
 		`SELECT id, user_id, document_key, titel, categorie, fase, versie,
 		        source_path, samenvatting, tags, created_at, updated_at
 		 FROM lc_documents 
-		 WHERE user_id = $1 AND (LOWER(titel) LIKE $2 OR LOWER(samenvatting) LIKE $2 OR LOWER(categorie) LIKE $2)
+		 WHERE user_id = $1 AND (
+		        LOWER(document_key) LIKE $2
+		        OR LOWER(titel) LIKE $2
+		        OR LOWER(COALESCE(fase, '')) LIKE $2
+		        OR LOWER(COALESCE(source_path, '')) LIKE $2
+		        OR LOWER(samenvatting) LIKE $2
+		        OR LOWER(categorie) LIKE $2
+		        OR EXISTS (SELECT 1 FROM unnest(tags) AS tag WHERE LOWER(tag) LIKE $2)
+		     )
 		 ORDER BY categorie, titel LIMIT $3`, userID, search, limit)
 	if err != nil {
 		return nil, err
@@ -1006,6 +1053,828 @@ func (s *LaventeCareStore) CountDossierDocuments(ctx context.Context, userID str
 		userID,
 	).Scan(&count)
 	return count, err
+}
+
+type lcDossierAdviceRelations struct {
+	CompanyID     *uuid.UUID
+	CompanyName   string
+	LeadIDs       map[uuid.UUID]bool
+	ProjectIDs    map[uuid.UUID]bool
+	WorkstreamIDs map[uuid.UUID]bool
+	HasActiveWork bool
+}
+
+// BuildDossierAdvice returns deterministic, read-only AI guidance for a LaventeCare dossier.
+func (s *LaventeCareStore) BuildDossierAdvice(ctx context.Context, userID string, input model.LCDossierAdviceRequest) (*model.LCDossierAdvice, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 8
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	target, relations, contextText, err := s.resolveDossierAdviceTarget(ctx, userID, input)
+	if err != nil {
+		return nil, err
+	}
+
+	documents, err := s.ListDocuments(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	dossierDocuments, err := s.listDossierDocumentsForAdvice(ctx, userID, target, relations)
+	if err != nil {
+		return nil, err
+	}
+	presentDocuments := filterDossierDocumentsForAdvice(dossierDocuments, target, relations)
+	presentByKey := indexDossierDocumentsByKey(presentDocuments)
+	totalDossierDocuments, err := s.CountDossierDocuments(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	requirements := buildDossierRequirements(documents, presentByKey, target, relations)
+	recommendations := rankDossierDocumentRecommendations(documents, presentByKey, target, contextText, limit)
+	coverage := dossierRequirementCoverage(requirements)
+	missingRequirements, attentionRequirements := dossierRequirementIssueCounts(requirements)
+	status := "klaar"
+	if len(documents) == 0 {
+		status = "documentbasis_leeg"
+	} else if missingRequirements > 0 {
+		status = "onvolledig"
+	} else if attentionRequirements > 0 {
+		status = "aandacht"
+	}
+
+	return &model.LCDossierAdvice{
+		GeneratedAt:             time.Now().UTC(),
+		Target:                  target,
+		Status:                  status,
+		Coverage:                coverage,
+		Requirements:            requirements,
+		Recommendations:         recommendations,
+		PresentDocuments:        take(presentDocuments, dossierAdviceResponseSampleSize),
+		TotalDossierDocuments:   totalDossierDocuments,
+		MatchedDossierDocuments: len(presentDocuments),
+		NextActions:             buildDossierAdviceNextActions(requirements, recommendations, documents, target),
+		Evidence: []string{
+			fmt.Sprintf("%d kennisdocument(en) geindexeerd", len(documents)),
+			fmt.Sprintf("%d van %d dossierstuk(ken) passend bij deze context", len(presentDocuments), totalDossierDocuments),
+			fmt.Sprintf("Target: %s - %s", target.Kind, target.Title),
+		},
+	}, nil
+}
+
+func (s *LaventeCareStore) resolveDossierAdviceTarget(ctx context.Context, userID string, input model.LCDossierAdviceRequest) (model.LCDossierAdviceTarget, lcDossierAdviceRelations, string, error) {
+	targetCount := 0
+	for _, id := range []*uuid.UUID{input.CompanyID, input.LeadID, input.ProjectID, input.WorkstreamID} {
+		if id != nil {
+			targetCount++
+		}
+	}
+	if targetCount > 1 {
+		return model.LCDossierAdviceTarget{}, lcDossierAdviceRelations{}, "", fmt.Errorf("%w: kies company_id, lead_id, project_id of workstream_id", ErrInvalidDossierAdviceTarget)
+	}
+
+	relations := lcDossierAdviceRelations{
+		LeadIDs:       make(map[uuid.UUID]bool),
+		ProjectIDs:    make(map[uuid.UUID]bool),
+		WorkstreamIDs: make(map[uuid.UUID]bool),
+	}
+	query := strings.TrimSpace(input.Query)
+	if input.CompanyID != nil {
+		company, err := s.GetCompany(ctx, userID, *input.CompanyID)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		relations.CompanyID = &company.ID
+		relations.CompanyName = company.Naam
+		relations, err = s.expandDossierAdviceRelations(ctx, userID, relations)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		target := model.LCDossierAdviceTarget{
+			Kind:        "company",
+			ID:          &company.ID,
+			Title:       company.Naam,
+			Subtitle:    "klantdossier",
+			CompanyID:   &company.ID,
+			CompanyName: company.Naam,
+			Status:      company.Status,
+			Query:       query,
+		}
+		context := strings.Join([]string{company.Naam, deref(company.Website), deref(company.Sector), company.Status, company.RelatieType, deref(company.Notities), query}, " ")
+		return target, relations, context, nil
+	}
+	if input.ProjectID != nil {
+		project, err := s.GetProject(ctx, userID, *input.ProjectID)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		relations.ProjectIDs[project.ID] = true
+		relations.CompanyID = project.CompanyID
+		companyName := ""
+		if project.CompanyID != nil {
+			if company, err := s.GetCompany(ctx, userID, *project.CompanyID); err == nil {
+				companyName = company.Naam
+			}
+		}
+		relations.CompanyName = companyName
+		relations, err = s.expandDossierAdviceRelations(ctx, userID, relations)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		target := model.LCDossierAdviceTarget{
+			Kind:        "project",
+			ID:          &project.ID,
+			Title:       project.Naam,
+			Subtitle:    "project",
+			CompanyID:   project.CompanyID,
+			CompanyName: companyName,
+			Phase:       project.Fase,
+			Status:      project.Status,
+			Query:       query,
+		}
+		context := strings.Join([]string{project.Naam, project.Fase, project.Status, deref(project.Samenvatting), companyName, query}, " ")
+		return target, relations, context, nil
+	}
+	if input.WorkstreamID != nil {
+		workstream, err := s.GetWorkstream(ctx, userID, *input.WorkstreamID)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		relations.WorkstreamIDs[workstream.ID] = true
+		if workstream.ProjectID != nil {
+			relations.ProjectIDs[*workstream.ProjectID] = true
+		}
+		if workstream.LeadID != nil {
+			relations.LeadIDs[*workstream.LeadID] = true
+		}
+		relations.CompanyID = workstream.CompanyID
+		companyName := deref(workstream.KlantNaam)
+		if companyName == "" && workstream.CompanyID != nil {
+			if company, err := s.GetCompany(ctx, userID, *workstream.CompanyID); err == nil {
+				companyName = company.Naam
+			}
+		}
+		relations.CompanyName = companyName
+		relations, err = s.expandDossierAdviceRelations(ctx, userID, relations)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		target := model.LCDossierAdviceTarget{
+			Kind:        "workstream",
+			ID:          &workstream.ID,
+			Title:       workstream.Titel,
+			Subtitle:    "opdracht",
+			CompanyID:   workstream.CompanyID,
+			CompanyName: companyName,
+			Phase:       workstream.Type,
+			Status:      workstream.Status,
+			Priority:    workstream.Prioriteit,
+			Query:       query,
+		}
+		context := strings.Join([]string{
+			workstream.Titel, workstream.Type, workstream.Status, workstream.Prioriteit,
+			deref(workstream.KlantNaam), deref(workstream.Doel), deref(workstream.Scope),
+			deref(workstream.Deliverable), deref(workstream.Bevindingen), deref(workstream.VolgendeStap),
+			strings.Join(workstream.StackTags, " "), strings.Join(workstream.Tags, " "), query,
+		}, " ")
+		return target, relations, context, nil
+	}
+	if input.LeadID != nil {
+		lead, err := s.GetLead(ctx, userID, *input.LeadID)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		relations.LeadIDs[lead.ID] = true
+		relations.CompanyID = lead.CompanyID
+		companyName := ""
+		if lead.CompanyID != nil {
+			if company, err := s.GetCompany(ctx, userID, *lead.CompanyID); err == nil {
+				companyName = company.Naam
+			}
+		}
+		relations.CompanyName = companyName
+		relations, err = s.expandDossierAdviceRelations(ctx, userID, relations)
+		if err != nil {
+			return model.LCDossierAdviceTarget{}, relations, "", err
+		}
+		target := model.LCDossierAdviceTarget{
+			Kind:        "lead",
+			ID:          &lead.ID,
+			Title:       lead.Titel,
+			Subtitle:    "lead",
+			CompanyID:   lead.CompanyID,
+			CompanyName: companyName,
+			Status:      lead.Status,
+			Priority:    deref(lead.Prioriteit),
+			Query:       query,
+		}
+		context := strings.Join([]string{lead.Titel, lead.Bron, lead.Status, deref(lead.Pijnpunt), deref(lead.VolgendeStap), deref(lead.Prioriteit), companyName, query}, " ")
+		return target, relations, context, nil
+	}
+
+	title := "LaventeCare"
+	kind := "laventecare"
+	subtitle := "algemene bedrijfscontext"
+	if query != "" && !isGenericDossierQuery(query) {
+		title = query
+		kind = "query"
+		subtitle = "zoekcontext"
+	}
+	target := model.LCDossierAdviceTarget{Kind: kind, Title: title, Subtitle: subtitle, Query: query}
+	return target, relations, query, nil
+}
+
+func (s *LaventeCareStore) expandDossierAdviceRelations(ctx context.Context, userID string, relations lcDossierAdviceRelations) (lcDossierAdviceRelations, error) {
+	leads, err := s.ListLeads(ctx, userID, 0)
+	if err != nil {
+		return relations, err
+	}
+	projects, err := s.ListProjects(ctx, userID, 0)
+	if err != nil {
+		return relations, err
+	}
+	workstreams, err := s.ListWorkstreams(ctx, userID, 0, true)
+	if err != nil {
+		return relations, err
+	}
+	for _, lead := range leads {
+		if relations.CompanyID != nil && lead.CompanyID != nil && *lead.CompanyID == *relations.CompanyID {
+			relations.LeadIDs[lead.ID] = true
+			if isOpenStatus(lead.Status) {
+				relations.HasActiveWork = true
+			}
+		}
+	}
+	for _, project := range projects {
+		if relations.CompanyID != nil && project.CompanyID != nil && *project.CompanyID == *relations.CompanyID {
+			relations.ProjectIDs[project.ID] = true
+		}
+		if relations.ProjectIDs[project.ID] && isOpenStatus(project.Status) {
+			relations.HasActiveWork = true
+		}
+	}
+	for _, workstream := range workstreams {
+		if relations.CompanyID != nil && workstream.CompanyID != nil && *workstream.CompanyID == *relations.CompanyID {
+			relations.WorkstreamIDs[workstream.ID] = true
+		}
+		if workstream.ProjectID != nil && relations.ProjectIDs[*workstream.ProjectID] {
+			relations.WorkstreamIDs[workstream.ID] = true
+		}
+		if workstream.LeadID != nil && relations.LeadIDs[*workstream.LeadID] {
+			relations.WorkstreamIDs[workstream.ID] = true
+		}
+		if relations.WorkstreamIDs[workstream.ID] && isOpenStatus(workstream.Status) {
+			relations.HasActiveWork = true
+		}
+	}
+	return relations, nil
+}
+
+func (s *LaventeCareStore) listDossierDocumentsForAdvice(ctx context.Context, userID string, target model.LCDossierAdviceTarget, relations lcDossierAdviceRelations) ([]model.LCDossierDocument, error) {
+	base := `SELECT id, user_id, document_key, titel, template_label, context_type,
+		        context_id, context_title, lead_id, project_id, workstream_id, company_id, pdf_url, theme,
+		        delivery, notes, generated_at, created_at
+		 FROM lc_dossier_documents
+		 WHERE user_id = $1`
+	args := []any{userID}
+	conditions := make([]string, 0, 8)
+
+	addTextCondition := func(sql string, value any) {
+		args = append(args, value)
+		conditions = append(conditions, fmt.Sprintf(sql, len(args)))
+	}
+	addSearchCondition := func(value string) {
+		args = append(args, value)
+		idx := len(args)
+		conditions = append(conditions, fmt.Sprintf(`(
+			LOWER(document_key) LIKE $%[1]d
+			OR LOWER(titel) LIKE $%[1]d
+			OR LOWER(COALESCE(template_label, '')) LIKE $%[1]d
+			OR LOWER(context_type) LIKE $%[1]d
+			OR LOWER(COALESCE(context_title, '')) LIKE $%[1]d
+			OR LOWER(COALESCE(notes, '')) LIKE $%[1]d
+		)`, idx))
+	}
+	addUUIDSetCondition := func(column string, ids []uuid.UUID) {
+		if len(ids) == 0 {
+			return
+		}
+		addTextCondition(column+`::text = ANY($%d)`, uuidStrings(ids))
+	}
+
+	if target.ID != nil {
+		addTextCondition(`context_id = $%d`, target.ID.String())
+	}
+	if relations.CompanyID != nil {
+		addUUIDSetCondition("company_id", []uuid.UUID{*relations.CompanyID})
+	}
+	addUUIDSetCondition("lead_id", uuidKeys(relations.LeadIDs))
+	addUUIDSetCondition("project_id", uuidKeys(relations.ProjectIDs))
+	addUUIDSetCondition("workstream_id", uuidKeys(relations.WorkstreamIDs))
+	if relations.CompanyName != "" {
+		addTextCondition(`LOWER(COALESCE(context_title, '')) LIKE $%d`, "%"+normalize(relations.CompanyName)+"%")
+	}
+
+	query := strings.TrimSpace(target.Query)
+	if target.Kind == "query" && query != "" {
+		addSearchCondition("%" + normalize(query) + "%")
+	}
+
+	sql := base
+	if len(conditions) > 0 {
+		sql += ` AND (` + strings.Join(conditions, ` OR `) + `)`
+	}
+	sql += ` ORDER BY created_at DESC`
+
+	rows, err := s.db.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanDossierDocument)
+}
+
+func filterDossierDocumentsForAdvice(docs []model.LCDossierDocument, target model.LCDossierAdviceTarget, relations lcDossierAdviceRelations) []model.LCDossierDocument {
+	if isGlobalDossierAdviceTarget(target) || target.Kind == "query" {
+		return docs
+	}
+	matches := make([]model.LCDossierDocument, 0)
+	for _, doc := range docs {
+		if target.ID != nil && doc.ContextID != nil && strings.EqualFold(strings.TrimSpace(*doc.ContextID), target.ID.String()) {
+			matches = append(matches, doc)
+			continue
+		}
+		if relations.CompanyID != nil && doc.CompanyID != nil && *doc.CompanyID == *relations.CompanyID {
+			matches = append(matches, doc)
+			continue
+		}
+		if doc.LeadID != nil && relations.LeadIDs[*doc.LeadID] {
+			matches = append(matches, doc)
+			continue
+		}
+		if doc.ProjectID != nil && relations.ProjectIDs[*doc.ProjectID] {
+			matches = append(matches, doc)
+			continue
+		}
+		if doc.WorkstreamID != nil && relations.WorkstreamIDs[*doc.WorkstreamID] {
+			matches = append(matches, doc)
+			continue
+		}
+		if relations.CompanyName != "" && doc.ContextTitle != nil && strings.Contains(normalize(*doc.ContextTitle), normalize(relations.CompanyName)) {
+			matches = append(matches, doc)
+		}
+	}
+	return matches
+}
+
+func indexDossierDocumentsByKey(docs []model.LCDossierDocument) map[string]model.LCDossierDocument {
+	byKey := make(map[string]model.LCDossierDocument, len(docs))
+	for _, doc := range docs {
+		key := normalize(doc.DocumentKey)
+		if key == "" {
+			continue
+		}
+		if existing, ok := byKey[key]; ok && existing.CreatedAt.After(doc.CreatedAt) {
+			continue
+		}
+		byKey[key] = doc
+	}
+	return byKey
+}
+
+func rankDossierDocumentRecommendations(documents []model.LCDocument, presentByKey map[string]model.LCDossierDocument, target model.LCDossierAdviceTarget, contextText string, limit int) []model.LCDocumentRecommendation {
+	recommendations := make([]model.LCDocumentRecommendation, 0, len(documents))
+	for _, doc := range documents {
+		score, reasons := scoreDossierDocument(doc, target, contextText)
+		key := normalize(doc.DocumentKey)
+		present, alreadyInDossier := presentByKey[key]
+		if alreadyInDossier {
+			score -= 12
+			reasons = append(reasons, "staat al in dit dossier")
+		} else {
+			score += 6
+			reasons = append(reasons, "nog niet vastgelegd in dit dossier")
+		}
+		if score < 12 && strings.TrimSpace(contextText) != "" {
+			continue
+		}
+		priority := "normaal"
+		if score >= 70 && !alreadyInDossier {
+			priority = "hoog"
+		} else if score < 35 {
+			priority = "laag"
+		}
+		usage := "interne referentie"
+		if doc.Categorie == "commercieel" {
+			usage = "klantcommunicatie"
+		} else if doc.Categorie == "governance" {
+			usage = "controle en afspraken"
+		} else if doc.Categorie == "proces" {
+			usage = "delivery-dossier"
+		}
+		var dossierID *uuid.UUID
+		var dossierCreatedAt *time.Time
+		if alreadyInDossier {
+			id := present.ID
+			createdAt := present.CreatedAt
+			dossierID = &id
+			dossierCreatedAt = &createdAt
+		}
+		recommendations = append(recommendations, model.LCDocumentRecommendation{
+			Document:          doc,
+			Score:             score,
+			Priority:          priority,
+			Usage:             usage,
+			Reasons:           dedupeStrings(reasons),
+			AlreadyInDossier:  alreadyInDossier,
+			DossierDocumentID: dossierID,
+			DossierCreatedAt:  dossierCreatedAt,
+		})
+	}
+	sort.SliceStable(recommendations, func(i, j int) bool {
+		if recommendations[i].AlreadyInDossier != recommendations[j].AlreadyInDossier {
+			return !recommendations[i].AlreadyInDossier
+		}
+		if recommendations[i].Score == recommendations[j].Score {
+			return recommendations[i].Document.Titel < recommendations[j].Document.Titel
+		}
+		return recommendations[i].Score > recommendations[j].Score
+	})
+	return take(recommendations, limit)
+}
+
+func scoreDossierDocument(doc model.LCDocument, target model.LCDossierAdviceTarget, contextText string) (int, []string) {
+	text := normalize(strings.Join([]string{
+		doc.DocumentKey,
+		doc.Titel,
+		doc.Categorie,
+		deref(doc.Fase),
+		doc.Samenvatting,
+		strings.Join(doc.Tags, " "),
+	}, " "))
+	context := normalize(strings.Join([]string{contextText, target.Kind, target.Title, target.Subtitle, target.Phase, target.Status, target.Priority, target.CompanyName, target.Query}, " "))
+	score := 0
+	var reasons []string
+
+	if doc.Categorie == "commercieel" && (target.Kind == "lead" || strings.Contains(context, "voorstel") || strings.Contains(context, "offerte") || strings.Contains(context, "scope")) {
+		score += 30
+		reasons = append(reasons, "commercieel document past bij intake/voorstel")
+	}
+	if doc.Categorie == "proces" && (target.Kind == "project" || target.Kind == "workstream" || strings.Contains(context, "pilot") || strings.Contains(context, "uitvoering") || strings.Contains(context, "realisatie")) {
+		score += 30
+		reasons = append(reasons, "procesdocument past bij delivery of pilot")
+	}
+	if doc.Categorie == "governance" && (strings.Contains(context, "sla") || strings.Contains(context, "privacy") || strings.Contains(context, "security") || strings.Contains(context, "productie") || strings.Contains(context, "live")) {
+		score += 30
+		reasons = append(reasons, "governance relevant voor afspraken, privacy of beheer")
+	}
+	if target.Phase != "" && strings.Contains(text, normalize(target.Phase)) {
+		score += 25
+		reasons = append(reasons, "fase/type matcht met context")
+	}
+	if target.Status != "" && strings.Contains(text, normalize(target.Status)) {
+		score += 10
+		reasons = append(reasons, "status komt terug in documentcontext")
+	}
+	for _, marker := range []string{"pilot", "test", "scope", "analyse", "website", "integratie", "automatisering", "ai", "crm", "lead", "support", "sla", "factuur", "offerte"} {
+		if strings.Contains(context, marker) && strings.Contains(text, marker) {
+			score += 14
+			reasons = append(reasons, fmt.Sprintf("%s sluit aan op context", marker))
+		}
+	}
+	for _, token := range dossierAdviceTokens(context) {
+		if strings.Contains(text, token) {
+			score += 4
+		}
+	}
+	if score == 0 && isGlobalDossierAdviceTarget(target) {
+		score = 15
+		reasons = append(reasons, "algemene LaventeCare documentbasis")
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "beperkte match op metadata")
+	}
+	return score, reasons
+}
+
+func buildDossierRequirements(documents []model.LCDocument, presentByKey map[string]model.LCDossierDocument, target model.LCDossierAdviceTarget, relations lcDossierAdviceRelations) []model.LCDossierRequirement {
+	if isGlobalDossierAdviceTarget(target) {
+		return buildGlobalDossierRequirements(documents, presentByKey, target)
+	}
+
+	hasDocs := len(documents) > 0
+	hasPresent := len(presentByKey) > 0
+	context := normalize(strings.Join([]string{target.Kind, target.Title, target.Phase, target.Status, target.Priority, target.Query}, " "))
+	requiresDelivery := relations.HasActiveWork || target.Kind == "project" || target.Kind == "workstream" || strings.Contains(context, "pilot") || strings.Contains(context, "uitvoering") || strings.Contains(context, "realisatie")
+	requiresGovernance := strings.Contains(context, "live") || strings.Contains(context, "productie") || strings.Contains(context, "sla") || strings.Contains(context, "privacy") || strings.Contains(context, "security")
+
+	requirements := []model.LCDossierRequirement{
+		{
+			Key:    "customer_context",
+			Label:  "Klantcontext",
+			Status: boolStatus(target.CompanyID != nil, "ok", "attention"),
+			Reason: boolReason(target.CompanyID != nil, "Klantdossier is gekoppeld.", "Koppel dit advies bij voorkeur aan een bestaand klantdossier/company_id."),
+		},
+		{
+			Key:                     "knowledge_catalog",
+			Label:                   "Kennisbank",
+			Status:                  boolStatus(hasDocs, "ok", "missing"),
+			Reason:                  boolReason(hasDocs, "Documentbasis is beschikbaar voor AI-advies.", "Documentbasis is leeg; initialiseer de LaventeCare kennisbank."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "commercieel", 3),
+		},
+		{
+			Key:                     "commercial_scope",
+			Label:                   "Scope en voorstel",
+			Status:                  boolStatus(hasPresentCategory(documents, presentByKey, "commercieel"), "ok", "attention"),
+			Reason:                  boolReason(hasPresentCategory(documents, presentByKey, "commercieel"), "Commerciele scope/voorstel is al in het dossier vastgelegd.", "Leg minimaal een scope-, analyse- of voorsteldocument vast."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "commercieel", 4),
+		},
+		{
+			Key:                     "delivery_plan",
+			Label:                   "Aanpak en delivery",
+			Status:                  deliveryRequirementStatus(requiresDelivery, hasPresentCategory(documents, presentByKey, "proces")),
+			Reason:                  deliveryRequirementReason(requiresDelivery, hasPresentCategory(documents, presentByKey, "proces")),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "proces", 4),
+		},
+		{
+			Key:                     "governance",
+			Label:                   "Afspraken en governance",
+			Status:                  governanceRequirementStatus(requiresGovernance, hasPresentCategory(documents, presentByKey, "governance")),
+			Reason:                  governanceRequirementReason(requiresGovernance, hasPresentCategory(documents, presentByKey, "governance")),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "governance", 4),
+		},
+		{
+			Key:    "dossier_history",
+			Label:  "PDF dossierhistorie",
+			Status: boolStatus(hasPresent, "ok", "attention"),
+			Reason: boolReason(hasPresent, "Er zijn dossierstukken aan deze context gekoppeld.", "Er is nog geen PDF dossierhistorie voor deze context."),
+		},
+	}
+	return requirements
+}
+
+func buildGlobalDossierRequirements(documents []model.LCDocument, presentByKey map[string]model.LCDossierDocument, target model.LCDossierAdviceTarget) []model.LCDossierRequirement {
+	hasDocs := len(documents) > 0
+	hasPresent := len(presentByKey) > 0
+	hasCommercial := len(documentKeysByCategory(documents, "commercieel", 1)) > 0
+	hasProcess := len(documentKeysByCategory(documents, "proces", 1)) > 0
+	hasGovernance := len(documentKeysByCategory(documents, "governance", 1)) > 0
+	contextStatus := "ok"
+	contextReason := "Algemene LaventeCare-scan actief; gebruik klant-, project- of opdrachtcontext voor definitieve dossierchecks."
+	if target.Kind == "query" {
+		contextStatus = "attention"
+		contextReason = "Zoekcontext zonder vaste klant; koppel aan een klant/project zodra dit advies besluitvorming of klantcommunicatie raakt."
+	}
+
+	return []model.LCDossierRequirement{
+		{
+			Key:    "business_context",
+			Label:  "Bedrijfscontext",
+			Status: contextStatus,
+			Reason: contextReason,
+		},
+		{
+			Key:                     "knowledge_catalog",
+			Label:                   "Kennisbank",
+			Status:                  boolStatus(hasDocs, "ok", "missing"),
+			Reason:                  boolReason(hasDocs, "Documentbasis is beschikbaar voor AI-advies.", "Documentbasis is leeg; initialiseer de LaventeCare kennisbank."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "commercieel", 3),
+		},
+		{
+			Key:                     "commercial_templates",
+			Label:                   "Commercie",
+			Status:                  boolStatus(hasCommercial, "ok", "missing"),
+			Reason:                  boolReason(hasCommercial, "Commerciele templates zijn beschikbaar voor voorstellen, pilots en offertes.", "Voeg commerciele templates toe voor intake, analyse, voorstel en pilot."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "commercieel", 4),
+		},
+		{
+			Key:                     "delivery_templates",
+			Label:                   "Delivery",
+			Status:                  boolStatus(hasProcess, "ok", "attention"),
+			Reason:                  boolReason(hasProcess, "Proces- en deliverydocumenten zijn beschikbaar.", "Voeg procesdocumenten toe voor projectaanpak, pilot en oplevering."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "proces", 4),
+		},
+		{
+			Key:                     "governance_templates",
+			Label:                   "Governance",
+			Status:                  boolStatus(hasGovernance, "ok", "attention"),
+			Reason:                  boolReason(hasGovernance, "Governance-, privacy- en beheerafspraken zijn beschikbaar.", "Voeg governance-documenten toe voor privacy, SLA, beheer en changes."),
+			RecommendedDocumentKeys: documentKeysByCategory(documents, "governance", 4),
+		},
+		{
+			Key:    "dossier_history",
+			Label:  "Dossierhistorie",
+			Status: boolStatus(hasPresent, "ok", "attention"),
+			Reason: boolReason(hasPresent, "Er zijn al PDF dossierstukken gegenereerd.", "Er zijn nog geen PDF dossierstukken vastgelegd."),
+		},
+	}
+}
+
+func dossierRequirementCoverage(requirements []model.LCDossierRequirement) int {
+	if len(requirements) == 0 {
+		return 0
+	}
+	score := 0
+	for _, req := range requirements {
+		switch req.Status {
+		case "ok":
+			score += 100
+		case "attention":
+			score += 50
+		}
+	}
+	return score / len(requirements)
+}
+
+func dossierRequirementIssueCounts(requirements []model.LCDossierRequirement) (missing int, attention int) {
+	for _, req := range requirements {
+		switch req.Status {
+		case "missing":
+			missing++
+		case "attention":
+			attention++
+		}
+	}
+	return missing, attention
+}
+
+func buildDossierAdviceNextActions(requirements []model.LCDossierRequirement, recommendations []model.LCDocumentRecommendation, documents []model.LCDocument, target model.LCDossierAdviceTarget) []string {
+	actions := make([]string, 0, 4)
+	if len(documents) == 0 {
+		return []string{"Initialiseer de LaventeCare documentbasis voordat AI-advies betrouwbaar is."}
+	}
+	if target.CompanyID == nil && target.Kind != "query" && target.Kind != "laventecare" {
+		actions = append(actions, "Koppel deze context aan een klantdossier zodat notities, agenda, documenten en facturen samenkomen.")
+	}
+	for _, req := range requirements {
+		if req.Status == "missing" || req.Status == "attention" {
+			actions = append(actions, req.Reason)
+		}
+		if len(actions) >= 3 {
+			break
+		}
+	}
+	for _, rec := range recommendations {
+		if !rec.AlreadyInDossier {
+			actions = append(actions, fmt.Sprintf("Maak of controleer '%s' als eerstvolgend dossierstuk.", rec.Document.Titel))
+			break
+		}
+	}
+	if len(actions) == 0 {
+		actions = append(actions, "Dossier is op hoofdlijnen bruikbaar; blijf nieuwe klantmomenten en documenten consequent koppelen.")
+	}
+	return dedupeStrings(actions)
+}
+
+func hasPresentCategory(documents []model.LCDocument, presentByKey map[string]model.LCDossierDocument, category string) bool {
+	for _, doc := range documents {
+		if doc.Categorie == category && presentByKey[normalize(doc.DocumentKey)].ID != uuid.Nil {
+			return true
+		}
+	}
+	return false
+}
+
+func documentKeysByCategory(documents []model.LCDocument, category string, limit int) []string {
+	keys := make([]string, 0, limit)
+	for _, doc := range documents {
+		if doc.Categorie != category {
+			continue
+		}
+		keys = append(keys, doc.DocumentKey)
+		if len(keys) >= limit {
+			break
+		}
+	}
+	return keys
+}
+
+func isGlobalDossierAdviceTarget(target model.LCDossierAdviceTarget) bool {
+	return target.Kind == "laventecare"
+}
+
+func isGenericDossierQuery(query string) bool {
+	switch normalize(query) {
+	case "", "laventecare", "lc", "kennisbank", "dossier", "documenten", "templates":
+		return true
+	default:
+		return false
+	}
+}
+
+func uuidKeys(values map[uuid.UUID]bool) []uuid.UUID {
+	if len(values) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(values))
+	for id, ok := range values {
+		if ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i].String() < ids[j].String()
+	})
+	return ids
+}
+
+func uuidStrings(values []uuid.UUID) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.String())
+	}
+	return out
+}
+
+func dossierAdviceTokens(value string) []string {
+	fields := strings.FieldsFunc(normalize(value), func(r rune) bool {
+		return r < '0' || (r > '9' && r < 'a') || r > 'z'
+	})
+	tokens := make([]string, 0, len(fields))
+	seen := make(map[string]bool)
+	for _, field := range fields {
+		if len(field) < 4 || seen[field] {
+			continue
+		}
+		seen[field] = true
+		tokens = append(tokens, field)
+		if len(tokens) >= 20 {
+			break
+		}
+	}
+	return tokens
+}
+
+func boolStatus(ok bool, okStatus, fallback string) string {
+	if ok {
+		return okStatus
+	}
+	return fallback
+}
+
+func boolReason(ok bool, okReason, fallback string) string {
+	if ok {
+		return okReason
+	}
+	return fallback
+}
+
+func deliveryRequirementStatus(required, present bool) string {
+	if present {
+		return "ok"
+	}
+	if required {
+		return "missing"
+	}
+	return "attention"
+}
+
+func deliveryRequirementReason(required, present bool) string {
+	if present {
+		return "Aanpak, pilot of delivery-document is al vastgelegd."
+	}
+	if required {
+		return "Actieve opdracht/project vraagt om een aanpak-, pilot- of delivery-document."
+	}
+	return "Nog geen delivery-document vastgelegd; nuttig zodra er uitvoering start."
+}
+
+func governanceRequirementStatus(required, present bool) string {
+	if present {
+		return "ok"
+	}
+	if required {
+		return "missing"
+	}
+	return "attention"
+}
+
+func governanceRequirementReason(required, present bool) string {
+	if present {
+		return "Governance-, privacy- of beheerafspraken zijn vastgelegd."
+	}
+	if required {
+		return "Live/productie/privacy/SLA-context vraagt om governance-documentatie."
+	}
+	return "Governance-documentatie is nog niet gekoppeld; relevant bij livegang, SLA of privacygevoelige data."
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func (s *LaventeCareStore) ListActivityEvents(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCActivityEvent, error) {
@@ -2206,55 +3075,141 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	}, nil
 }
 
-// buildBusinessSignals matches emails against CRM entity names.
+// buildBusinessSignals matches emails, calendar events and notes against CRM entity names.
 func (s *LaventeCareStore) buildBusinessSignals(ctx context.Context, userID string, companies []model.LCCompany, leads []model.LCLead, projects []model.LCProject, workstreams []model.LCWorkstream) []model.LCBusinessSignal {
 	terms := buildSignalTerms(companies, leads, projects, workstreams)
 	if len(terms) == 0 {
 		return nil
 	}
 
-	// Query recent emails
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT gmail_id, "from", subject, snippet, datum, is_gelezen
-		 FROM emails WHERE user_id = $1 AND is_verwijderd = false
-		 ORDER BY datum DESC LIMIT 80`, userID)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
 	var signals []model.LCBusinessSignal
-	for rows.Next() {
-		var gmailID, from, subject, snippet, datum string
-		var isGelezen bool
-		if err := rows.Scan(&gmailID, &from, &subject, &snippet, &datum, &isGelezen); err != nil {
-			continue
+	seen := make(map[string]bool)
+	sourceCounts := make(map[string]int)
+	addSignal := func(signal model.LCBusinessSignal) {
+		if len(signals) >= 18 {
+			return
 		}
-		haystack := normalize(subject + " " + snippet + " " + from)
-		matched := matchTerm(haystack, terms)
-		if matched == "" {
-			continue
+		sourceLimit := map[string]int{"email": 8, "agenda": 6, "notitie": 8}[signal.Source]
+		if sourceLimit > 0 && sourceCounts[signal.Source] >= sourceLimit {
+			return
 		}
-		urgency := "normaal"
-		hint := "Review of dit bij een lead/project hoort."
-		if !isGelezen {
-			urgency = "hoog"
-			hint = "Ongelezen zakelijke email opvolgen."
+		key := signal.Source + ":" + signal.ID
+		if signal.ID == "" || seen[key] {
+			return
 		}
-		signals = append(signals, model.LCBusinessSignal{
-			Source:      "email",
-			ID:          gmailID,
-			Title:       subject,
-			Subtitle:    from,
-			Date:        datum,
-			MatchedTerm: matched,
-			Urgency:     urgency,
-			ActionHint:  hint,
-		})
-		if len(signals) >= 12 {
-			break
+		seen[key] = true
+		sourceCounts[signal.Source]++
+		signals = append(signals, signal)
+	}
+
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT gmail_id, from_addr, subject, snippet, datum::text, is_gelezen
+		 FROM emails WHERE user_id = $1 AND is_verwijderd = false
+		 ORDER BY ontvangen DESC LIMIT 120`, userID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var gmailID, from, subject, snippet, datum string
+			var isGelezen bool
+			if err := rows.Scan(&gmailID, &from, &subject, &snippet, &datum, &isGelezen); err != nil {
+				continue
+			}
+			matched := matchTerm(normalize(subject+" "+snippet+" "+from), terms)
+			if matched == "" {
+				continue
+			}
+			urgency := "normaal"
+			hint := "Review of dit bij een lead/project hoort."
+			if !isGelezen {
+				urgency = "hoog"
+				hint = "Ongelezen zakelijke email opvolgen."
+			}
+			addSignal(model.LCBusinessSignal{
+				Source:      "email",
+				ID:          gmailID,
+				Title:       subject,
+				Subtitle:    from,
+				Date:        datum,
+				MatchedTerm: matched,
+				Urgency:     urgency,
+				ActionHint:  hint,
+			})
 		}
 	}
+
+	eventRows, err := s.db.Pool.Query(ctx,
+		`SELECT COALESCE(NULLIF(event_id, ''), id::text), titel, COALESCE(locatie, ''), COALESCE(beschrijving, ''),
+		        start_datum::text, COALESCE(business_context_title, ''), COALESCE(business_context_type, '')
+		   FROM personal_events
+		  WHERE user_id = $1
+		    AND COALESCE(status, '') <> 'cancelled'
+		    AND eind_datum >= CURRENT_DATE - INTERVAL '14 days'
+		  ORDER BY start_datum ASC
+		  LIMIT 100`, userID)
+	if err == nil {
+		defer eventRows.Close()
+		for eventRows.Next() {
+			var eventID, title, location, description, date, contextTitle, contextType string
+			if err := eventRows.Scan(&eventID, &title, &location, &description, &date, &contextTitle, &contextType); err != nil {
+				continue
+			}
+			matched := matchTerm(normalize(title+" "+location+" "+description+" "+contextTitle+" "+contextType), terms)
+			if matched == "" {
+				continue
+			}
+			addSignal(model.LCBusinessSignal{
+				Source:      "agenda",
+				ID:          eventID,
+				Title:       title,
+				Subtitle:    strings.TrimSpace(location + " " + contextTitle),
+				Date:        date,
+				MatchedTerm: matched,
+				Urgency:     businessSignalDateUrgency(date, "normaal"),
+				ActionHint:  "Controleer of deze afspraak een klantactie, projectupdate of follow-up nodig heeft.",
+			})
+		}
+	}
+
+	noteRows, err := s.db.Pool.Query(ctx,
+		`SELECT id::text, titel, inhoud, array_to_string(tags, ' '),
+		        COALESCE(business_context_title, ''), COALESCE(business_context_type, ''),
+		        COALESCE(deadline::date::text, gewijzigd::date::text),
+		        COALESCE(prioriteit, 'normaal'), triage_flag
+		   FROM notes
+		  WHERE user_id = $1
+		    AND is_archived = false
+		    AND is_completed = false
+		  ORDER BY COALESCE(deadline, gewijzigd) ASC
+		  LIMIT 100`, userID)
+	if err == nil {
+		defer noteRows.Close()
+		for noteRows.Next() {
+			var id, title, content, tags, contextTitle, contextType, date, priority string
+			var triageFlag bool
+			if err := noteRows.Scan(&id, &title, &content, &tags, &contextTitle, &contextType, &date, &priority, &triageFlag); err != nil {
+				continue
+			}
+			matched := matchTerm(normalize(title+" "+content+" "+tags+" "+contextTitle+" "+contextType), terms)
+			if matched == "" {
+				continue
+			}
+			urgency := businessSignalDateUrgency(date, priority)
+			if triageFlag || priority == "hoog" {
+				urgency = "hoog"
+			}
+			addSignal(model.LCBusinessSignal{
+				Source:      "notitie",
+				ID:          id,
+				Title:       title,
+				Subtitle:    strings.TrimSpace(contextTitle + " #" + tags),
+				Date:        date,
+				MatchedTerm: matched,
+				Urgency:     urgency,
+				ActionHint:  "Zet deze notitie om naar een klantactie of lead als er opvolging nodig is.",
+			})
+		}
+	}
+
 	return signals
 }
 
@@ -2405,6 +3360,25 @@ func matchTerm(haystack string, terms []string) string {
 		}
 	}
 	return ""
+}
+
+func businessSignalDateUrgency(date string, fallback string) string {
+	urgency := strings.TrimSpace(fallback)
+	if urgency == "" {
+		urgency = "normaal"
+	}
+	if urgency == "hoog" {
+		return "hoog"
+	}
+	parsed, err := time.Parse("2006-01-02", strings.TrimSpace(date))
+	if err != nil {
+		return urgency
+	}
+	today := time.Now().Truncate(24 * time.Hour)
+	if !parsed.After(today.AddDate(0, 0, 1)) {
+		return "hoog"
+	}
+	return urgency
 }
 
 func normalize(s string) string {

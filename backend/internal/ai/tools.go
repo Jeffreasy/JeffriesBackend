@@ -874,6 +874,44 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "laventecareKennisAdviesOpvragen",
+			Description: "Geeft read-only AI-advies welke LaventeCare kennisdocumenten/templates passen bij een klant, lead, opdracht, project of vrije context. Wijzigt niets.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"company_id": {"type": "string", "description": "Optionele klant/company UUID."},
+					"lead_id": {"type": "string", "description": "Optionele lead UUID."},
+					"project_id": {"type": "string", "description": "Optionele project UUID."},
+					"workstream_id": {"type": "string", "description": "Optionele opdracht/workstream UUID."},
+					"query": {"type": "string", "description": "Vrije context of zoekterm wanneer er geen UUID bekend is."},
+					"limit": {"type": "number", "description": "Aantal aanbevelingen (max 20)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "laventecareDossierCheckOpvragen",
+			Description: "Controleert read-only de volledigheid van een LaventeCare klant-/lead-/opdracht-/projectdossier: aanwezige PDF's, ontbrekende bouwblokken, aanbevolen templates en vervolgstappen.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"company_id": {"type": "string", "description": "Optionele klant/company UUID."},
+					"lead_id": {"type": "string", "description": "Optionele lead UUID."},
+					"project_id": {"type": "string", "description": "Optionele project UUID."},
+					"workstream_id": {"type": "string", "description": "Optionele opdracht/workstream UUID."},
+					"query": {"type": "string", "description": "Vrije context of zoekterm wanneer er geen UUID bekend is."},
+					"limit": {"type": "number", "description": "Aantal aanbevelingen (max 20)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareKlantenOpvragen",
 			Description: "Haalt LaventeCare klantdossiers op als centrale CRM-basis. Technisch zijn dit companies; zakelijk zijn het klanten, prospects, partners, leveranciers of interne/eigen projectcontexten.",
 			Parameters: json.RawMessage(`{

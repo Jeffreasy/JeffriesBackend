@@ -2551,6 +2551,28 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"instruction": "Gebruik alleen deze documenten als kennisbron. Bij count 0: zeg dat er niets gevonden is en adviseer de documentbasis te initialiseren of een concretere zoekterm te gebruiken.",
 		}, err)
 
+	case "laventecareKennisAdviesOpvragen", "laventecareDossierCheckOpvragen":
+		var args model.LCDossierAdviceRequest
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		advice, err := e.laventeCareStore.BuildDossierAdvice(ctx, e.userID, args)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"scope":            toolName,
+			"target":           advice.Target,
+			"coverage":         advice.Coverage,
+			"status":           advice.Status,
+			"requirements":     advice.Requirements,
+			"recommendations":  advice.Recommendations,
+			"presentDocuments": advice.PresentDocuments,
+			"nextActions":      advice.NextActions,
+			"evidence":         advice.Evidence,
+			"instruction":      "Dit is read-only dossieradvies. Gebruik recommendations voor passende templates en requirements voor ontbrekende bouwblokken. Zeg expliciet wat al in het dossier staat en wat nog ontbreekt. Maak geen PDF, mail of actie zonder aparte bevestigde mutatie.",
+		}, nil)
+
 	case "laventecareKlantenOpvragen":
 		var args struct {
 			Limit int    `json:"limit"`

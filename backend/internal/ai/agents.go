@@ -102,6 +102,8 @@ var Policies = map[string]ToolPolicy{
 	// LaventeCare reads
 	"laventecareCockpit":                   {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareKennisZoeken":              {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareKennisAdviesOpvragen":      {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
+	"laventecareDossierCheckOpvragen":      {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareKlantenOpvragen":           {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareContactenOpvragen":         {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"laventecareLeadsOpvragen":             {Agents: []string{"laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},

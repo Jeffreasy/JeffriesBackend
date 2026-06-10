@@ -62,6 +62,11 @@ func (e *HomeBotExecutor) buildContextBriefing(ctx context.Context, opts context
 
 	cockpit, err := e.laventeCareStore.GetCockpit(ctx, e.userID)
 	recordErr(err)
+	var dossierAdvice *model.LCDossierAdvice
+	if scope == "laventecare" {
+		dossierAdvice, err = e.laventeCareStore.BuildDossierAdvice(ctx, e.userID, model.LCDossierAdviceRequest{Query: "laventecare", Limit: limit})
+		recordErr(err)
+	}
 
 	scheduleMeta, scheduleMetaErr := e.scheduleStore.GetMeta(ctx, e.userID)
 	recordErr(scheduleMetaErr)
@@ -95,7 +100,7 @@ func (e *HomeBotExecutor) buildContextBriefing(ctx context.Context, opts context
 			"instruction": "Gebruik recente e-mails als signaal, en roep leesEmail aan als de gebruiker inhoudelijke details of een antwoord wil.",
 		},
 		"notes":       noteSnapshot,
-		"laventecare": compactLaventeCare(cockpit, limit),
+		"laventecare": compactLaventeCare(cockpit, dossierAdvice, limit),
 		"actions":     recommendedContextActions(notes, events, cockpit, unread, now, loc, limit),
 		"errors":      errors,
 		"instruction": "Dit is de cross-domain live briefing voor Telegram/Grok. Combineer planning, email, notities en LaventeCare; zeg niet dat data ontbreekt wanneer de bijbehorende aantallen groter zijn dan 0.",
@@ -255,9 +260,19 @@ func compactEmails(emails []model.Email) []map[string]any {
 	return items
 }
 
-func compactLaventeCare(cockpit *model.LCCockpit, limit int) map[string]any {
+func compactLaventeCare(cockpit *model.LCCockpit, dossierAdvice *model.LCDossierAdvice, limit int) map[string]any {
 	if cockpit == nil {
 		return map[string]any{"available": false}
+	}
+	var advice any
+	if dossierAdvice != nil {
+		advice = map[string]any{
+			"status":          dossierAdvice.Status,
+			"coverage":        dossierAdvice.Coverage,
+			"requirements":    takeBriefingItems(dossierAdvice.Requirements, limit),
+			"recommendations": takeBriefingItems(dossierAdvice.Recommendations, limit),
+			"nextActions":     takeBriefingItems(dossierAdvice.NextActions, limit),
+		}
 	}
 	return map[string]any{
 		"available":         true,
@@ -271,6 +286,7 @@ func compactLaventeCare(cockpit *model.LCCockpit, limit int) map[string]any {
 		"signals":           takeBriefingItems(cockpit.BusinessSignals, limit),
 		"followUps":         takeBriefingItems(cockpit.FollowUps, limit),
 		"dossierRecent":     takeBriefingItems(cockpit.DossierDocuments, limit),
+		"dossierAdvice":     advice,
 		"documentsSeeded":   cockpit.Summary.DocumentsSeeded,
 	}
 }

@@ -324,6 +324,66 @@ type LCDossierDocumentCreate struct {
 	Notes         *string    `json:"notes"`
 }
 
+// LCDossierAdviceRequest is a read-only request for AI dossier guidance.
+type LCDossierAdviceRequest struct {
+	CompanyID    *uuid.UUID `json:"company_id,omitempty"`
+	LeadID       *uuid.UUID `json:"lead_id,omitempty"`
+	ProjectID    *uuid.UUID `json:"project_id,omitempty"`
+	WorkstreamID *uuid.UUID `json:"workstream_id,omitempty"`
+	Query        string     `json:"query,omitempty"`
+	Limit        int        `json:"limit,omitempty"`
+}
+
+// LCDossierAdviceTarget describes the CRM entity used as dossier context.
+type LCDossierAdviceTarget struct {
+	Kind        string     `json:"kind"`
+	ID          *uuid.UUID `json:"id,omitempty"`
+	Title       string     `json:"title"`
+	Subtitle    string     `json:"subtitle,omitempty"`
+	CompanyID   *uuid.UUID `json:"company_id,omitempty"`
+	CompanyName string     `json:"company_name,omitempty"`
+	Phase       string     `json:"phase,omitempty"`
+	Status      string     `json:"status,omitempty"`
+	Priority    string     `json:"priority,omitempty"`
+	Query       string     `json:"query,omitempty"`
+}
+
+// LCDocumentRecommendation is a deterministic document recommendation for a dossier.
+type LCDocumentRecommendation struct {
+	Document          LCDocument `json:"document"`
+	Score             int        `json:"score"`
+	Priority          string     `json:"priority"`
+	Usage             string     `json:"usage"`
+	Reasons           []string   `json:"reasons"`
+	AlreadyInDossier  bool       `json:"alreadyInDossier"`
+	DossierDocumentID *uuid.UUID `json:"dossierDocumentId,omitempty"`
+	DossierCreatedAt  *time.Time `json:"dossierCreatedAt,omitempty"`
+}
+
+// LCDossierRequirement tracks a professional dossier building block.
+type LCDossierRequirement struct {
+	Key                     string   `json:"key"`
+	Label                   string   `json:"label"`
+	Status                  string   `json:"status"`
+	Reason                  string   `json:"reason"`
+	RecommendedDocumentKeys []string `json:"recommendedDocumentKeys"`
+}
+
+// LCDossierAdvice is the read-only AI contract used by Telegram, Grok and UI.
+type LCDossierAdvice struct {
+	GeneratedAt             time.Time                  `json:"generatedAt"`
+	Target                  LCDossierAdviceTarget      `json:"target"`
+	Status                  string                     `json:"status"`
+	Coverage                int                        `json:"coverage"`
+	Requirements            []LCDossierRequirement     `json:"requirements"`
+	Recommendations         []LCDocumentRecommendation `json:"recommendations"`
+	PresentDocuments        []LCDossierDocument        `json:"presentDocuments"`
+	TotalDossierDocuments   int                        `json:"totalDossierDocuments"`
+	MatchedDossierDocuments int                        `json:"matchedDossierDocuments"`
+	NextActions             []string                   `json:"nextActions"`
+	Evidence                []string                   `json:"evidence"`
+}
+
 type LCActivityEvent struct {
 	ID             uuid.UUID  `json:"id" db:"id"`
 	UserID         string     `json:"user_id" db:"user_id"`
