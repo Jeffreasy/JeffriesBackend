@@ -207,13 +207,15 @@ Maak uitsluitend een JSON-object voor een professioneel klantmail-concept.
 Gebruik alleen de aangeleverde context. Verzin geen afspraken, bedragen, betaalurls, contactgegevens of toezeggingen.
 Vul url-variabelen zoals cta.url, project.url, quote.url, invoice.payment_url, meeting.url, support.url en change.url alleen als die URL expliciet in de context of bestaande variabelen staat.
 Neem wachtwoorden, tokens, API keys, pincodes of secrets nooit letterlijk over in klantmailvariabelen. Vat toegang veilig samen en verwijs naar het afgesproken veilige kanaal.
+Lees attachment-context zorgvuldig mee. Gebruik attachment summaries en extracted_text om documentation.* variabelen te vullen. Als extraction_status failed is of extracted_text ontbreekt, zeg intern dat de bijlage niet inhoudelijk gelezen is en suggereer geen inhoudelijke conclusies uit dat bestand.
+Noem in klantmail niet welke interne bronnen, notities of AI-controles zijn gebruikt. De klantmail mag alleen compact benoemen welke documenten zijn bijgevoegd en wat de praktische vervolgstap is.
 Vul alleen korte, bruikbare templatevariabelen. Schrijf in helder Nederlands, zakelijk warm, concreet en zonder markdown.
 Antwoord exact met JSON in dit schema:
 {
   "variables": {"placeholder": "waarde"},
   "subject_hint": "optionele onderwerpregel",
   "briefing": "korte interne samenvatting voor Jeffrey",
-  "sources": [{"type":"note|agenda|schedule|action|activity|billing|dossier|laventecare","title":"bron","date":"optioneel","summary":"waarom gebruikt"}],
+  "sources": [{"type":"note|agenda|schedule|action|activity|billing|dossier|attachment|laventecare","title":"bron","date":"optioneel","summary":"waarom gebruikt"}],
   "confidence": "hoog|normaal|laag"
 }`
 	userPrompt := fmt.Sprintf(`Template intent: %s
@@ -222,7 +224,7 @@ Toon: %s
 Context JSON:
 %s
 
-Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, proposal.scope, proposal.current_state, proposal.value, proposal.ai, proposal.security, proposal.costs, proposal.next_step, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, support.summary, change.summary. Houd alles controleerbaar en kort.`,
+Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, proposal.scope, proposal.current_state, proposal.value, proposal.ai, proposal.security, proposal.costs, proposal.next_step, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, documentation.summary, documentation.attachments, documentation.next_step, support.summary, change.summary. Als attachments aanwezig zijn, baseer documentation.summary, documentation.attachments en documentation.next_step op de gelezen attachment-context. Houd alles controleerbaar en kort.`,
 		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
 
 	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
@@ -286,12 +288,13 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 	}
 
 	result, err := h.mailSender.Send(r.Context(), mail.SendInput{
-		To:      []string{item.ToEmail},
-		CC:      item.CC,
-		BCC:     item.BCC,
-		Subject: item.Subject,
-		HTML:    item.BodyHTML,
-		Text:    derefModelString(item.BodyText),
+		To:          []string{item.ToEmail},
+		CC:          item.CC,
+		BCC:         item.BCC,
+		Subject:     item.Subject,
+		HTML:        item.BodyHTML,
+		Text:        derefModelString(item.BodyText),
+		Attachments: mailAttachmentsFromModel(input.Attachments),
 	})
 	if err != nil {
 		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, err.Error())
@@ -310,6 +313,9 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 	}
 	if item.CompanyID != nil {
 		body := fmt.Sprintf("Aan: %s\nTemplate: %s", item.ToEmail, derefModelString(item.TemplateName))
+		if names := mailAttachmentNames(input.Attachments); len(names) > 0 {
+			body += "\nBijlagen: " + strings.Join(names, ", ")
+		}
 		_, _ = h.store.CreateActivityEvent(r.Context(), h.userID, model.LCActivityEventCreate{
 			CompanyID:    *item.CompanyID,
 			ContactID:    item.ContactID,
@@ -327,6 +333,32 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		return
 	}
 	JSON(w, http.StatusCreated, sent)
+}
+
+func mailAttachmentsFromModel(items []model.LCMailAttachment) []mail.Attachment {
+	if len(items) == 0 {
+		return nil
+	}
+	attachments := make([]mail.Attachment, 0, len(items))
+	for _, item := range items {
+		attachments = append(attachments, mail.Attachment{
+			Name:         item.Name,
+			ContentType:  item.ContentType,
+			ContentBytes: item.ContentBytes,
+		})
+	}
+	return attachments
+}
+
+func mailAttachmentNames(items []model.LCMailAttachment) []string {
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // CreateQuote creates a LaventeCare quote.
@@ -1988,6 +2020,17 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 			mailAIAddVariable(variables, "pilot.access_summary", "pilottoegang stem ik voor de start af via het afgesproken kanaal")
 		}
 	}
+	if len(contextBundle.Attachments) > 0 {
+		if variables["documentation.attachments"] == "" {
+			mailAIAddVariable(variables, "documentation.attachments", mailAIAttachmentNames(contextBundle.Attachments))
+		}
+		if variables["documentation.summary"] == "" || strings.Contains(strings.ToLower(variables["documentation.summary"]), "staat klaar") {
+			mailAIAddVariable(variables, "documentation.summary", mailAIAttachmentSummary(contextBundle.Attachments))
+		}
+		if variables["documentation.next_step"] == "" {
+			mailAIAddVariable(variables, "documentation.next_step", "loop de bijgevoegde documentatie door en geef aan welke punten we bij de pilotstart samen moeten aanscherpen")
+		}
+	}
 	if variables["support.summary"] == "" {
 		mailAIAddVariable(variables, "support.summary", mailAIItemsLine(contextBundle.Notes, 2))
 	}
@@ -2016,6 +2059,12 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 		subjectHint = fmt.Sprintf("%s - %s", contextBundle.Template.Name, target)
 	}
 	briefing := fmt.Sprintf("Contextvoorstel op basis van %d bron(nen). Controleer bedragen, deadlines en klantafspraken voordat je verzendt.", len(sources))
+	if len(contextBundle.Attachments) > 0 {
+		briefing = briefing + fmt.Sprintf(" %d bijlage(n) zijn meegenomen in de AI-context.", len(contextBundle.Attachments))
+		if mailAIHasUnreadableAttachments(contextBundle.Attachments) {
+			briefing = briefing + " Minstens een bijlage kon niet volledig gelezen worden; controleer die handmatig voordat je inhoudelijk verwijst."
+		}
+	}
 	if mailAIHasAccessContext(contextBundle.Notes) {
 		briefing = briefing + " Toegangsnotitie gevonden; gevoelige waarden zijn afgeschermd en horen alleen bewust via een veilig kanaal gedeeld te worden."
 	}
@@ -2078,6 +2127,16 @@ func extractMailAIJSON(raw string) string {
 
 func mailAISourcesFromContext(contextBundle *model.LCMailAIContext) []model.LCMailAISource {
 	sources := []model.LCMailAISource{}
+	for _, attachment := range contextBundle.Attachments {
+		if len(sources) >= 4 {
+			break
+		}
+		sources = append(sources, model.LCMailAISource{
+			Type:    "attachment",
+			Title:   attachment.Name,
+			Summary: mailAIJoinNonEmpty([]string{attachment.ExtractionStatus, attachment.Summary}, " - "),
+		})
+	}
 	addItems := func(items []model.LCMailAIContextItem, max int) {
 		for _, item := range items {
 			if len(sources) >= 10 || max <= 0 {
@@ -2107,6 +2166,54 @@ func mailAISourcesFromContext(contextBundle *model.LCMailAIContext) []model.LCMa
 		sources = append(sources, model.LCMailAISource{Type: "laventecare", Title: title, Summary: "Geen extra notities of agenda-items gevonden."})
 	}
 	return sources
+}
+
+func mailAIAttachmentNames(items []model.LCMailAIContextAttachment) string {
+	names := []string{}
+	for _, item := range items {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		name := strings.TrimSuffix(item.Name, ".pdf")
+		name = strings.TrimSuffix(name, ".PDF")
+		name = strings.ReplaceAll(name, "henke-wonen-portal-", "")
+		name = strings.ReplaceAll(name, "-Print", "")
+		name = strings.ReplaceAll(name, "-", " ")
+		names = append(names, strings.TrimSpace(name))
+	}
+	return mailAIJoinNonEmpty(names, ", ")
+}
+
+func mailAIAttachmentSummary(items []model.LCMailAIContextAttachment) string {
+	readable := []string{}
+	unreadable := 0
+	for _, item := range items {
+		if item.ExtractionStatus == "failed" || strings.TrimSpace(item.ExtractedText) == "" {
+			unreadable++
+			continue
+		}
+		readable = append(readable, item.Summary)
+		if len(readable) >= 3 {
+			break
+		}
+	}
+	if len(readable) == 0 {
+		return "Ik stuur de bijgevoegde documentatie mee als praktische start- en naslagset; controleer de inhoud nog handmatig omdat tekstextractie niet betrouwbaar beschikbaar was."
+	}
+	result := "De bijgevoegde documentatie vormt een praktische start- en naslagset: " + mailAIJoinNonEmpty(readable, " ")
+	if unreadable > 0 {
+		result += fmt.Sprintf(" Let op: %d bijlage(n) vragen nog handmatige controle.", unreadable)
+	}
+	return result
+}
+
+func mailAIHasUnreadableAttachments(items []model.LCMailAIContextAttachment) bool {
+	for _, item := range items {
+		if item.ExtractionStatus == "failed" || strings.TrimSpace(item.ExtractedText) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func mailAIHasAccessContext(items []model.LCMailAIContextItem) bool {

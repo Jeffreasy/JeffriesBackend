@@ -3,6 +3,7 @@ package mail
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 const (
 	graphBaseURL = "https://graph.microsoft.com/v1.0"
 	graphScope   = "https://graph.microsoft.com/.default"
+
+	maxAttachmentBytes = 3 * 1024 * 1024
 )
 
 var ErrNotConfigured = errors.New("laventecare mail is not configured")
@@ -36,12 +39,19 @@ type tokenCache struct {
 }
 
 type SendInput struct {
-	To      []string
-	CC      []string
-	BCC     []string
-	Subject string
-	HTML    string
-	Text    string
+	To          []string
+	CC          []string
+	BCC         []string
+	Subject     string
+	HTML        string
+	Text        string
+	Attachments []Attachment
+}
+
+type Attachment struct {
+	Name         string
+	ContentType  string
+	ContentBytes string
 }
 
 type SendResult struct {
@@ -90,17 +100,26 @@ func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error)
 		return nil, errors.New("mail body is required")
 	}
 
-	payload := map[string]any{
-		"message": map[string]any{
-			"subject": subject,
-			"body": map[string]string{
-				"contentType": contentType,
-				"content":     content,
-			},
-			"toRecipients":  toRecipients(to),
-			"ccRecipients":  toRecipients(normalizeAddresses(input.CC)),
-			"bccRecipients": toRecipients(normalizeAddresses(input.BCC)),
+	message := map[string]any{
+		"subject": subject,
+		"body": map[string]string{
+			"contentType": contentType,
+			"content":     content,
 		},
+		"toRecipients":  toRecipients(to),
+		"ccRecipients":  toRecipients(normalizeAddresses(input.CC)),
+		"bccRecipients": toRecipients(normalizeAddresses(input.BCC)),
+	}
+	attachments, err := graphAttachments(input.Attachments)
+	if err != nil {
+		return nil, err
+	}
+	if len(attachments) > 0 {
+		message["attachments"] = attachments
+	}
+
+	payload := map[string]any{
+		"message":         message,
 		"saveToSentItems": true,
 	}
 
@@ -111,6 +130,44 @@ func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error)
 	return &SendResult{
 		ProviderMessageID: "graph-send-" + time.Now().UTC().Format("20060102T150405.000000000Z"),
 	}, nil
+}
+
+func graphAttachments(input []Attachment) ([]map[string]any, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	attachments := make([]map[string]any, 0, len(input))
+	for _, item := range input {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return nil, errors.New("attachment name is required")
+		}
+		contentBytes := strings.TrimSpace(item.ContentBytes)
+		if contentBytes == "" {
+			return nil, fmt.Errorf("attachment %q has no content", name)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(contentBytes)
+		if err != nil {
+			return nil, fmt.Errorf("attachment %q is not valid base64", name)
+		}
+		if len(decoded) == 0 {
+			return nil, fmt.Errorf("attachment %q is empty", name)
+		}
+		if len(decoded) > maxAttachmentBytes {
+			return nil, fmt.Errorf("attachment %q is too large; max is 3MB", name)
+		}
+		contentType := strings.TrimSpace(item.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		attachments = append(attachments, map[string]any{
+			"@odata.type":  "#microsoft.graph.fileAttachment",
+			"name":         name,
+			"contentType":  contentType,
+			"contentBytes": contentBytes,
+		})
+	}
+	return attachments, nil
 }
 
 func (s *Sender) graphRequest(ctx context.Context, method, path string, body any, out any) error {

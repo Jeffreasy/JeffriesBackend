@@ -206,6 +206,7 @@ func (s *LaventeCareStore) BuildMailAIContext(ctx context.Context, userID string
 		Activity:     activity,
 		Billing:      billing,
 		Dossier:      dossier,
+		Attachments:  sanitizeMailAIAttachments(input.Attachments),
 		ExistingVars: safeStringMap(input.Variables),
 		Today:        time.Now().In(loc).Format("2006-01-02"),
 	}, nil
@@ -448,6 +449,27 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 				ClosingLine: "Na jouw akkoord zet ik de status definitief op opgeleverd.",
 			}),
 			BodyText: mailStrPtr("Beste {{contact.naam}},\n\n{{project.naam}} is klaar voor oplevering. Hieronder staat compact wat is afgerond en wat de vervolgstap is.\n\nOverdracht:\n- Opgeleverd: {{delivery.done}}\n- Nog te controleren: {{delivery.check}}\n- Vervolg/beheer: {{next_step}}\n\nNa jouw akkoord zet ik de status definitief op opgeleverd.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+		},
+		{
+			TemplateKey:     "documentation_handover",
+			Name:            "Klantdocumentatie versturen",
+			Category:        "delivery",
+			Status:          "active",
+			SubjectTemplate: "Documentatie pilot - {{project.naam}}",
+			BodyHTML: brandedMailHTML(mailTemplateContent{
+				Preheader:   "De belangrijkste documentatie voor de pilot staat als bijlage klaar.",
+				Eyebrow:     "Documentatie",
+				Title:       "Klantdocumentatie voor de pilot",
+				Greeting:    "Beste {{contact.naam}},",
+				Intro:       "Hierbij stuur ik de documentatie voor {{project.naam}}.",
+				Body:        "{{documentation.summary}}",
+				FocusTitle:  "Bijgevoegd",
+				FocusItems:  []string{"Documenten: {{documentation.attachments}}", "Gebruik: als praktische start- en naslagset voor de pilot.", "Vervolg: {{documentation.next_step}}"},
+				CTAURL:      "{{project.url}}",
+				CTALabel:    "Project bekijken",
+				ClosingLine: "Zo houden we de start overzichtelijk en kunnen we gericht bijsturen waar nodig.",
+			}),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nHierbij stuur ik de documentatie voor {{project.naam}}.\n\n{{documentation.summary}}\n\nBijgevoegd:\n- Documenten: {{documentation.attachments}}\n- Gebruik: als praktische start- en naslagset voor de pilot.\n- Vervolg: {{documentation.next_step}}\n\nZo houden we de start overzichtelijk en kunnen we gericht bijsturen waar nodig.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "meeting_recap",
@@ -739,54 +761,57 @@ func (s *LaventeCareStore) MarkMailOutboxFailed(ctx context.Context, userID stri
 func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest, templateKey string) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
 	inputVars := safeStringMap(input.Variables)
 	values := map[string]string{
-		"laventecare.name":       "LaventeCare",
-		"laventecare.owner":      "Jeffrey Lavente",
-		"laventecare.email":      valueOr(strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")), "jeffrey@laventecare.nl"),
-		"laventecare.phone":      "+31 6 39 03 40 85",
-		"laventecare.website":    "https://www.laventecare.nl",
-		"laventecare.logo_url":   "https://ik.imagekit.io/a0oim4e3e/tr:f-png,w-112/LaventeCare/logo.svg?updatedAt=1779275051433",
-		"laventecare.tagline":    "Van idee tot werkend systeem",
-		"cta.label":              "Afstemmen",
-		"cta.url":                "",
-		"quote.number":           "concept",
-		"quote.summary":          "de afgesproken scope",
-		"quote.url":              "",
-		"invoice.number":         "concept",
-		"invoice.amount":         "zie factuur",
-		"invoice.due_date":       "14 dagen",
-		"invoice.payment_url":    "",
-		"project.naam":           "het project",
-		"project.status":         "in uitvoering",
-		"project.update":         "De voortgang loopt volgens afspraak.",
-		"project.risk":           "geen bijzonderheden",
-		"project.url":            "",
-		"proposal.scope":         "de afgesproken scope",
-		"proposal.current_state": "Er is een werkende basis, maar productieafspraken, beveiliging, AVG, onderhoud en fasering moeten nog expliciet worden vastgelegd.",
-		"proposal.value":         "minder handmatig werk, sneller kandidaten verwerken, beter overzicht en beter onderbouwde matches",
-		"proposal.ai":            "de AI-score is adviserend, uitlegbaar en blijft onder menselijke controle",
-		"proposal.security":      "broncode, export, eigendom en AVG-afspraken worden expliciet vastgelegd voordat productie live gaat",
-		"proposal.costs":         "projectkosten en maandelijkse kosten worden apart gemaakt, inclusief hosting, AI, opslag en onderhoud",
-		"proposal.next_step":     "demo tonen, vragen afstemmen en daarna scope/offerte definitief maken",
-		"pilot.scope":            "de afgesproken testscope",
-		"pilot.criteria":         "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
-		"pilot.feedback_moment":  "na de eerste testperiode",
-		"pilot.access_summary":   "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
-		"meeting.topic":          "afstemming",
-		"meeting.summary":        "De besproken punten zijn vastgelegd in het klantdossier.",
-		"meeting.actions":        "de vervolgstap wordt opgepakt",
-		"meeting.url":            "",
-		"delivery.done":          "de afgesproken werkzaamheden",
-		"delivery.check":         "laatste controle door klant",
-		"support.priority":       "normaal",
-		"support.status":         "in behandeling",
-		"support.summary":        "De melding is geregistreerd en wordt opgevolgd.",
-		"support.url":            "",
-		"change.title":           "wijziging",
-		"change.summary":         "De wijziging is vastgelegd ter bevestiging.",
-		"change.planning_impact": "nog te bepalen",
-		"change.budget_impact":   "nog te bepalen",
-		"change.url":             "",
-		"next_step":              "Ik hoor graag wat voor jou het beste moment is om dit op te pakken.",
+		"laventecare.name":          "LaventeCare",
+		"laventecare.owner":         "Jeffrey Lavente",
+		"laventecare.email":         valueOr(strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")), "jeffrey@laventecare.nl"),
+		"laventecare.phone":         "+31 6 39 03 40 85",
+		"laventecare.website":       "https://www.laventecare.nl",
+		"laventecare.logo_url":      "https://ik.imagekit.io/a0oim4e3e/tr:f-png,w-112/LaventeCare/logo.svg?updatedAt=1779275051433",
+		"laventecare.tagline":       "Van idee tot werkend systeem",
+		"cta.label":                 "Afstemmen",
+		"cta.url":                   "",
+		"quote.number":              "concept",
+		"quote.summary":             "de afgesproken scope",
+		"quote.url":                 "",
+		"invoice.number":            "concept",
+		"invoice.amount":            "zie factuur",
+		"invoice.due_date":          "14 dagen",
+		"invoice.payment_url":       "",
+		"project.naam":              "het project",
+		"project.status":            "in uitvoering",
+		"project.update":            "De voortgang loopt volgens afspraak.",
+		"project.risk":              "geen bijzonderheden",
+		"project.url":               "",
+		"proposal.scope":            "de afgesproken scope",
+		"proposal.current_state":    "Er is een werkende basis, maar productieafspraken, beveiliging, AVG, onderhoud en fasering moeten nog expliciet worden vastgelegd.",
+		"proposal.value":            "minder handmatig werk, sneller kandidaten verwerken, beter overzicht en beter onderbouwde matches",
+		"proposal.ai":               "de AI-score is adviserend, uitlegbaar en blijft onder menselijke controle",
+		"proposal.security":         "broncode, export, eigendom en AVG-afspraken worden expliciet vastgelegd voordat productie live gaat",
+		"proposal.costs":            "projectkosten en maandelijkse kosten worden apart gemaakt, inclusief hosting, AI, opslag en onderhoud",
+		"proposal.next_step":        "demo tonen, vragen afstemmen en daarna scope/offerte definitief maken",
+		"pilot.scope":               "de afgesproken testscope",
+		"pilot.criteria":            "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
+		"pilot.feedback_moment":     "na de eerste testperiode",
+		"pilot.access_summary":      "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
+		"meeting.topic":             "afstemming",
+		"meeting.summary":           "De besproken punten zijn vastgelegd in het klantdossier.",
+		"meeting.actions":           "de vervolgstap wordt opgepakt",
+		"meeting.url":               "",
+		"delivery.done":             "de afgesproken werkzaamheden",
+		"delivery.check":            "laatste controle door klant",
+		"documentation.summary":     "de klantdocumentatie staat klaar voor gebruik tijdens de pilot.",
+		"documentation.attachments": "quickstart, workflowhandleiding, pilotafspraken en vrijgave/datakwaliteit",
+		"documentation.next_step":   "loop de documenten rustig door en geef aan welke punten we bij de start samen willen aanscherpen",
+		"support.priority":          "normaal",
+		"support.status":            "in behandeling",
+		"support.summary":           "De melding is geregistreerd en wordt opgevolgd.",
+		"support.url":               "",
+		"change.title":              "wijziging",
+		"change.summary":            "De wijziging is vastgelegd ter bevestiging.",
+		"change.planning_impact":    "nog te bepalen",
+		"change.budget_impact":      "nog te bepalen",
+		"change.url":                "",
+		"next_step":                 "Ik hoor graag wat voor jou het beste moment is om dit op te pakken.",
 	}
 
 	var company *model.LCCompany
@@ -1522,6 +1547,47 @@ func mailAIUsefulKeywords(values []string) []string {
 		result = append(result, value)
 	}
 	return dedupeLowerKeywords(result)
+}
+
+func sanitizeMailAIAttachments(items []model.LCMailAIContextAttachment) []model.LCMailAIContextAttachment {
+	if len(items) == 0 {
+		return []model.LCMailAIContextAttachment{}
+	}
+	const maxAttachments = 8
+	const maxTextChars = 9000
+	const maxSummaryChars = 700
+	if len(items) > maxAttachments {
+		items = items[:maxAttachments]
+	}
+	out := make([]model.LCMailAIContextAttachment, 0, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(item.ExtractionStatus))
+		if status != "ok" && status != "partial" && status != "failed" {
+			status = "failed"
+		}
+		out = append(out, model.LCMailAIContextAttachment{
+			Name:             name,
+			ContentType:      strings.TrimSpace(item.ContentType),
+			Size:             item.Size,
+			Pages:            item.Pages,
+			ExtractedText:    truncateMailAIText(item.ExtractedText, maxTextChars),
+			Summary:          truncateMailAIText(item.Summary, maxSummaryChars),
+			ExtractionStatus: status,
+		})
+	}
+	return out
+}
+
+func truncateMailAIText(value string, max int) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if max <= 0 || len(clean) <= max {
+		return clean
+	}
+	return strings.TrimSpace(clean[:max-1]) + "…"
 }
 
 func safeStringMap(values map[string]string) map[string]string {
