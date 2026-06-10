@@ -207,6 +207,7 @@ Maak uitsluitend een JSON-object voor een professioneel klantmail-concept.
 Gebruik alleen de aangeleverde context. Verzin geen afspraken, bedragen, betaalurls, contactgegevens of toezeggingen.
 Vul url-variabelen zoals cta.url, project.url, quote.url, invoice.payment_url, meeting.url, support.url en change.url alleen als die URL expliciet in de context of bestaande variabelen staat.
 Neem wachtwoorden, tokens, API keys, pincodes of secrets nooit letterlijk over in klantmailvariabelen. Vat toegang veilig samen en verwijs naar het afgesproken veilige kanaal.
+Voor pilotmails wordt het accountblok server-side opgebouwd uit gekoppelde accountnotities; vul daarvoor geen eigen HTML en neem geen platte accountlijsten over.
 Lees attachment-context zorgvuldig mee. Gebruik attachment summaries en extracted_text om documentation.* variabelen te vullen. Als extraction_status failed is of extracted_text ontbreekt, zeg intern dat de bijlage niet inhoudelijk gelezen is en suggereer geen inhoudelijke conclusies uit dat bestand.
 Noem in klantmail niet welke interne bronnen, notities of AI-controles zijn gebruikt. De klantmail mag alleen compact benoemen welke documenten zijn bijgevoegd en wat de praktische vervolgstap is.
 Vul alleen korte, bruikbare templatevariabelen. Schrijf in helder Nederlands, zakelijk warm, concreet en zonder markdown.
@@ -224,7 +225,7 @@ Toon: %s
 Context JSON:
 %s
 
-Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, proposal.scope, proposal.current_state, proposal.value, proposal.ai, proposal.security, proposal.costs, proposal.next_step, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, documentation.summary, documentation.attachments, documentation.next_step, support.summary, change.summary. Als attachments aanwezig zijn, baseer documentation.summary, documentation.attachments en documentation.next_step op de gelezen attachment-context. Houd alles controleerbaar en kort.`,
+Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de placeholders in subject/body van de template en op gangbare LaventeCare-velden zoals next_step, meeting.summary, meeting.actions, project.update, project.risk, proposal.scope, proposal.current_state, proposal.value, proposal.ai, proposal.security, proposal.costs, proposal.next_step, pilot.scope, pilot.criteria, pilot.feedback_moment, pilot.access_intro, pilot.access_summary, quote.summary, invoice.payment_url, delivery.done, documentation.summary, documentation.attachments, documentation.next_step, support.summary, change.summary. Als attachments aanwezig zijn, baseer documentation.summary, documentation.attachments en documentation.next_step op de gelezen attachment-context. Houd alles controleerbaar en kort.`,
 		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
 
 	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
@@ -2015,8 +2016,10 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 	}
 	if mailAIIsDefaultPilotAccessSummary(variables["pilot.access_summary"]) {
 		if mailAIHasAccessContext(contextBundle.Notes) {
+			mailAIAddVariable(variables, "pilot.access_intro", "toegangsgegevens staan in het klantdossier")
 			mailAIAddVariable(variables, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 		} else {
+			mailAIAddVariable(variables, "pilot.access_intro", "pilottoegang stem ik voor de start af via het afgesproken kanaal")
 			mailAIAddVariable(variables, "pilot.access_summary", "pilottoegang stem ik voor de start af via het afgesproken kanaal")
 		}
 	}

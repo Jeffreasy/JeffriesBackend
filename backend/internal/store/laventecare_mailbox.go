@@ -422,12 +422,13 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 				Intro:       "We kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.",
 				Body:        "De focus ligt op een korte, controleerbare test: wat werkt goed, waar zit frictie en welke keuzes moeten we maken voor de volgende stap.",
 				FocusTitle:  "Pilotafspraken",
-				FocusItems:  []string{"Scope: {{pilot.scope}}", "Testcriteria: {{pilot.criteria}}", "Feedbackmoment: {{pilot.feedback_moment}}", "Toegang: {{pilot.access_summary}}", "Vervolg: {{next_step}}"},
+				FocusItems:  []string{"Scope: {{pilot.scope}}", "Testcriteria: {{pilot.criteria}}", "Feedbackmoment: {{pilot.feedback_moment}}", "Toegang: {{pilot.access_intro}}", "Vervolg: {{next_step}}"},
+				ExtraHTML:   "{{pilot.access_block_html}}",
 				CTAURL:      "{{project.url}}",
 				CTALabel:    "Pilot bekijken",
 				ClosingLine: "Na deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.",
 			}),
-			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nWe kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.\n\nPilotafspraken:\n- Scope: {{pilot.scope}}\n- Testcriteria: {{pilot.criteria}}\n- Feedbackmoment: {{pilot.feedback_moment}}\n- Toegang: {{pilot.access_summary}}\n- Vervolg: {{next_step}}\n\nNa deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
+			BodyText: mailStrPtr("Beste {{contact.naam}},\n\nWe kunnen de pilot/testfase voor {{project.naam}} starten. In deze fase toetsen we de belangrijkste onderdelen in de praktijk, zonder de volledige uitrol al definitief vast te zetten.\n\nPilotafspraken:\n- Scope: {{pilot.scope}}\n- Testcriteria: {{pilot.criteria}}\n- Feedbackmoment: {{pilot.feedback_moment}}\n- Toegang: {{pilot.access_intro}}\n{{pilot.access_summary}}\n- Vervolg: {{next_step}}\n\nNa deze pilot hebben we genoeg houvast om gericht te beslissen over bijsturen, afronden of opschalen.\n\nMet vriendelijke groet,\nJeffrey Lavente\nLaventeCare"),
 		},
 		{
 			TemplateKey:     "delivery_handover",
@@ -551,7 +552,8 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			        default_cc = EXCLUDED.default_cc,
 			        default_bcc = EXCLUDED.default_bcc,
 			        updated_at = EXCLUDED.updated_at
-			  WHERE lc_mail_templates.body_html NOT LIKE '%laventecare-mail-shell:v2%'`,
+			  WHERE lc_mail_templates.body_html NOT LIKE '%laventecare-mail-shell:v2%'
+			     OR lc_mail_templates.template_key = 'pilot_start'`,
 			uuid.New(), userID, template.TemplateKey, template.Name, template.Category, template.Status,
 			template.SubjectTemplate, template.BodyHTML, template.BodyText, cleanEmails(template.DefaultCC),
 			cleanEmails(template.DefaultBCC), now)
@@ -792,7 +794,9 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		"pilot.scope":               "de afgesproken testscope",
 		"pilot.criteria":            "kernfunctionaliteit, gebruiksgemak en betrouwbaarheid",
 		"pilot.feedback_moment":     "na de eerste testperiode",
+		"pilot.access_intro":        "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
 		"pilot.access_summary":      "pilottoegang stemmen we voor de start af via het afgesproken kanaal",
+		"pilot.access_block_html":   "",
 		"meeting.topic":             "afstemming",
 		"meeting.summary":           "De besproken punten zijn vastgelegd in het klantdossier.",
 		"meeting.actions":           "de vervolgstap wordt opgepakt",
@@ -960,6 +964,8 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 	for key, value := range inputVars {
 		values[key] = value
 	}
+	// The HTML access block is generated server-side from parsed credential fields.
+	values["pilot.access_block_html"] = ""
 	accessIDs, accessKeywords := mailAIContextKeys(company, contact, mailProject, mailWorkstream)
 	hasAccessNote, err := s.mailAIAccessNoteExists(ctx, userID, accessIDs, accessKeywords)
 	if err != nil {
@@ -971,12 +977,14 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 			if err != nil {
 				return nil, nil, nil, "", nil, err
 			}
-			setMailValue(values, "pilot.access_summary", details)
+			applyMailAccessDetails(values, details)
 		}
 		if isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
+			setMailValue(values, "pilot.access_intro", "toegangsgegevens staan in het klantdossier")
 			setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 		}
 	}
+	normalizeMailAccessVariables(values)
 
 	return values, companyID, contactID, toEmail, toName, nil
 }
@@ -1215,10 +1223,10 @@ func (s *LaventeCareStore) mailAIAccessNoteExists(ctx context.Context, userID st
 	return exists, err
 }
 
-func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID string, ids, keywords []string) (string, error) {
+func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID string, ids, keywords []string) (mailAccessDetails, error) {
 	keywords = mailAIUsefulKeywords(keywords)
 	if len(ids) == 0 && len(keywords) == 0 {
-		return "", nil
+		return mailAccessDetails{}, nil
 	}
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT COALESCE(titel, ''), COALESCE(inhoud, '')
@@ -1245,7 +1253,7 @@ func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID 
 		userID, ids, keywords,
 	)
 	if err != nil {
-		return "", err
+		return mailAccessDetails{}, err
 	}
 	defer rows.Close()
 
@@ -1253,7 +1261,7 @@ func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID 
 	for rows.Next() {
 		var title, content string
 		if err := rows.Scan(&title, &content); err != nil {
-			return "", err
+			return mailAccessDetails{}, err
 		}
 		credentials = append(credentials, parseMailAccessCredentials(title+"\n"+content)...)
 		if len(credentials) >= 8 {
@@ -1261,9 +1269,9 @@ func (s *LaventeCareStore) mailAIPilotAccessDetails(ctx context.Context, userID 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return mailAccessDetails{}, err
 	}
-	return formatMailAccessCredentials(credentials), nil
+	return formatMailAccessDetails(credentials), nil
 }
 
 func (s *LaventeCareStore) mailAIAgenda(ctx context.Context, userID string, ids, keywords []string) ([]model.LCMailAIContextItem, error) {
@@ -1695,6 +1703,18 @@ type mailAccessCredential struct {
 	Role     string
 }
 
+type mailAccessDetails struct {
+	Intro     string
+	Summary   string
+	BlockHTML string
+}
+
+var (
+	mailAccessLabelPattern   = `account\s+email|e-?\s*mail|email|mail|login\s+url|portal\s+url|omgeving\s+url|gebruikersnaam|username|accountnaam|wachtwoord|password|pass|ww|rechten\s+rol|rechten|rol|role|portal|url`
+	mailAccessLabelValueRe   = regexp.MustCompile(`(?i)(` + mailAccessLabelPattern + `)\s*[:=]`)
+	mailAccessIndexedLabelRe = regexp.MustCompile(`(?i)(^|\s)(\d+)\.\s+(` + mailAccessLabelPattern + `)\s*[:=]`)
+)
+
 func parseMailAccessCredentials(value string) []mailAccessCredential {
 	credentials := []mailAccessCredential{}
 	current := mailAccessCredential{}
@@ -1711,30 +1731,32 @@ func parseMailAccessCredentials(value string) []mailAccessCredential {
 		if line == "" {
 			continue
 		}
-		key, lineValue, ok := splitMailAccessLabel(line)
-		if !ok || lineValue == "" {
-			continue
-		}
-		switch key {
-		case "email":
-			if current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "" {
-				flush()
+		for _, pair := range splitMailAccessLabelValues(line) {
+			key, lineValue := pair[0], pair[1]
+			if lineValue == "" {
+				continue
 			}
-			current.Email = lineValue
-		case "username":
-			if current.Username != "" && (current.Email != "" || current.Password != "" || current.Role != "") {
-				flush()
+			switch key {
+			case "email":
+				if current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "" {
+					flush()
+				}
+				current.Email = lineValue
+			case "username":
+				if current.Username != "" && (current.Email != "" || current.Password != "" || current.Role != "") {
+					flush()
+				}
+				current.Username = lineValue
+			case "password":
+				current.Password = lineValue
+			case "role":
+				current.Role = lineValue
+			case "url":
+				if current.LoginURL != "" && (current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "") {
+					flush()
+				}
+				current.LoginURL = lineValue
 			}
-			current.Username = lineValue
-		case "password":
-			current.Password = lineValue
-		case "role":
-			current.Role = lineValue
-		case "url":
-			if current.LoginURL != "" && (current.Email != "" || current.Username != "" || current.Password != "" || current.Role != "") {
-				flush()
-			}
-			current.LoginURL = lineValue
 		}
 	}
 	flush()
@@ -1742,6 +1764,47 @@ func parseMailAccessCredentials(value string) []mailAccessCredential {
 		return credentials[:8]
 	}
 	return credentials
+}
+
+func splitMailAccessLabelValues(line string) [][2]string {
+	line = strings.TrimSpace(line)
+	line = mailAccessIndexedLabelRe.ReplaceAllString(line, " $3:")
+	matches := mailAccessLabelValueRe.FindAllStringSubmatchIndex(line, -1)
+	if len(matches) == 0 {
+		key, value, ok := splitMailAccessLabel(line)
+		if !ok {
+			return nil
+		}
+		return [][2]string{{key, value}}
+	}
+	pairs := make([][2]string, 0, len(matches))
+	for index, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		label := line[match[2]:match[3]]
+		key, ok := canonicalMailAccessLabel(label)
+		if !ok {
+			continue
+		}
+		end := len(line)
+		if index+1 < len(matches) {
+			end = matches[index+1][0]
+		}
+		value := cleanMailAccessValue(line[match[1]:end])
+		if value == "" {
+			continue
+		}
+		pairs = append(pairs, [2]string{key, value})
+	}
+	return pairs
+}
+
+func cleanMailAccessValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimLeft(value, "-–—;|,. \t")
+	value = strings.TrimRight(value, "-–—;|, \t")
+	return strings.TrimSpace(value)
 }
 
 func splitMailAccessLabel(line string) (string, string, bool) {
@@ -1752,59 +1815,186 @@ func splitMailAccessLabel(line string) (string, string, bool) {
 	if len(parts) != 2 {
 		return "", "", false
 	}
-	key := strings.ToLower(strings.TrimSpace(parts[0]))
-	value := strings.TrimSpace(parts[1])
+	key, ok := canonicalMailAccessLabel(parts[0])
+	value := cleanMailAccessValue(parts[1])
+	if !ok {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func canonicalMailAccessLabel(label string) (string, bool) {
+	key := strings.ToLower(strings.TrimSpace(label))
 	key = strings.ReplaceAll(key, "-", "")
 	key = strings.ReplaceAll(key, "_", "")
 	key = strings.Join(strings.Fields(key), " ")
 	switch key {
 	case "e mail", "email", "mail", "account email":
-		return "email", value, true
+		return "email", true
 	case "gebruikersnaam", "username", "user", "login", "account", "accountnaam":
-		return "username", value, true
+		return "username", true
 	case "wachtwoord", "password", "pass", "ww":
-		return "password", value, true
+		return "password", true
 	case "rol", "role", "rechten", "rechten rol":
-		return "role", value, true
+		return "role", true
 	case "login url", "url", "portal", "portal url", "omgeving url":
-		return "url", value, true
+		return "url", true
 	default:
-		return "", "", false
+		return "", false
 	}
 }
 
 func formatMailAccessCredentials(credentials []mailAccessCredential) string {
+	return formatMailAccessCredentialsText(credentials)
+}
+
+func formatMailAccessDetails(credentials []mailAccessCredential) mailAccessDetails {
+	summary := formatMailAccessCredentialsText(credentials)
+	if summary == "" {
+		return mailAccessDetails{}
+	}
+	return mailAccessDetails{
+		Intro:     "pilotaccounts staan klaar voor de testfase",
+		Summary:   summary,
+		BlockHTML: formatMailAccessCredentialsHTML(credentials),
+	}
+}
+
+func formatMailAccessCredentialsText(credentials []mailAccessCredential) string {
 	if len(credentials) == 0 {
 		return ""
 	}
-	lines := []string{"Pilotaccounts:"}
+	lines := []string{"Pilotaccounts staan klaar voor de testfase."}
 	for index, credential := range credentials {
-		parts := []string{}
+		parts := []string{fmt.Sprintf("Account %d", index+1)}
 		if credential.LoginURL != "" {
-			parts = append(parts, "Login URL: "+credential.LoginURL)
+			parts = append(parts, "- Login URL: "+credential.LoginURL)
 		}
 		if credential.Email != "" {
-			parts = append(parts, "E-mail: "+credential.Email)
+			parts = append(parts, "- E-mail: "+credential.Email)
 		}
 		if credential.Username != "" && !strings.EqualFold(credential.Username, credential.Email) {
-			parts = append(parts, "Gebruikersnaam: "+credential.Username)
+			parts = append(parts, "- Gebruikersnaam: "+credential.Username)
 		}
 		if credential.Password != "" {
-			parts = append(parts, "Wachtwoord: "+credential.Password)
+			parts = append(parts, "- Wachtwoord: "+credential.Password)
 		}
 		if credential.Role != "" {
-			parts = append(parts, "Rol: "+credential.Role)
+			parts = append(parts, "- Rol: "+credential.Role)
 		}
-		if len(parts) == 0 {
+		if len(parts) == 1 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s", index+1, strings.Join(parts, " - ")))
+		lines = append(lines, strings.Join(parts, "\n"))
 	}
 	if len(lines) == 1 {
 		return ""
 	}
 	lines = append(lines, "Gebruik deze gegevens alleen voor de pilot/testfase; na afloop trekken we toegang in of zetten we deze om.")
 	return strings.Join(lines, "\n")
+}
+
+func formatMailAccessCredentialsHTML(credentials []mailAccessCredential) string {
+	if len(credentials) == 0 {
+		return ""
+	}
+	var rows strings.Builder
+	for index, credential := range credentials {
+		titleParts := []string{fmt.Sprintf("Account %d", index+1)}
+		if strings.TrimSpace(credential.Role) != "" {
+			titleParts = append(titleParts, credential.Role)
+		}
+		fields := strings.Builder{}
+		fields.WriteString(mailAccessFieldHTML("E-mail", credential.Email, "email"))
+		if credential.Username != "" && !strings.EqualFold(credential.Username, credential.Email) {
+			fields.WriteString(mailAccessFieldHTML("Gebruikersnaam", credential.Username, "text"))
+		}
+		fields.WriteString(mailAccessFieldHTML("Wachtwoord", credential.Password, "secret"))
+		fields.WriteString(mailAccessFieldHTML("Rol", credential.Role, "text"))
+		fields.WriteString(mailAccessFieldHTML("Login URL", credential.LoginURL, "url"))
+		if fields.Len() == 0 {
+			continue
+		}
+		rows.WriteString(fmt.Sprintf(
+			`<tr><td style="padding:0 0 10px 0;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background:#ffffff;border:1px solid #dbeafe;border-radius:10px;">
+    <tr><td style="padding:13px 14px 4px 14px;font-size:12px;line-height:1.45;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:#0369a1;">%s</td></tr>
+    <tr><td style="padding:0 14px 12px 14px;">%s</td></tr>
+  </table>
+</td></tr>`,
+			escapeMailText(strings.Join(titleParts, " · ")),
+			fields.String(),
+		))
+	}
+	if rows.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		`<tr><td style="padding:0 28px 26px 28px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #0891b2;border-radius:12px;">
+    <tr><td style="padding:16px 18px 6px 18px;">
+      <div style="font-size:11px;line-height:1.4;font-weight:900;letter-spacing:1.2px;text-transform:uppercase;color:#0f766e;">Pilotaccounts</div>
+      <div style="margin-top:5px;font-size:13px;line-height:1.55;color:#64748b;">Gebruik deze gegevens alleen voor de pilot/testfase.</div>
+    </td></tr>
+    <tr><td style="padding:4px 18px 4px 18px;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%%">%s</table></td></tr>
+    <tr><td style="padding:4px 18px 16px 18px;font-size:12px;line-height:1.55;color:#64748b;">Na afloop trekken we toegang in of zetten we deze om.</td></tr>
+  </table>
+</td></tr>`,
+		rows.String(),
+	)
+}
+
+func mailAccessFieldHTML(label, value, kind string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	display := escapeMailText(value)
+	if kind == "email" && strings.Contains(value, "@") {
+		display = fmt.Sprintf(`<a href="%s" style="color:#0369a1;font-weight:800;text-decoration:none;">%s</a>`, escapeMailAttr("mailto:"+value), escapeMailText(value))
+	}
+	if kind == "url" && strings.HasPrefix(strings.ToLower(value), "http") {
+		display = fmt.Sprintf(`<a href="%s" style="color:#0369a1;font-weight:800;text-decoration:none;">%s</a>`, escapeMailAttr(value), escapeMailText(value))
+	}
+	valueStyle := "font-size:14px;line-height:1.55;color:#0f172a;word-break:break-word;"
+	if kind == "secret" {
+		display = fmt.Sprintf(`<span style="display:inline-block;margin-top:2px;background:#e2e8f0;border:1px solid #cbd5e1;border-radius:8px;padding:7px 9px;font-family:ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',monospace;font-size:13px;line-height:1.35;color:#0f172a;word-break:break-all;">%s</span>`, escapeMailText(value))
+	}
+	return fmt.Sprintf(
+		`<table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="border-top:1px solid #e2e8f0;">
+  <tr>
+    <td width="120" valign="top" style="padding:8px 10px 8px 0;font-size:12px;line-height:1.45;font-weight:800;color:#64748b;">%s</td>
+    <td valign="top" style="padding:8px 0;%s">%s</td>
+  </tr>
+</table>`,
+		escapeMailText(label),
+		valueStyle,
+		display,
+	)
+}
+
+func applyMailAccessDetails(values map[string]string, details mailAccessDetails) {
+	setMailValue(values, "pilot.access_intro", details.Intro)
+	setMailValue(values, "pilot.access_summary", details.Summary)
+	setMailValue(values, "pilot.access_block_html", details.BlockHTML)
+}
+
+func normalizeMailAccessVariables(values map[string]string) {
+	if values == nil {
+		return
+	}
+	summary := strings.TrimSpace(values["pilot.access_summary"])
+	if summary == "" {
+		return
+	}
+	credentials := parseMailAccessCredentials(summary)
+	if len(credentials) == 0 {
+		if strings.TrimSpace(values["pilot.access_intro"]) == "" {
+			setMailValue(values, "pilot.access_intro", summary)
+		}
+		return
+	}
+	applyMailAccessDetails(values, formatMailAccessDetails(credentials))
 }
 
 func isMailAccessContextText(value string) bool {
@@ -1877,6 +2067,7 @@ type mailTemplateContent struct {
 	Body        string
 	FocusTitle  string
 	FocusItems  []string
+	ExtraHTML   string
 	CTAURL      string
 	CTALabel    string
 	ClosingLine string
@@ -1971,6 +2162,7 @@ func brandedMailHTML(content mailTemplateContent) string {
           </tr>
           %s
           %s
+          %s
           <tr>
             <td style="padding:0 28px 28px 28px;">
               <p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:#334155;">%s</p>
@@ -2002,6 +2194,7 @@ func brandedMailHTML(content mailTemplateContent) string {
 		escapeMailText(content.Intro),
 		escapeMailText(content.Body),
 		focusRows,
+		content.ExtraHTML,
 		cta,
 		escapeMailText(content.ClosingLine),
 	)
