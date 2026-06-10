@@ -943,50 +943,117 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 	if toEmail == "" {
 		return nil, nil, nil, "", nil, errors.New("recipient email is required")
 	}
+	if emailContact, err := s.mailContactByEmail(ctx, userID, toEmail, companyID); err != nil {
+		return nil, nil, nil, "", nil, err
+	} else if emailContact != nil {
+		contact = emailContact
+		contactID = &emailContact.ID
+		if companyID == nil && emailContact.CompanyID != nil {
+			companyID = emailContact.CompanyID
+		}
+		if company == nil && companyID != nil {
+			c, err := s.GetCompany(ctx, userID, *companyID)
+			if err != nil {
+				return nil, nil, nil, "", nil, err
+			}
+			company = c
+		}
+	}
 	toName := cleanStringPtr(input.ToName)
 	if toName == nil && contact != nil {
 		toName = &contact.Naam
-	}
-	if _, ok := values["contact.naam"]; !ok {
-		if toName != nil {
-			values["contact.naam"] = *toName
-		} else {
-			values["contact.naam"] = "relatie"
-		}
-	}
-	if _, ok := values["company.naam"]; !ok {
-		if company != nil {
-			values["company.naam"] = company.Naam
-		} else {
-			values["company.naam"] = "je organisatie"
-		}
 	}
 	for key, value := range inputVars {
 		values[key] = value
 	}
 	// The HTML access block is generated server-side from parsed credential fields.
 	values["pilot.access_block_html"] = ""
+	applyResolvedMailIdentity(values, company, contact, toName)
 	accessIDs, accessKeywords := mailAIContextKeys(company, contact, mailProject, mailWorkstream)
 	hasAccessNote, err := s.mailAIAccessNoteExists(ctx, userID, accessIDs, accessKeywords)
 	if err != nil {
 		return nil, nil, nil, "", nil, err
 	}
-	if hasAccessNote && isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
-		if templateKey == "pilot_start" {
-			details, err := s.mailAIPilotAccessDetails(ctx, userID, accessIDs, accessKeywords)
-			if err != nil {
-				return nil, nil, nil, "", nil, err
-			}
-			applyMailAccessDetails(values, details)
+	if hasAccessNote && templateKey == "pilot_start" {
+		details, err := s.mailAIPilotAccessDetails(ctx, userID, accessIDs, accessKeywords)
+		if err != nil {
+			return nil, nil, nil, "", nil, err
 		}
-		if isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
+		if details.Summary != "" {
+			applyMailAccessDetails(values, details)
+		} else if isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
 			setMailValue(values, "pilot.access_intro", "toegangsgegevens staan in het klantdossier")
 			setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 		}
+	} else if hasAccessNote && isDefaultPilotAccessSummary(values["pilot.access_summary"]) {
+		setMailValue(values, "pilot.access_intro", "toegangsgegevens staan in het klantdossier")
+		setMailValue(values, "pilot.access_summary", "toegangsgegevens zijn vastgelegd in het klantdossier; ik deel gevoelige gegevens alleen via het afgesproken veilige kanaal")
 	}
 	normalizeMailAccessVariables(values)
 
 	return values, companyID, contactID, toEmail, toName, nil
+}
+
+func (s *LaventeCareStore) mailContactByEmail(ctx context.Context, userID, email string, companyID *uuid.UUID) (*model.LCContact, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, nil
+	}
+	var rows pgx.Rows
+	var err error
+	if companyID != nil {
+		rows, err = s.db.Pool.Query(ctx,
+			`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
+			        notities, created_at, updated_at
+			   FROM lc_contacts
+			  WHERE user_id = $1
+			    AND lower(COALESCE(email, '')) = $2
+			  ORDER BY CASE WHEN company_id = $3 THEN 0 ELSE 1 END, is_primary DESC, updated_at DESC
+			  LIMIT 1`,
+			userID, email, *companyID)
+	} else {
+		rows, err = s.db.Pool.Query(ctx,
+			`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
+			        notities, created_at, updated_at
+			   FROM lc_contacts
+			  WHERE user_id = $1
+			    AND lower(COALESCE(email, '')) = $2
+			  ORDER BY is_primary DESC, updated_at DESC
+			  LIMIT 1`,
+			userID, email)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	contacts, err := pgx.CollectRows(rows, scanContact)
+	if err != nil {
+		return nil, err
+	}
+	if len(contacts) == 0 {
+		return nil, nil
+	}
+	return &contacts[0], nil
+}
+
+func applyResolvedMailIdentity(values map[string]string, company *model.LCCompany, contact *model.LCContact, toName *string) {
+	if contact != nil {
+		values["contact.naam"] = contact.Naam
+		values["contact.email"] = deref(contact.Email)
+		values["contact.rol"] = deref(contact.Rol)
+	} else if toName != nil && strings.TrimSpace(*toName) != "" {
+		values["contact.naam"] = strings.TrimSpace(*toName)
+	} else if strings.TrimSpace(values["contact.naam"]) == "" {
+		values["contact.naam"] = "relatie"
+	}
+	if company != nil {
+		values["company.naam"] = company.Naam
+		values["company.website"] = deref(company.Website)
+		values["company.sector"] = deref(company.Sector)
+		values["company.volgende_actie"] = deref(company.VolgendeActie)
+	} else if strings.TrimSpace(values["company.naam"]) == "" {
+		values["company.naam"] = "je organisatie"
+	}
 }
 
 func (s *LaventeCareStore) mailAIProject(ctx context.Context, userID string, id *uuid.UUID) (map[string]any, *uuid.UUID, error) {
@@ -2283,7 +2350,9 @@ func isDefaultPilotAccessSummary(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	return normalized == "" ||
 		normalized == "via het afgesproken veilige kanaal" ||
+		normalized == "toegang via het afgesproken veilige kanaal" ||
 		normalized == "pilottoegang stemmen we voor de start af via het afgesproken kanaal" ||
+		normalized == "pilottoegang stem ik voor de start af via het afgesproken kanaal" ||
 		normalized == "pilotaccounts staan klaar; gevoelige inloggegevens deel ik via het afgesproken veilige kanaal"
 }
 

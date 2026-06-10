@@ -3,6 +3,8 @@ package store
 import (
 	"strings"
 	"testing"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
 
 func TestParseMailAccessCredentials(t *testing.T) {
@@ -70,6 +72,27 @@ func TestFormatMailAccessDetailsHTML(t *testing.T) {
 	}
 	if containsText(details.BlockHTML, "E-mail: admin@example.test - Wachtwoord") {
 		t.Fatalf("expected access HTML to avoid flat inline credential text:\n%s", details.BlockHTML)
+	}
+}
+
+func TestApplyResolvedMailIdentityOverridesAIContactName(t *testing.T) {
+	values := map[string]string{
+		"contact.naam":  "Wim",
+		"contact.email": "wim@example.test",
+	}
+	contact := &model.LCContact{
+		Naam:  "Simone",
+		Email: mailStrPtr("simone@example.test"),
+		Rol:   mailStrPtr("Contactpersoon"),
+	}
+
+	applyResolvedMailIdentity(values, nil, contact, nil)
+
+	if values["contact.naam"] != "Simone" {
+		t.Fatalf("expected resolved contact name to win, got %q", values["contact.naam"])
+	}
+	if values["contact.email"] != "simone@example.test" {
+		t.Fatalf("expected resolved contact email to win, got %q", values["contact.email"])
 	}
 }
 
