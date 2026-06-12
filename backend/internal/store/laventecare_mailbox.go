@@ -552,8 +552,7 @@ func (s *LaventeCareStore) SeedDefaultMailTemplates(ctx context.Context, userID 
 			        default_cc = EXCLUDED.default_cc,
 			        default_bcc = EXCLUDED.default_bcc,
 			        updated_at = EXCLUDED.updated_at
-			  WHERE lc_mail_templates.body_html NOT LIKE '%laventecare-mail-shell:v2%'
-			     OR lc_mail_templates.template_key = 'pilot_start'`,
+			  WHERE lc_mail_templates.body_html NOT LIKE '%laventecare-mail-shell:v2%'`,
 			uuid.New(), userID, template.TemplateKey, template.Name, template.Category, template.Status,
 			template.SubjectTemplate, template.BodyHTML, template.BodyText, cleanEmails(template.DefaultCC),
 			cleanEmails(template.DefaultBCC), now)
@@ -725,6 +724,22 @@ func (s *LaventeCareStore) GetMailOutboxItem(ctx context.Context, userID string,
 		return nil, pgx.ErrNoRows
 	}
 	return &items[0], nil
+}
+
+func (s *LaventeCareStore) MarkMailOutboxSending(ctx context.Context, userID string, id uuid.UUID) error {
+	now := time.Now().UTC()
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_mail_outbox
+		    SET status = 'sending', error_message = NULL, updated_at = $3
+		  WHERE user_id = $1 AND id = $2`,
+		userID, id, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string, id uuid.UUID, providerMessageID string) error {

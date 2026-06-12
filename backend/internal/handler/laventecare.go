@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +15,16 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
+	"github.com/Jeffreasy/JeffriesBackend/internal/bunq"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/mail"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+)
+
+const (
+	maxLaventeCareMailAttachments     = 6
+	maxLaventeCareMailAttachmentBytes = 3 * 1024 * 1024
 )
 
 // LaventeCareHandler handles LaventeCare CRM endpoints.
@@ -264,6 +272,10 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		Error(w, http.StatusBadRequest, "template_id is verplicht")
 		return
 	}
+	if err := validateMailAttachments(input.Attachments); err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	item, err := h.store.CreateMailFromTemplate(r.Context(), h.userID, input)
 	if err != nil {
@@ -288,6 +300,10 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		Error(w, http.StatusServiceUnavailable, "Microsoft Graph mail is niet geconfigureerd")
 		return
 	}
+	if err := h.store.MarkMailOutboxSending(r.Context(), h.userID, item.ID); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	result, err := h.mailSender.Send(r.Context(), mail.SendInput{
 		To:          []string{item.ToEmail},
@@ -310,7 +326,10 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		item.Status = "sent_unconfirmed"
+		message := "Mail is door Microsoft Graph geaccepteerd, maar de lokale outbox-status kon niet worden bijgewerkt: " + err.Error()
+		item.ErrorMessage = &message
+		JSON(w, http.StatusAccepted, item)
 		return
 	}
 	if item.CompanyID != nil {
@@ -335,6 +354,40 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		return
 	}
 	JSON(w, http.StatusCreated, sent)
+}
+
+func validateMailAttachments(items []model.LCMailAttachment) error {
+	if len(items) == 0 {
+		return nil
+	}
+	if len(items) > maxLaventeCareMailAttachments {
+		return fmt.Errorf("maximaal %d bijlagen per mail", maxLaventeCareMailAttachments)
+	}
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return errors.New("bijlage mist een bestandsnaam")
+		}
+		contentType := strings.ToLower(strings.TrimSpace(item.ContentType))
+		if contentType != "" && contentType != "application/pdf" && !(contentType == "application/octet-stream" && strings.HasSuffix(strings.ToLower(name), ".pdf")) {
+			return fmt.Errorf("bijlage %q is geen PDF", name)
+		}
+		content := strings.TrimSpace(item.ContentBytes)
+		if content == "" {
+			return fmt.Errorf("bijlage %q heeft geen inhoud", name)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(content)
+		if err != nil {
+			return fmt.Errorf("bijlage %q is geen geldige base64", name)
+		}
+		if len(decoded) == 0 {
+			return fmt.Errorf("bijlage %q is leeg", name)
+		}
+		if len(decoded) > maxLaventeCareMailAttachmentBytes {
+			return fmt.Errorf("bijlage %q is te groot; maximaal 3MB", name)
+		}
+	}
+	return nil
 }
 
 func mailAttachmentsFromModel(items []model.LCMailAttachment) []mail.Attachment {
@@ -671,6 +724,168 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 	})
 }
 
+// GetInvoiceDocument returns a generated invoice document as JSON, HTML or UBL XML.
+// @Summary Get Invoice Document
+// @Description Generates a print-ready invoice document and UBL XML export
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Invoice ID (UUID)"
+// @Param format query string false "json, html or ubl"
+// @Success 200 {object} model.LCInvoiceDocument
+// @Failure 400 {string} string "Invalid invoice ID"
+// @Failure 404 {string} string "Invoice not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/invoices/{id}/document [get]
+func (h *LaventeCareHandler) GetInvoiceDocument(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		return
+	}
+	doc, err := h.store.GenerateInvoiceDocument(r.Context(), h.userID, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Factuur of factuurregels niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format"))) {
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", doc.DownloadName))
+		_, _ = w.Write([]byte(doc.HTML))
+	case "ubl", "xml":
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", strings.TrimSuffix(doc.DownloadName, ".html")+".xml"))
+		_, _ = w.Write([]byte(doc.UBLXML))
+	default:
+		JSON(w, http.StatusOK, doc)
+	}
+}
+
+// RefreshInvoicePaymentStatus checks bunq for the latest request status.
+// @Summary Refresh Invoice Payment Status
+// @Description Fetches the linked bunq RequestInquiry and updates local invoice payment metadata
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Invoice ID (UUID)"
+// @Success 200 {object} model.LCInvoicePaymentRefresh
+// @Failure 400 {string} string "Invalid invoice or bunq configuration"
+// @Failure 404 {string} string "Invoice not found"
+// @Failure 502 {string} string "bunq error"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/invoices/{id}/payment-refresh [post]
+func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		return
+	}
+	invoice, err := h.store.GetInvoice(r.Context(), h.userID, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Factuur niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if invoice.ProviderRequestID == nil || strings.TrimSpace(*invoice.ProviderRequestID) == "" {
+		Error(w, http.StatusBadRequest, "Factuur heeft nog geen bunq request id")
+		return
+	}
+	if strings.TrimSpace(h.cfg.BunqAPIKey) == "" {
+		Error(w, http.StatusBadRequest, "BUNQ_API_KEY ontbreekt")
+		return
+	}
+	requestID, err := strconv.Atoi(strings.TrimSpace(*invoice.ProviderRequestID))
+	if err != nil || requestID <= 0 {
+		Error(w, http.StatusBadRequest, "Bunq request id is ongeldig")
+		return
+	}
+	monetaryAccountID, err := requiredConfigInt(h.cfg.BunqMonetaryAccountID, "BUNQ_MONETARY_ACCOUNT_ID")
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	userID, err := optionalConfigInt(h.cfg.BunqUserID, "BUNQ_USER_ID")
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	checkedAt := time.Now().UTC()
+	request, err := bunq.GetPaymentRequest(r.Context(), bunq.Config{
+		Environment:       h.cfg.BunqEnvironment,
+		APIKey:            h.cfg.BunqAPIKey,
+		DeviceDescription: h.cfg.BunqDeviceDescription,
+	}, userID, monetaryAccountID, requestID)
+	if err != nil {
+		message := err.Error()
+		checked := checkedAt.Format(time.RFC3339)
+		_ = h.store.UpdateInvoiceStatus(r.Context(), h.userID, id, model.LCInvoiceStatusUpdate{
+			Status:           invoice.Status,
+			PaymentStatus:    stringPtr("error"),
+			PaymentLastError: &message,
+			PaymentCheckedAt: &checked,
+		})
+		Error(w, http.StatusBadGateway, "Bunq betaalstatus ophalen mislukt: "+message)
+		return
+	}
+
+	providerStatus := strings.TrimSpace(request.Status)
+	nextStatus := invoice.Status
+	var paidCents *int
+	var paidAt *string
+	changed := false
+	if bunqStatusIsPaid(providerStatus) && invoice.Status != "betaald" {
+		nextStatus = "betaald"
+		value := invoice.TotalCents
+		paidCents = &value
+		now := checkedAt.Format(time.RFC3339)
+		paidAt = &now
+		changed = true
+	}
+	if providerStatus != "" && (invoice.PaymentStatus == nil || !strings.EqualFold(*invoice.PaymentStatus, providerStatus)) {
+		changed = true
+	}
+	checked := checkedAt.Format(time.RFC3339)
+	if err := h.store.UpdateInvoiceStatus(r.Context(), h.userID, id, model.LCInvoiceStatusUpdate{
+		Status:           nextStatus,
+		PaidCents:        paidCents,
+		PaymentStatus:    &providerStatus,
+		PaymentLastError: stringPtr(""),
+		PaymentCheckedAt: &checked,
+		PaidAt:           paidAt,
+	}); err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updated, err := h.store.GetInvoice(r.Context(), h.userID, id)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	message := "Betaalstatus bijgewerkt"
+	if nextStatus == "betaald" {
+		message = "Bunq geeft betaald/geaccepteerd terug; factuur is gemarkeerd als betaald."
+	} else if providerStatus != "" {
+		message = "Bunq status: " + providerStatus
+	}
+	JSON(w, http.StatusOK, model.LCInvoicePaymentRefresh{
+		Invoice:        *updated,
+		ProviderStatus: providerStatus,
+		Changed:        changed,
+		Message:        message,
+		CheckedAt:      checkedAt,
+	})
+}
+
 func derefString(value *string, fallback string) string {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return fallback
@@ -684,6 +899,42 @@ func cleanPendingSummary(value string) string {
 
 func formatCents(cents int) string {
 	return fmt.Sprintf("EUR %d.%02d", cents/100, cents%100)
+}
+
+func bunqStatusIsPaid(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACCEPTED", "PAID", "COMPLETED", "COMPLETED_SUCCESSFULLY":
+		return true
+	default:
+		return false
+	}
+}
+
+func requiredConfigInt(raw, key string) (int, error) {
+	value, err := optionalConfigInt(raw, key)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%s ontbreekt", key)
+	}
+	return value, nil
+}
+
+func optionalConfigInt(raw, key string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s moet een getal zijn", key)
+	}
+	return value, nil
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 // ListDecisions returns recent LaventeCare decisions.
@@ -1175,6 +1426,68 @@ func (h *LaventeCareHandler) UpdateContact(w http.ResponseWriter, r *http.Reques
 	if err := h.store.UpdateContact(r.Context(), h.userID, id, input); err != nil {
 		if err == pgx.ErrNoRows {
 			Error(w, http.StatusNotFound, "Contact niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListAccessCredentials returns metadata for customer access records.
+func (h *LaventeCareHandler) ListAccessCredentials(w http.ResponseWriter, r *http.Request) {
+	limit := queryInt(r, "limit", 40)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	items, err := h.store.ListAccessCredentials(r.Context(), h.userID, limit, companyID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, items)
+}
+
+// CreateAccessCredential creates a customer access/account record.
+func (h *LaventeCareHandler) CreateAccessCredential(w http.ResponseWriter, r *http.Request) {
+	var input model.LCAccessCredentialCreate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if input.CompanyID == uuid.Nil || strings.TrimSpace(input.Title) == "" {
+		Error(w, http.StatusBadRequest, "company_id en title zijn verplicht")
+		return
+	}
+	item, err := h.store.CreateAccessCredential(r.Context(), h.userID, input)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant of gekoppelde context niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusCreated, item)
+}
+
+// UpdateAccessCredential updates a customer access/account record.
+func (h *LaventeCareHandler) UpdateAccessCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid access credential ID")
+		return
+	}
+	var input model.LCAccessCredentialUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := h.store.UpdateAccessCredential(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Toegang niet gevonden")
 			return
 		}
 		Error(w, http.StatusInternalServerError, err.Error())

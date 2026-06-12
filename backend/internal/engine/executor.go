@@ -2757,12 +2757,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if request.MerchantReference != nil && strings.TrimSpace(*request.MerchantReference) != "" {
 			merchantReference = strings.TrimSpace(*request.MerchantReference)
 		}
+		paymentStatus := strings.TrimSpace(request.Status)
 		if err := e.laventeCareStore.UpdateInvoiceStatus(ctx, e.userID, invoice.ID, model.LCInvoiceStatusUpdate{
 			Status:            "verstuurd",
 			PaymentProvider:   &paymentProvider,
 			ProviderRequestID: &providerID,
 			MerchantReference: &merchantReference,
 			PaymentURL:        optionalStringPtr(paymentURL),
+			PaymentStatus:     optionalStringPtr(paymentStatus),
 		}); err != nil {
 			return e.jsonResponse(nil, err)
 		}

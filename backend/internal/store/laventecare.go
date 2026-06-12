@@ -2,8 +2,15 @@ package store
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"html"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -62,7 +69,11 @@ func (s *LaventeCareStore) ListCompanies(ctx context.Context, userID string, lim
 	needle := strings.ToLower(strings.TrimSpace(query))
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT c.id, c.user_id, c.naam, c.website, c.sector, c.status, c.relatie_type,
-		        c.notities, c.laatste_contact, c.volgende_actie, c.created_at, c.updated_at,
+		        c.notities, c.laatste_contact, c.volgende_actie,
+		        c.kvk_number, c.vat_number, c.billing_email, c.billing_address, c.billing_reference,
+		        c.payment_terms_days, c.contract_status, c.service_level, c.preferred_channel,
+		        c.portal_url, c.default_login_url, c.onboarding_status, c.data_processing_status,
+		        c.created_at, c.updated_at,
 		        (SELECT COUNT(*)::int FROM lc_contacts ct WHERE ct.user_id = c.user_id AND ct.company_id = c.id),
 		        (SELECT COUNT(*)::int FROM lc_leads l WHERE l.user_id = c.user_id AND l.company_id = c.id),
 		        (SELECT COUNT(*)::int FROM lc_workstreams w WHERE w.user_id = c.user_id AND w.company_id = c.id),
@@ -85,7 +96,11 @@ func (s *LaventeCareStore) ListCompanies(ctx context.Context, userID string, lim
 func (s *LaventeCareStore) GetCompany(ctx context.Context, userID string, id uuid.UUID) (*model.LCCompany, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT c.id, c.user_id, c.naam, c.website, c.sector, c.status, c.relatie_type,
-		        c.notities, c.laatste_contact, c.volgende_actie, c.created_at, c.updated_at,
+		        c.notities, c.laatste_contact, c.volgende_actie,
+		        c.kvk_number, c.vat_number, c.billing_email, c.billing_address, c.billing_reference,
+		        c.payment_terms_days, c.contract_status, c.service_level, c.preferred_channel,
+		        c.portal_url, c.default_login_url, c.onboarding_status, c.data_processing_status,
+		        c.created_at, c.updated_at,
 		        (SELECT COUNT(*)::int FROM lc_contacts ct WHERE ct.user_id = c.user_id AND ct.company_id = c.id),
 		        (SELECT COUNT(*)::int FROM lc_leads l WHERE l.user_id = c.user_id AND l.company_id = c.id),
 		        (SELECT COUNT(*)::int FROM lc_workstreams w WHERE w.user_id = c.user_id AND w.company_id = c.id),
@@ -129,11 +144,21 @@ func (s *LaventeCareStore) CreateCompany(ctx context.Context, userID string, inp
 
 	_, err := s.db.Pool.Exec(ctx,
 		`INSERT INTO lc_companies (id, user_id, naam, website, sector, status, relatie_type,
-		        notities, laatste_contact, volgende_actie, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+		        notities, laatste_contact, volgende_actie, kvk_number, vat_number, billing_email,
+		        billing_address, billing_reference, payment_terms_days, contract_status, service_level,
+		        preferred_channel, portal_url, default_login_url, onboarding_status, data_processing_status,
+		        created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$22)`,
 		id, userID, name, cleanStringPtr(input.Website), cleanStringPtr(input.Sector),
 		status, relatieType, cleanStringPtr(input.Notities), laatsteContact,
-		cleanStringPtr(input.VolgendeActie), now)
+		cleanStringPtr(input.VolgendeActie), cleanStringPtr(input.KVKNumber),
+		cleanStringPtr(input.VATNumber), cleanStringPtr(input.BillingEmail),
+		cleanStringPtr(input.BillingAddress), cleanStringPtr(input.BillingReference),
+		positiveIntOr(input.PaymentTermsDays, 14), cleanStatusPtr(input.ContractStatus, "geen_contract"),
+		cleanStatusPtr(input.ServiceLevel, "basis"), cleanStringPtr(input.PreferredChannel),
+		cleanStringPtr(input.PortalURL), cleanStringPtr(input.DefaultLoginURL),
+		cleanStatusPtr(input.OnboardingStatus, "niet_gestart"),
+		cleanStatusPtr(input.DataProcessStatus, "niet_nodig"), now)
 	if err != nil {
 		return nil, err
 	}
@@ -153,11 +178,30 @@ func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id 
 			notities = COALESCE($8, notities),
 			laatste_contact = COALESCE($9, laatste_contact),
 			volgende_actie = COALESCE($10, volgende_actie),
-			updated_at = $11
+			kvk_number = COALESCE($11, kvk_number),
+			vat_number = COALESCE($12, vat_number),
+			billing_email = COALESCE($13, billing_email),
+			billing_address = COALESCE($14, billing_address),
+			billing_reference = COALESCE($15, billing_reference),
+			payment_terms_days = COALESCE($16, payment_terms_days),
+			contract_status = COALESCE($17, contract_status),
+			service_level = COALESCE($18, service_level),
+			preferred_channel = COALESCE($19, preferred_channel),
+			portal_url = COALESCE($20, portal_url),
+			default_login_url = COALESCE($21, default_login_url),
+			onboarding_status = COALESCE($22, onboarding_status),
+			data_processing_status = COALESCE($23, data_processing_status),
+			updated_at = $24
 		 WHERE id = $1 AND user_id = $2`,
 		id, userID, cleanStringPtr(input.Naam), cleanStringPtr(input.Website),
 		cleanStringPtr(input.Sector), cleanStringPtr(input.Status), cleanStringPtr(input.RelatieType),
-		cleanStringPtr(input.Notities), latestContact, cleanStringPtr(input.VolgendeActie), now)
+		cleanStringPtr(input.Notities), latestContact, cleanStringPtr(input.VolgendeActie),
+		cleanStringPtr(input.KVKNumber), cleanStringPtr(input.VATNumber), cleanStringPtr(input.BillingEmail),
+		cleanStringPtr(input.BillingAddress), cleanStringPtr(input.BillingReference),
+		positiveIntPtr(input.PaymentTermsDays), cleanStringPtr(input.ContractStatus),
+		cleanStringPtr(input.ServiceLevel), cleanStringPtr(input.PreferredChannel),
+		cleanStringPtr(input.PortalURL), cleanStringPtr(input.DefaultLoginURL),
+		cleanStringPtr(input.OnboardingStatus), cleanStringPtr(input.DataProcessStatus), now)
 	if err != nil {
 		return err
 	}
@@ -174,7 +218,7 @@ func (s *LaventeCareStore) ListContacts(ctx context.Context, userID string, comp
 	if companyID != nil {
 		rows, err := s.db.Pool.Query(ctx,
 			`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
-			        notities, created_at, updated_at
+			        notities, preferred_channel, decision_role, created_at, updated_at
 			 FROM lc_contacts WHERE user_id = $1 AND company_id = $2
 			 ORDER BY is_primary DESC, updated_at DESC LIMIT $3`,
 			userID, *companyID, limit)
@@ -187,7 +231,7 @@ func (s *LaventeCareStore) ListContacts(ctx context.Context, userID string, comp
 
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
-		        notities, created_at, updated_at
+		        notities, preferred_channel, decision_role, created_at, updated_at
 		 FROM lc_contacts WHERE user_id = $1
 		 ORDER BY updated_at DESC LIMIT $2`, userID, limit)
 	if err != nil {
@@ -211,10 +255,11 @@ func (s *LaventeCareStore) CreateContact(ctx context.Context, userID string, inp
 	id := uuid.New()
 	_, err := s.db.Pool.Exec(ctx,
 		`INSERT INTO lc_contacts (id, user_id, company_id, naam, email, telefoon, rol,
-		        is_primary, notities, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+		        is_primary, notities, preferred_channel, decision_role, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
 		id, userID, input.CompanyID, name, cleanStringPtr(input.Email), cleanStringPtr(input.Telefoon),
-		cleanStringPtr(input.Rol), input.IsPrimary, cleanStringPtr(input.Notities), now)
+		cleanStringPtr(input.Rol), input.IsPrimary, cleanStringPtr(input.Notities),
+		cleanStringPtr(input.PreferredChannel), cleanStringPtr(input.DecisionRole), now)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +272,7 @@ func (s *LaventeCareStore) CreateContact(ctx context.Context, userID string, inp
 func (s *LaventeCareStore) GetContact(ctx context.Context, userID string, id uuid.UUID) (*model.LCContact, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
-		        notities, created_at, updated_at
+		        notities, preferred_channel, decision_role, created_at, updated_at
 		 FROM lc_contacts WHERE user_id = $1 AND id = $2 LIMIT 1`,
 		userID, id)
 	if err != nil {
@@ -260,19 +305,32 @@ func (s *LaventeCareStore) UpdateContact(ctx context.Context, userID string, id 
 			rol = COALESCE($7, rol),
 			is_primary = COALESCE($8, is_primary),
 			notities = COALESCE($9, notities),
-			updated_at = $10
+			preferred_channel = COALESCE($10, preferred_channel),
+			decision_role = COALESCE($11, decision_role),
+			updated_at = $12
 		 WHERE id = $1 AND user_id = $2`,
 		id, userID, input.CompanyID, cleanStringPtr(input.Naam), cleanStringPtr(input.Email),
 		cleanStringPtr(input.Telefoon), cleanStringPtr(input.Rol), input.IsPrimary,
-		cleanStringPtr(input.Notities), now)
+		cleanStringPtr(input.Notities), cleanStringPtr(input.PreferredChannel),
+		cleanStringPtr(input.DecisionRole), now)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	if input.IsPrimary != nil && *input.IsPrimary && input.CompanyID != nil {
-		_ = s.clearOtherPrimaryContacts(ctx, userID, id, *input.CompanyID)
+	if input.IsPrimary != nil && *input.IsPrimary {
+		companyID := input.CompanyID
+		if companyID == nil {
+			companyID, err = s.scopedCompanyID(ctx, userID, &id,
+				`SELECT company_id FROM lc_contacts WHERE user_id = $1 AND id = $2`)
+			if err != nil {
+				return err
+			}
+		}
+		if companyID != nil {
+			_ = s.clearOtherPrimaryContacts(ctx, userID, id, *companyID)
+		}
 	}
 	return nil
 }
@@ -333,6 +391,194 @@ func (s *LaventeCareStore) clearOtherPrimaryContacts(ctx context.Context, userID
 		 WHERE user_id = $1 AND company_id = $2 AND id <> $3`,
 		userID, companyID, keepID)
 	return err
+}
+
+func (s *LaventeCareStore) ListAccessCredentials(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCAccessCredential, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT a.id, a.user_id, a.company_id, a.contact_id, a.project_id, a.workstream_id,
+		        a.title, a.login_url, a.username, a.role, a.environment, a.status, a.owner_contact,
+		        a.secret_label, (a.secret_value_encrypted IS NOT NULL), a.secret_hint, a.sharing_policy,
+		        a.last_checked_at, a.expires_at, a.revoked_at, a.notes, a.created_at, a.updated_at,
+		        c.naam, ct.naam, p.naam, w.titel
+		   FROM lc_access_credentials a
+		   JOIN lc_companies c ON c.id = a.company_id AND c.user_id = a.user_id
+		   LEFT JOIN lc_contacts ct ON ct.id = a.contact_id AND ct.user_id = a.user_id
+		   LEFT JOIN lc_projects p ON p.id = a.project_id AND p.user_id = a.user_id
+		   LEFT JOIN lc_workstreams w ON w.id = a.workstream_id AND w.user_id = a.user_id
+		  WHERE a.user_id = $1
+		    AND ($2::uuid IS NULL OR a.company_id = $2)
+		  ORDER BY
+		    CASE a.status WHEN 'actief' THEN 0 WHEN 'tijdelijk' THEN 1 WHEN 'te_controleren' THEN 2 ELSE 3 END,
+		    COALESCE(a.expires_at, a.updated_at) ASC
+		  LIMIT $3`,
+		userID, companyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanAccessCredential)
+}
+
+func (s *LaventeCareStore) CountAccessCredentials(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*)::int FROM lc_access_credentials WHERE user_id = $1 AND status <> 'verwijderd'`,
+		userID).Scan(&count)
+	return count, err
+}
+
+func (s *LaventeCareStore) CreateAccessCredential(ctx context.Context, userID string, input model.LCAccessCredentialCreate) (*model.LCAccessCredential, error) {
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		return nil, pgx.ErrNoRows
+	}
+	if err := s.validateAccessCredentialTarget(ctx, userID, input.CompanyID, input.ContactID, input.ProjectID, input.WorkstreamID); err != nil {
+		return nil, err
+	}
+
+	secret, err := encryptLaventeCareSecret(input.SecretValue)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	id := uuid.New()
+	status := cleanStatus(input.Status, "actief")
+	environment := cleanStatus(input.Environment, "pilot")
+	secretLabel := cleanStatus(deref(input.SecretLabel), "wachtwoord")
+	sharingPolicy := cleanStatus(deref(input.SharingPolicy), "veilig_kanaal")
+
+	_, err = s.db.Pool.Exec(ctx,
+		`INSERT INTO lc_access_credentials (
+		    id, user_id, company_id, contact_id, project_id, workstream_id, title, login_url,
+		    username, role, environment, status, owner_contact, secret_label, secret_value_encrypted,
+		    secret_hint, sharing_policy, last_checked_at, expires_at, notes, created_at, updated_at
+		 ) VALUES (
+		    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21
+		 )`,
+		id, userID, input.CompanyID, input.ContactID, input.ProjectID, input.WorkstreamID,
+		title, cleanStringPtr(input.LoginURL), cleanStringPtr(input.Username), cleanStringPtr(input.Role),
+		environment, status, cleanStringPtr(input.OwnerContact), secretLabel, secret,
+		cleanStringPtr(input.SecretHint), sharingPolicy, parseDateTimePtr(input.LastCheckedAt),
+		parseDateTimePtr(input.ExpiresAt), cleanStringPtr(input.Notes), now)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAccessCredential(ctx, userID, id)
+}
+
+func (s *LaventeCareStore) GetAccessCredential(ctx context.Context, userID string, id uuid.UUID) (*model.LCAccessCredential, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT a.id, a.user_id, a.company_id, a.contact_id, a.project_id, a.workstream_id,
+		        a.title, a.login_url, a.username, a.role, a.environment, a.status, a.owner_contact,
+		        a.secret_label, (a.secret_value_encrypted IS NOT NULL), a.secret_hint, a.sharing_policy,
+		        a.last_checked_at, a.expires_at, a.revoked_at, a.notes, a.created_at, a.updated_at,
+		        c.naam, ct.naam, p.naam, w.titel
+		   FROM lc_access_credentials a
+		   JOIN lc_companies c ON c.id = a.company_id AND c.user_id = a.user_id
+		   LEFT JOIN lc_contacts ct ON ct.id = a.contact_id AND ct.user_id = a.user_id
+		   LEFT JOIN lc_projects p ON p.id = a.project_id AND p.user_id = a.user_id
+		   LEFT JOIN lc_workstreams w ON w.id = a.workstream_id AND w.user_id = a.user_id
+		  WHERE a.user_id = $1 AND a.id = $2
+		  LIMIT 1`,
+		userID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := pgx.CollectRows(rows, scanAccessCredential)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return &items[0], nil
+}
+
+func (s *LaventeCareStore) UpdateAccessCredential(ctx context.Context, userID string, id uuid.UUID, input model.LCAccessCredentialUpdate) error {
+	current, err := s.GetAccessCredential(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := s.validateAccessCredentialTarget(ctx, userID, current.CompanyID, input.ContactID, input.ProjectID, input.WorkstreamID); err != nil {
+		return err
+	}
+
+	var secret *string
+	if input.SecretValue != nil {
+		secret, err = encryptLaventeCareSecret(input.SecretValue)
+		if err != nil {
+			return err
+		}
+	}
+
+	now := time.Now().UTC()
+	status := cleanStringPtr(input.Status)
+	revokedAt := parseDateTimePtr(input.RevokedAt)
+	if status != nil && (*status == "ingetrokken" || *status == "verlopen") && revokedAt == nil {
+		revokedAt = &now
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_access_credentials SET
+		    contact_id = COALESCE($3, contact_id),
+		    project_id = COALESCE($4, project_id),
+		    workstream_id = COALESCE($5, workstream_id),
+		    title = COALESCE($6, title),
+		    login_url = COALESCE($7, login_url),
+		    username = COALESCE($8, username),
+		    role = COALESCE($9, role),
+		    environment = COALESCE($10, environment),
+		    status = COALESCE($11, status),
+		    owner_contact = COALESCE($12, owner_contact),
+		    secret_label = COALESCE($13, secret_label),
+		    secret_value_encrypted = COALESCE($14, secret_value_encrypted),
+		    secret_hint = COALESCE($15, secret_hint),
+		    sharing_policy = COALESCE($16, sharing_policy),
+		    last_checked_at = COALESCE($17, last_checked_at),
+		    expires_at = COALESCE($18, expires_at),
+		    revoked_at = COALESCE($19, revoked_at),
+		    notes = COALESCE($20, notes),
+		    updated_at = $21
+		  WHERE user_id = $1 AND id = $2`,
+		userID, id, input.ContactID, input.ProjectID, input.WorkstreamID,
+		cleanStringPtr(input.Title), cleanStringPtr(input.LoginURL), cleanStringPtr(input.Username),
+		cleanStringPtr(input.Role), cleanStringPtr(input.Environment), status,
+		cleanStringPtr(input.OwnerContact), cleanStringPtr(input.SecretLabel), secret,
+		cleanStringPtr(input.SecretHint), cleanStringPtr(input.SharingPolicy),
+		parseDateTimePtr(input.LastCheckedAt), parseDateTimePtr(input.ExpiresAt),
+		revokedAt, cleanStringPtr(input.Notes), now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) validateAccessCredentialTarget(ctx context.Context, userID string, companyID uuid.UUID, contactID, projectID, workstreamID *uuid.UUID) error {
+	if _, err := s.GetCompany(ctx, userID, companyID); err != nil {
+		return err
+	}
+	scope := &companyID
+	var err error
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, contactID,
+		`SELECT company_id FROM lc_contacts WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, projectID,
+		`SELECT company_id FROM lc_projects WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, workstreamID,
+		`SELECT company_id FROM lc_workstreams WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ─── Leads ───────────────────────────────────────────────────────────────────
@@ -2035,7 +2281,7 @@ func (s *LaventeCareStore) CreateDossierDocument(ctx context.Context, userID str
 	}, nil
 }
 
-func (s *LaventeCareStore) validateDossierDocumentTarget(ctx context.Context, userID string, companyID, leadID, projectID, workstreamID *uuid.UUID) error {
+func (s *LaventeCareStore) ensureCompanyExists(ctx context.Context, userID string, companyID *uuid.UUID) error {
 	if companyID != nil {
 		var exists bool
 		if err := s.db.Pool.QueryRow(ctx,
@@ -2048,88 +2294,95 @@ func (s *LaventeCareStore) validateDossierDocumentTarget(ctx context.Context, us
 			return pgx.ErrNoRows
 		}
 	}
+	return nil
+}
 
-	if leadID != nil {
-		var exists bool
-		if err := s.db.Pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM lc_leads WHERE user_id = $1 AND id = $2)`,
-			userID, *leadID,
-		).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return pgx.ErrNoRows
-		}
+func (s *LaventeCareStore) scopedCompanyID(ctx context.Context, userID string, id *uuid.UUID, query string) (*uuid.UUID, error) {
+	if id == nil {
+		return nil, nil
 	}
-
-	if projectID != nil {
-		var exists bool
-		if err := s.db.Pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM lc_projects WHERE user_id = $1 AND id = $2)`,
-			userID, *projectID,
-		).Scan(&exists); err != nil {
-			return err
+	var companyID *uuid.UUID
+	if err := s.db.Pool.QueryRow(ctx, query, userID, *id).Scan(&companyID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
 		}
-		if !exists {
-			return pgx.ErrNoRows
-		}
+		return nil, err
 	}
+	return companyID, nil
+}
 
-	if workstreamID != nil {
-		var exists bool
-		if err := s.db.Pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM lc_workstreams WHERE user_id = $1 AND id = $2)`,
-			userID, *workstreamID,
-		).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return pgx.ErrNoRows
-		}
+func mergeCompanyScope(expected, actual *uuid.UUID) (*uuid.UUID, error) {
+	if actual == nil {
+		return expected, nil
 	}
+	if expected == nil {
+		id := *actual
+		return &id, nil
+	}
+	if *expected != *actual {
+		return nil, pgx.ErrNoRows
+	}
+	return expected, nil
+}
 
+func (s *LaventeCareStore) validateScopedCompanyObject(ctx context.Context, userID string, expectedCompanyID *uuid.UUID, id *uuid.UUID, query string) (*uuid.UUID, error) {
+	companyID, err := s.scopedCompanyID(ctx, userID, id, query)
+	if err != nil {
+		return nil, err
+	}
+	return mergeCompanyScope(expectedCompanyID, companyID)
+}
+
+func (s *LaventeCareStore) validateDossierDocumentTarget(ctx context.Context, userID string, companyID, leadID, projectID, workstreamID *uuid.UUID) error {
+	if err := s.ensureCompanyExists(ctx, userID, companyID); err != nil {
+		return err
+	}
+	scope := companyID
+	var err error
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, leadID,
+		`SELECT company_id FROM lc_leads WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, projectID,
+		`SELECT company_id FROM lc_projects WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, workstreamID,
+		`SELECT company_id FROM lc_workstreams WHERE user_id = $1 AND id = $2`); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (s *LaventeCareStore) validateActivityEventTarget(ctx context.Context, userID string, input model.LCActivityEventCreate) error {
-	var companyExists bool
-	if err := s.db.Pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM lc_companies WHERE user_id = $1 AND id = $2)`,
-		userID, input.CompanyID,
-	).Scan(&companyExists); err != nil {
+	scope := &input.CompanyID
+	if err := s.ensureCompanyExists(ctx, userID, scope); err != nil {
 		return err
 	}
-	if !companyExists {
-		return pgx.ErrNoRows
-	}
-
-	check := func(query string, id *uuid.UUID) error {
-		if id == nil {
-			return nil
-		}
-		var exists bool
-		if err := s.db.Pool.QueryRow(ctx, query, userID, *id).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return pgx.ErrNoRows
-		}
-		return nil
-	}
-
-	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_contacts WHERE user_id = $1 AND id = $2)`, input.ContactID); err != nil {
+	var err error
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, input.ContactID,
+		`SELECT company_id FROM lc_contacts WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_leads WHERE user_id = $1 AND id = $2)`, input.LeadID); err != nil {
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, input.LeadID,
+		`SELECT company_id FROM lc_leads WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_projects WHERE user_id = $1 AND id = $2)`, input.ProjectID); err != nil {
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, input.ProjectID,
+		`SELECT company_id FROM lc_projects WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_workstreams WHERE user_id = $1 AND id = $2)`, input.WorkstreamID); err != nil {
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, input.WorkstreamID,
+		`SELECT company_id FROM lc_workstreams WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check(`SELECT EXISTS (SELECT 1 FROM lc_action_items WHERE user_id = $1 AND id = $2)`, input.ActionItemID); err != nil {
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, input.ActionItemID,
+		`SELECT COALESCE(a.linked_company_id, l.company_id, p.company_id, w.company_id)
+		   FROM lc_action_items a
+		   LEFT JOIN lc_leads l ON l.user_id = a.user_id AND l.id = a.linked_lead_id
+		   LEFT JOIN lc_projects p ON p.user_id = a.user_id AND p.id = a.linked_project_id
+		   LEFT JOIN lc_workstreams w ON w.user_id = a.user_id AND w.id = a.linked_workstream_id
+		  WHERE a.user_id = $1 AND a.id = $2`); err != nil {
 		return err
 	}
 	return nil
@@ -2202,33 +2455,9 @@ func (s *LaventeCareStore) GetBilling(ctx context.Context, userID string, limit 
 		return nil, err
 	}
 
-	summary := model.LCBillingSummary{
-		Quotes:              len(quotes),
-		TimeEntries:         len(timeEntries),
-		Invoices:            len(invoices),
-		DefaultProvider:     "bunq",
-		BunqReady:           bunqBillingConfigured(),
-		NextStepDescription: "Maak een conceptfactuur vanuit uren en activeer daarna bunq betaalverzoeken met bevestiging.",
-	}
-	for _, quote := range quotes {
-		if quote.Status != "vervallen" && quote.Status != "geweigerd" && quote.Status != "geaccepteerd" {
-			summary.OpenQuotes++
-		}
-	}
-	for _, entry := range timeEntries {
-		if entry.Billable {
-			summary.BillableMinutes += entry.Minutes
-		}
-		if entry.Billable && entry.InvoiceID == nil && entry.Status != "afgeschreven" {
-			summary.UninvoicedMinutes += entry.Minutes
-		}
-	}
-	for _, invoice := range invoices {
-		if invoice.Status != "betaald" && invoice.Status != "geannuleerd" {
-			summary.OpenInvoices++
-			summary.OutstandingCents += maxInt(invoice.TotalCents-invoice.PaidCents, 0)
-		}
-		summary.PaidCents += invoice.PaidCents
+	summary, err := s.getBillingSummary(ctx, userID, companyID)
+	if err != nil {
+		return nil, err
 	}
 
 	return &model.LCBilling{
@@ -2238,6 +2467,41 @@ func (s *LaventeCareStore) GetBilling(ctx context.Context, userID string, limit 
 		TimeEntries:  timeEntries,
 		Invoices:     invoices,
 		InvoiceLines: invoiceLines,
+	}, nil
+}
+
+func (s *LaventeCareStore) getBillingSummary(ctx context.Context, userID string, companyID *uuid.UUID) (model.LCBillingSummary, error) {
+	var quotes, openQuotes, timeEntries, invoices, openInvoices int64
+	var billableMinutes, uninvoicedMinutes, outstandingCents, paidCents int64
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT
+		    (SELECT COUNT(*) FROM lc_quotes q WHERE q.user_id = $1 AND ($2::uuid IS NULL OR q.company_id = $2)),
+		    (SELECT COUNT(*) FROM lc_quotes q WHERE q.user_id = $1 AND ($2::uuid IS NULL OR q.company_id = $2) AND q.status NOT IN ('vervallen','geweigerd','geaccepteerd')),
+		    (SELECT COUNT(*) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
+		    (SELECT COALESCE(SUM(t.minutes) FILTER (WHERE t.billable), 0) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
+		    (SELECT COALESCE(SUM(t.minutes) FILTER (WHERE t.billable AND t.invoice_id IS NULL AND t.status <> 'afgeschreven'), 0) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
+		    (SELECT COUNT(*) FROM lc_invoices i WHERE i.user_id = $1 AND ($2::uuid IS NULL OR i.company_id = $2)),
+		    (SELECT COUNT(*) FROM lc_invoices i WHERE i.user_id = $1 AND ($2::uuid IS NULL OR i.company_id = $2) AND i.status NOT IN ('betaald','geannuleerd')),
+		    (SELECT COALESCE(SUM(GREATEST(i.total_cents - i.paid_cents, 0)) FILTER (WHERE i.status NOT IN ('betaald','geannuleerd')), 0) FROM lc_invoices i WHERE i.user_id = $1 AND ($2::uuid IS NULL OR i.company_id = $2)),
+		    (SELECT COALESCE(SUM(i.paid_cents), 0) FROM lc_invoices i WHERE i.user_id = $1 AND ($2::uuid IS NULL OR i.company_id = $2))`,
+		userID, companyID,
+	).Scan(&quotes, &openQuotes, &timeEntries, &billableMinutes, &uninvoicedMinutes, &invoices, &openInvoices, &outstandingCents, &paidCents)
+	if err != nil {
+		return model.LCBillingSummary{}, err
+	}
+	return model.LCBillingSummary{
+		Quotes:              int(quotes),
+		OpenQuotes:          int(openQuotes),
+		TimeEntries:         int(timeEntries),
+		BillableMinutes:     int(billableMinutes),
+		UninvoicedMinutes:   int(uninvoicedMinutes),
+		Invoices:            int(invoices),
+		OpenInvoices:        int(openInvoices),
+		OutstandingCents:    int(outstandingCents),
+		PaidCents:           int(paidCents),
+		DefaultProvider:     "bunq",
+		BunqReady:           bunqBillingConfigured(),
+		NextStepDescription: "Maak een conceptfactuur vanuit uren en activeer daarna bunq betaalverzoeken met bevestiging.",
 	}, nil
 }
 
@@ -2533,7 +2797,9 @@ func (s *LaventeCareStore) ListInvoices(ctx context.Context, userID string, limi
 		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
 		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
 		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
-		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        i.payment_url, i.document_url, i.document_generated_at, i.ubl_xml, i.ubl_generated_at,
+		        i.payment_checked_at, i.payment_status, i.payment_last_error, i.reminder_count,
+		        i.last_reminder_at, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
 		        c.naam, p.naam, w.titel
 		   FROM lc_invoices i
 		   LEFT JOIN lc_companies c ON c.id = i.company_id
@@ -2562,6 +2828,22 @@ func (s *LaventeCareStore) ListInvoiceLines(ctx context.Context, userID string, 
 		  ORDER BY i.created_at DESC, l.sort_order ASC
 		  LIMIT 200`,
 		userID, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanInvoiceLine)
+}
+
+func (s *LaventeCareStore) ListInvoiceLinesByInvoice(ctx context.Context, userID string, invoiceID uuid.UUID) ([]model.LCInvoiceLine, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT l.id, l.invoice_id, l.user_id, l.source_time_entry_id, l.description,
+		        l.quantity_minutes, l.unit_amount_cents, l.vat_rate_bps, l.total_cents, l.sort_order
+		   FROM lc_invoice_lines l
+		   JOIN lc_invoices i ON i.id = l.invoice_id AND i.user_id = l.user_id
+		  WHERE l.user_id = $1 AND l.invoice_id = $2
+		  ORDER BY l.sort_order ASC`,
+		userID, invoiceID)
 	if err != nil {
 		return nil, err
 	}
@@ -2603,7 +2885,7 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 
 	lines := cleanInvoiceLines(input.Lines)
 	if len(input.TimeEntryIDs) > 0 {
-		timeLines, resolvedCompanyID, err := s.invoiceLinesFromTimeEntries(ctx, userID, input.TimeEntryIDs)
+		timeLines, resolvedCompanyID, err := s.invoiceLinesFromTimeEntries(ctx, userID, input.TimeEntryIDs, companyID, input.ProjectID, input.WorkstreamID)
 		if err != nil {
 			return nil, err
 		}
@@ -2680,12 +2962,16 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 	}
 
 	if len(input.TimeEntryIDs) > 0 {
-		if _, err := tx.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`UPDATE lc_time_entries
 			    SET invoice_id = $3, status = 'gefactureerd', updated_at = $4
 			  WHERE user_id = $1 AND id = ANY($2)`,
-			userID, input.TimeEntryIDs, id, now); err != nil {
+			userID, input.TimeEntryIDs, id, now)
+		if err != nil {
 			return nil, err
+		}
+		if int(tag.RowsAffected()) != len(input.TimeEntryIDs) {
+			return nil, pgx.ErrNoRows
 		}
 	}
 
@@ -2760,7 +3046,9 @@ func (s *LaventeCareStore) GetInvoice(ctx context.Context, userID string, id uui
 		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
 		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
 		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
-		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        i.payment_url, i.document_url, i.document_generated_at, i.ubl_xml, i.ubl_generated_at,
+		        i.payment_checked_at, i.payment_status, i.payment_last_error, i.reminder_count,
+		        i.last_reminder_at, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
 		        c.naam, p.naam, w.titel
 		   FROM lc_invoices i
 		   LEFT JOIN lc_companies c ON c.id = i.company_id
@@ -2789,7 +3077,9 @@ func (s *LaventeCareStore) GetInvoiceByQuote(ctx context.Context, userID string,
 		        i.invoice_number, i.status, i.issue_date::text, i.due_date::text,
 		        i.currency, i.subtotal_cents, i.vat_rate_bps, i.vat_cents, i.total_cents,
 		        i.paid_cents, i.payment_provider, i.provider_request_id, i.merchant_reference,
-		        i.payment_url, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
+		        i.payment_url, i.document_url, i.document_generated_at, i.ubl_xml, i.ubl_generated_at,
+		        i.payment_checked_at, i.payment_status, i.payment_last_error, i.reminder_count,
+		        i.last_reminder_at, i.sent_at, i.paid_at, i.notes, i.created_at, i.updated_at,
 		        c.naam, p.naam, w.titel
 		   FROM lc_invoices i
 		   LEFT JOIN lc_companies c ON c.id = i.company_id
@@ -2825,6 +3115,7 @@ func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID strin
 	now := time.Now().UTC()
 	paidAt := parseDateTimePtr(input.PaidAt)
 	sentAt := parseDateTimePtr(input.SentAt)
+	paymentCheckedAt := parseDateTimePtr(input.PaymentCheckedAt)
 	paidCents := input.PaidCents
 	if status == "betaald" {
 		if paidAt == nil {
@@ -2846,13 +3137,17 @@ func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID strin
 		        provider_request_id = COALESCE($6, provider_request_id),
 		        merchant_reference = COALESCE($7, merchant_reference),
 		        payment_url = COALESCE($8, payment_url),
-		        sent_at = COALESCE($9, sent_at),
-		        paid_at = COALESCE($10, paid_at),
-		        updated_at = $11
+		        payment_status = COALESCE($9, payment_status),
+		        payment_last_error = COALESCE($10, payment_last_error),
+		        payment_checked_at = COALESCE($11, payment_checked_at),
+		        sent_at = COALESCE($12, sent_at),
+		        paid_at = COALESCE($13, paid_at),
+		        updated_at = $14
 		  WHERE id = $1 AND user_id = $2`,
 		id, userID, status, paidCents, cleanStringPtr(input.PaymentProvider),
 		cleanStringPtr(input.ProviderRequestID), cleanStringPtr(input.MerchantReference),
-		cleanStringPtr(input.PaymentURL), sentAt, paidAt, now)
+		cleanStringPtr(input.PaymentURL), cleanStringPtr(input.PaymentStatus),
+		input.PaymentLastError, paymentCheckedAt, sentAt, paidAt, now)
 	if err != nil {
 		return err
 	}
@@ -2862,15 +3157,378 @@ func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID strin
 	return nil
 }
 
-func (s *LaventeCareStore) invoiceLinesFromTimeEntries(ctx context.Context, userID string, ids []uuid.UUID) ([]model.LCInvoiceLineCreate, *uuid.UUID, error) {
+func (s *LaventeCareStore) GenerateInvoiceDocument(ctx context.Context, userID string, id uuid.UUID) (*model.LCInvoiceDocument, error) {
+	invoice, err := s.GetInvoice(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	lines, err := s.ListInvoiceLinesByInvoice(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+
+	var company *model.LCCompany
+	if invoice.CompanyID != nil {
+		company, err = s.GetCompany(ctx, userID, *invoice.CompanyID)
+		if err != nil && err != pgx.ErrNoRows {
+			return nil, err
+		}
+	}
+
+	generatedAt := time.Now().UTC()
+	htmlBody := buildInvoiceHTML(invoice, company, lines, generatedAt)
+	textBody := buildInvoiceText(invoice, company, lines)
+	ublXML := buildInvoiceUBL(invoice, company, lines)
+	documentURL := fmt.Sprintf("/api/v1/laventecare/invoices/%s/document", id.String())
+
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_invoices
+		    SET document_url = $3,
+		        document_generated_at = $4,
+		        ubl_xml = $5,
+		        ubl_generated_at = $4,
+		        updated_at = $4
+		  WHERE id = $1 AND user_id = $2`,
+		id, userID, documentURL, generatedAt, ublXML)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, pgx.ErrNoRows
+	}
+
+	updated, err := s.GetInvoice(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	return &model.LCInvoiceDocument{
+		Invoice:      *updated,
+		Lines:        lines,
+		Company:      company,
+		HTML:         htmlBody,
+		Text:         textBody,
+		UBLXML:       ublXML,
+		DownloadName: invoiceDocumentDownloadName(updated.InvoiceNumber, "html"),
+		GeneratedAt:  generatedAt,
+	}, nil
+}
+
+func buildInvoiceHTML(invoice *model.LCInvoice, company *model.LCCompany, lines []model.LCInvoiceLine, generatedAt time.Time) string {
+	customerName := invoiceCustomerName(invoice, company)
+	billingAddress := invoiceCustomerAddress(company)
+	paymentText := "Betaalinformatie volgt separaat."
+	paymentLink := ""
+	if invoice.PaymentURL != nil && strings.TrimSpace(*invoice.PaymentURL) != "" {
+		paymentLink = strings.TrimSpace(*invoice.PaymentURL)
+		paymentText = "Betaal veilig via de gekoppelde bunq betaallink."
+	}
+
+	var rows strings.Builder
+	for _, line := range lines {
+		rows.WriteString("<tr>")
+		rows.WriteString("<td>" + html.EscapeString(line.Description) + "</td>")
+		rows.WriteString("<td>" + html.EscapeString(invoiceQuantityLabel(line.QuantityMinutes)) + "</td>")
+		rows.WriteString("<td>" + html.EscapeString(invoiceMoney(invoiceLineUnitCents(line), invoice.Currency)) + "</td>")
+		rows.WriteString("<td class=\"right\">" + html.EscapeString(invoiceMoney(line.TotalCents, invoice.Currency)) + "</td>")
+		rows.WriteString("</tr>")
+	}
+
+	var payButton string
+	if paymentLink != "" {
+		payButton = `<a class="button" href="` + html.EscapeString(paymentLink) + `">Factuur betalen</a>`
+	}
+
+	return fmt.Sprintf(`<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%s</title>
+  <style>
+    body { margin: 0; background: #eef3f8; color: #102033; font-family: Arial, Helvetica, sans-serif; }
+    .page { max-width: 860px; margin: 24px auto; background: #ffffff; border: 1px solid #dbe5f0; border-radius: 18px; overflow: hidden; }
+    .head { background: #07172b; color: #ffffff; padding: 34px 40px; display: flex; justify-content: space-between; gap: 24px; }
+    .brand { font-size: 24px; font-weight: 800; letter-spacing: .01em; }
+    .brand span { color: #16d5e8; }
+    .tag { margin-top: 6px; color: #b9d7e7; text-transform: uppercase; font-size: 12px; font-weight: 800; letter-spacing: .14em; }
+    .meta { text-align: right; font-size: 14px; color: #d8e7f3; line-height: 1.7; }
+    .body { padding: 36px 40px 42px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; }
+    .box { border: 1px solid #dbe5f0; border-radius: 12px; padding: 18px; background: #f8fbfe; }
+    .label { color: #007c89; text-transform: uppercase; font-size: 11px; font-weight: 800; letter-spacing: .14em; margin-bottom: 8px; }
+    .value { line-height: 1.55; }
+    table { width: 100%%; border-collapse: collapse; margin-top: 18px; }
+    th { text-align: left; color: #496176; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid #dbe5f0; padding: 12px 8px; }
+    td { border-bottom: 1px solid #edf2f7; padding: 14px 8px; vertical-align: top; }
+    .right { text-align: right; }
+    .totals { margin-left: auto; margin-top: 20px; width: min(360px, 100%%); }
+    .totals div { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #edf2f7; }
+    .totals .grand { font-size: 20px; font-weight: 800; color: #07172b; border-bottom: 0; }
+    .pay { margin-top: 30px; border-left: 4px solid #00a1b2; background: #f3fbfd; border-radius: 12px; padding: 18px; }
+    .button { display: inline-block; margin-top: 14px; background: #06956f; color: #ffffff; text-decoration: none; font-weight: 800; padding: 12px 20px; border-radius: 10px; }
+    .foot { padding: 22px 40px; border-top: 1px solid #dbe5f0; color: #5a6d7f; font-size: 13px; text-align: center; }
+    @media print { body { background: #ffffff; } .page { margin: 0; border: 0; border-radius: 0; } }
+    @media (max-width: 680px) { .page { margin: 0; border-radius: 0; } .head, .body, .foot { padding-left: 22px; padding-right: 22px; } .head { display: block; } .meta { text-align: left; margin-top: 18px; } .grid { grid-template-columns: 1fr; } table { font-size: 13px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="head">
+      <div>
+        <div class="brand">Lavente<span>Care</span></div>
+        <div class="tag">Van idee tot werkend systeem</div>
+      </div>
+      <div class="meta">
+        <strong>Factuur %s</strong><br>
+        Factuurdatum: %s<br>
+        Vervaldatum: %s
+      </div>
+    </header>
+    <section class="body">
+      <div class="grid">
+        <div class="box">
+          <div class="label">Factuur aan</div>
+          <div class="value"><strong>%s</strong><br>%s</div>
+        </div>
+        <div class="box">
+          <div class="label">Referentie</div>
+          <div class="value">%s<br>Status: %s<br>Gegenereerd: %s</div>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Omschrijving</th><th>Aantal</th><th>Tarief</th><th class="right">Bedrag</th></tr></thead>
+        <tbody>%s</tbody>
+      </table>
+      <div class="totals">
+        <div><span>Subtotaal</span><strong>%s</strong></div>
+        <div><span>BTW %s</span><strong>%s</strong></div>
+        <div class="grand"><span>Totaal</span><span>%s</span></div>
+        <div><span>Betaald</span><strong>%s</strong></div>
+        <div><span>Openstaand</span><strong>%s</strong></div>
+      </div>
+      <div class="pay">
+        <strong>Betaling</strong><br>
+        %s
+        %s
+      </div>
+    </section>
+    <footer class="foot">LaventeCare - KVK 88162710 - Dronten, Nederland - jeffrey@laventecare.nl</footer>
+  </main>
+</body>
+</html>`,
+		html.EscapeString(invoice.InvoiceNumber),
+		html.EscapeString(invoice.InvoiceNumber),
+		html.EscapeString(invoice.IssueDate),
+		html.EscapeString(deref(invoice.DueDate)),
+		html.EscapeString(customerName),
+		html.EscapeString(billingAddress),
+		html.EscapeString(invoiceReference(invoice, company)),
+		html.EscapeString(invoice.Status),
+		html.EscapeString(generatedAt.Format("2006-01-02 15:04")),
+		rows.String(),
+		html.EscapeString(invoiceMoney(invoice.SubtotalCents, invoice.Currency)),
+		html.EscapeString(invoiceVATLabel(invoice.VatRateBps)),
+		html.EscapeString(invoiceMoney(invoice.VatCents, invoice.Currency)),
+		html.EscapeString(invoiceMoney(invoice.TotalCents, invoice.Currency)),
+		html.EscapeString(invoiceMoney(invoice.PaidCents, invoice.Currency)),
+		html.EscapeString(invoiceMoney(maxInt(invoice.TotalCents-invoice.PaidCents, 0), invoice.Currency)),
+		html.EscapeString(paymentText),
+		payButton,
+	)
+}
+
+func buildInvoiceText(invoice *model.LCInvoice, company *model.LCCompany, lines []model.LCInvoiceLine) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Factuur %s\n", invoice.InvoiceNumber)
+	fmt.Fprintf(&b, "Klant: %s\n", invoiceCustomerName(invoice, company))
+	fmt.Fprintf(&b, "Factuurdatum: %s\n", invoice.IssueDate)
+	if invoice.DueDate != nil {
+		fmt.Fprintf(&b, "Vervaldatum: %s\n", *invoice.DueDate)
+	}
+	b.WriteString("\nRegels\n")
+	for _, line := range lines {
+		fmt.Fprintf(&b, "- %s | %s | %s\n", line.Description, invoiceQuantityLabel(line.QuantityMinutes), invoiceMoney(line.TotalCents, invoice.Currency))
+	}
+	fmt.Fprintf(&b, "\nSubtotaal: %s\nBTW: %s\nTotaal: %s\nOpenstaand: %s\n",
+		invoiceMoney(invoice.SubtotalCents, invoice.Currency),
+		invoiceMoney(invoice.VatCents, invoice.Currency),
+		invoiceMoney(invoice.TotalCents, invoice.Currency),
+		invoiceMoney(maxInt(invoice.TotalCents-invoice.PaidCents, 0), invoice.Currency),
+	)
+	if invoice.PaymentURL != nil && strings.TrimSpace(*invoice.PaymentURL) != "" {
+		fmt.Fprintf(&b, "Betaallink: %s\n", strings.TrimSpace(*invoice.PaymentURL))
+	}
+	return b.String()
+}
+
+func buildInvoiceUBL(invoice *model.LCInvoice, company *model.LCCompany, lines []model.LCInvoiceLine) string {
+	var b strings.Builder
+	currency := cleanCurrency(invoice.Currency)
+	customerName := invoiceCustomerName(invoice, company)
+	customerAddress := invoiceCustomerAddress(company)
+	reference := invoiceReference(invoice, company)
+
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">` + "\n")
+	fmt.Fprintf(&b, "  <cbc:CustomizationID>%s</cbc:CustomizationID>\n", xmlEscape("urn:cen.eu:en16931:2017"))
+	fmt.Fprintf(&b, "  <cbc:ID>%s</cbc:ID>\n", xmlEscape(invoice.InvoiceNumber))
+	fmt.Fprintf(&b, "  <cbc:IssueDate>%s</cbc:IssueDate>\n", xmlEscape(invoice.IssueDate))
+	if invoice.DueDate != nil {
+		fmt.Fprintf(&b, "  <cbc:DueDate>%s</cbc:DueDate>\n", xmlEscape(*invoice.DueDate))
+	}
+	fmt.Fprintf(&b, "  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>\n")
+	fmt.Fprintf(&b, "  <cbc:DocumentCurrencyCode>%s</cbc:DocumentCurrencyCode>\n", xmlEscape(currency))
+	fmt.Fprintf(&b, "  <cbc:BuyerReference>%s</cbc:BuyerReference>\n", xmlEscape(reference))
+	b.WriteString("  <cac:AccountingSupplierParty><cac:Party>\n")
+	b.WriteString("    <cac:PartyName><cbc:Name>LaventeCare</cbc:Name></cac:PartyName>\n")
+	b.WriteString("    <cac:PartyLegalEntity><cbc:RegistrationName>LaventeCare</cbc:RegistrationName><cbc:CompanyID>88162710</cbc:CompanyID></cac:PartyLegalEntity>\n")
+	b.WriteString("  </cac:Party></cac:AccountingSupplierParty>\n")
+	b.WriteString("  <cac:AccountingCustomerParty><cac:Party>\n")
+	fmt.Fprintf(&b, "    <cac:PartyName><cbc:Name>%s</cbc:Name></cac:PartyName>\n", xmlEscape(customerName))
+	fmt.Fprintf(&b, "    <cac:PostalAddress><cbc:StreetName>%s</cbc:StreetName><cac:Country><cbc:IdentificationCode>NL</cbc:IdentificationCode></cac:Country></cac:PostalAddress>\n", xmlEscape(customerAddress))
+	if company != nil && strings.TrimSpace(deref(company.VATNumber)) != "" {
+		fmt.Fprintf(&b, "    <cac:PartyTaxScheme><cbc:CompanyID>%s</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme>\n", xmlEscape(deref(company.VATNumber)))
+	}
+	b.WriteString("  </cac:Party></cac:AccountingCustomerParty>\n")
+	fmt.Fprintf(&b, "  <cac:TaxTotal><cbc:TaxAmount currencyID=\"%s\">%s</cbc:TaxAmount></cac:TaxTotal>\n", xmlEscape(currency), invoiceMoneyValue(invoice.VatCents))
+	b.WriteString("  <cac:LegalMonetaryTotal>\n")
+	fmt.Fprintf(&b, "    <cbc:LineExtensionAmount currencyID=\"%s\">%s</cbc:LineExtensionAmount>\n", xmlEscape(currency), invoiceMoneyValue(invoice.SubtotalCents))
+	fmt.Fprintf(&b, "    <cbc:TaxExclusiveAmount currencyID=\"%s\">%s</cbc:TaxExclusiveAmount>\n", xmlEscape(currency), invoiceMoneyValue(invoice.SubtotalCents))
+	fmt.Fprintf(&b, "    <cbc:TaxInclusiveAmount currencyID=\"%s\">%s</cbc:TaxInclusiveAmount>\n", xmlEscape(currency), invoiceMoneyValue(invoice.TotalCents))
+	fmt.Fprintf(&b, "    <cbc:PayableAmount currencyID=\"%s\">%s</cbc:PayableAmount>\n", xmlEscape(currency), invoiceMoneyValue(maxInt(invoice.TotalCents-invoice.PaidCents, 0)))
+	b.WriteString("  </cac:LegalMonetaryTotal>\n")
+	for idx, line := range lines {
+		b.WriteString(buildInvoiceLineUBL(idx+1, invoice, line))
+	}
+	b.WriteString("</Invoice>\n")
+	return b.String()
+}
+
+func buildInvoiceLineUBL(index int, invoice *model.LCInvoice, line model.LCInvoiceLine) string {
+	currency := cleanCurrency(invoice.Currency)
+	quantity := invoiceQuantityValue(line.QuantityMinutes)
+	unitCode := "HUR"
+	if line.QuantityMinutes <= 0 {
+		unitCode = "C62"
+	}
+	var b strings.Builder
+	b.WriteString("  <cac:InvoiceLine>\n")
+	fmt.Fprintf(&b, "    <cbc:ID>%d</cbc:ID>\n", index)
+	fmt.Fprintf(&b, "    <cbc:InvoicedQuantity unitCode=\"%s\">%s</cbc:InvoicedQuantity>\n", unitCode, quantity)
+	fmt.Fprintf(&b, "    <cbc:LineExtensionAmount currencyID=\"%s\">%s</cbc:LineExtensionAmount>\n", xmlEscape(currency), invoiceMoneyValue(line.TotalCents))
+	fmt.Fprintf(&b, "    <cac:Item><cbc:Name>%s</cbc:Name></cac:Item>\n", xmlEscape(line.Description))
+	fmt.Fprintf(&b, "    <cac:Price><cbc:PriceAmount currencyID=\"%s\">%s</cbc:PriceAmount></cac:Price>\n", xmlEscape(currency), invoiceMoneyValue(invoiceLineUnitCents(line)))
+	b.WriteString("  </cac:InvoiceLine>\n")
+	return b.String()
+}
+
+func invoiceCustomerName(invoice *model.LCInvoice, company *model.LCCompany) string {
+	if company != nil && strings.TrimSpace(company.Naam) != "" {
+		return strings.TrimSpace(company.Naam)
+	}
+	if invoice.CompanyName != nil && strings.TrimSpace(*invoice.CompanyName) != "" {
+		return strings.TrimSpace(*invoice.CompanyName)
+	}
+	return "Klant"
+}
+
+func invoiceCustomerAddress(company *model.LCCompany) string {
+	if company != nil && strings.TrimSpace(deref(company.BillingAddress)) != "" {
+		return strings.TrimSpace(deref(company.BillingAddress))
+	}
+	return "Adres niet ingevuld"
+}
+
+func invoiceReference(invoice *model.LCInvoice, company *model.LCCompany) string {
+	if company != nil && strings.TrimSpace(deref(company.BillingReference)) != "" {
+		return strings.TrimSpace(deref(company.BillingReference))
+	}
+	if invoice.MerchantReference != nil && strings.TrimSpace(*invoice.MerchantReference) != "" {
+		return strings.TrimSpace(*invoice.MerchantReference)
+	}
+	return invoice.InvoiceNumber
+}
+
+func invoiceVATLabel(vatRateBps int) string {
+	if vatRateBps <= 0 {
+		return "0%"
+	}
+	whole := vatRateBps / 100
+	decimal := vatRateBps % 100
+	if decimal == 0 {
+		return fmt.Sprintf("%d%%", whole)
+	}
+	return fmt.Sprintf("%d.%02d%%", whole, decimal)
+}
+
+func invoiceQuantityLabel(minutes int) string {
+	if minutes <= 0 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%.2f uur", float64(minutes)/60)
+}
+
+func invoiceQuantityValue(minutes int) string {
+	if minutes <= 0 {
+		return "1.00"
+	}
+	return fmt.Sprintf("%.2f", float64(minutes)/60)
+}
+
+func invoiceLineUnitCents(line model.LCInvoiceLine) int {
+	if line.QuantityMinutes <= 0 {
+		return line.TotalCents
+	}
+	return line.UnitAmountCents
+}
+
+func invoiceMoney(cents int, currency string) string {
+	return fmt.Sprintf("%s %s", cleanCurrency(currency), invoiceMoneyValue(cents))
+}
+
+func invoiceMoneyValue(cents int) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
+}
+
+func invoiceDocumentDownloadName(number, ext string) string {
+	safe := strings.ToLower(strings.TrimSpace(number))
+	safe = strings.NewReplacer("/", "-", "\\", "-", " ", "-", "_", "-").Replace(safe)
+	if safe == "" {
+		safe = "factuur"
+	}
+	return safe + "." + strings.TrimPrefix(ext, ".")
+}
+
+func xmlEscape(value string) string {
+	return html.EscapeString(strings.TrimSpace(value))
+}
+
+func (s *LaventeCareStore) invoiceLinesFromTimeEntries(ctx context.Context, userID string, ids []uuid.UUID, expectedCompanyID, expectedProjectID, expectedWorkstreamID *uuid.UUID) ([]model.LCInvoiceLineCreate, *uuid.UUID, error) {
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, company_id, description, minutes, hourly_rate_cents
-		   FROM lc_time_entries
-		  WHERE user_id = $1
-		    AND id = ANY($2)
-		    AND billable = true
-		    AND invoice_id IS NULL
-		  ORDER BY entry_date ASC, created_at ASC`,
+		`SELECT te.id,
+		        COALESCE(te.company_id, p.company_id, w.company_id, ae.company_id),
+		        COALESCE(te.project_id, w.project_id, ae.project_id),
+		        COALESCE(te.workstream_id, ae.workstream_id),
+		        te.description,
+		        te.minutes,
+		        te.hourly_rate_cents
+		   FROM lc_time_entries te
+		   LEFT JOIN lc_projects p ON p.user_id = te.user_id AND p.id = te.project_id
+		   LEFT JOIN lc_workstreams w ON w.user_id = te.user_id AND w.id = te.workstream_id
+		   LEFT JOIN lc_activity_events ae ON ae.user_id = te.user_id AND ae.id = te.activity_event_id
+		  WHERE te.user_id = $1
+		    AND te.id = ANY($2)
+		    AND te.billable = true
+		    AND te.invoice_id IS NULL
+		  ORDER BY te.entry_date ASC, te.created_at ASC`,
 		userID, ids)
 	if err != nil {
 		return nil, nil, err
@@ -2882,14 +3540,26 @@ func (s *LaventeCareStore) invoiceLinesFromTimeEntries(ctx context.Context, user
 	for rows.Next() {
 		var id uuid.UUID
 		var entryCompanyID *uuid.UUID
+		var entryProjectID *uuid.UUID
+		var entryWorkstreamID *uuid.UUID
 		var description string
 		var minutes int
 		var rate int
-		if err := rows.Scan(&id, &entryCompanyID, &description, &minutes, &rate); err != nil {
+		if err := rows.Scan(&id, &entryCompanyID, &entryProjectID, &entryWorkstreamID, &description, &minutes, &rate); err != nil {
 			return nil, nil, err
 		}
-		if companyID == nil && entryCompanyID != nil {
-			companyID = entryCompanyID
+		companyID, err = mergeCompanyScope(companyID, entryCompanyID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, err := mergeCompanyScope(expectedCompanyID, entryCompanyID); err != nil {
+			return nil, nil, err
+		}
+		if _, err := mergeCompanyScope(expectedProjectID, entryProjectID); err != nil {
+			return nil, nil, err
+		}
+		if _, err := mergeCompanyScope(expectedWorkstreamID, entryWorkstreamID); err != nil {
+			return nil, nil, err
 		}
 		entryID := id
 		lines = append(lines, model.LCInvoiceLineCreate{
@@ -2928,30 +3598,21 @@ func (s *LaventeCareStore) resolveBillingCompanyID(ctx context.Context, userID s
 }
 
 func (s *LaventeCareStore) validateBillingTarget(ctx context.Context, userID string, companyID, projectID, workstreamID, activityEventID *uuid.UUID) error {
-	check := func(table string, id *uuid.UUID) error {
-		if id == nil {
-			return nil
-		}
-		var exists bool
-		query := fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s WHERE user_id = $1 AND id = $2)`, table)
-		if err := s.db.Pool.QueryRow(ctx, query, userID, *id).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return pgx.ErrNoRows
-		}
-		return nil
-	}
-	if err := check("lc_companies", companyID); err != nil {
+	if err := s.ensureCompanyExists(ctx, userID, companyID); err != nil {
 		return err
 	}
-	if err := check("lc_projects", projectID); err != nil {
+	scope := companyID
+	var err error
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, projectID,
+		`SELECT company_id FROM lc_projects WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check("lc_workstreams", workstreamID); err != nil {
+	if scope, err = s.validateScopedCompanyObject(ctx, userID, scope, workstreamID,
+		`SELECT company_id FROM lc_workstreams WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
-	if err := check("lc_activity_events", activityEventID); err != nil {
+	if _, err = s.validateScopedCompanyObject(ctx, userID, scope, activityEventID,
+		`SELECT company_id FROM lc_activity_events WHERE user_id = $1 AND id = $2`); err != nil {
 		return err
 	}
 	return nil
@@ -2976,6 +3637,10 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 		return nil, err
 	}
 	contacts, err := s.ListContacts(ctx, userID, nil, 30)
+	if err != nil {
+		return nil, err
+	}
+	accessCredentials, err := s.ListAccessCredentials(ctx, userID, 30, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3015,6 +3680,10 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	accessCredentialCount, err := s.CountAccessCredentials(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	_ = s.SeedDefaultMailTemplates(ctx, userID)
 	mailTemplates, _ := s.ListMailTemplates(ctx, userID, 80)
 	mailboxSummary, _ := s.GetMailboxSummary(ctx, userID, mailTemplates, laventeCareMailConfiguredFromEnv(), strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")))
@@ -3037,6 +3706,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 		Summary: model.LCCockpitSummary{
 			Companies:         len(companies),
 			Contacts:          len(contacts),
+			AccessCredentials: accessCredentialCount,
 			Leads:             len(leads),
 			ActiveLeads:       len(activeLeads),
 			Workstreams:       len(workstreams),
@@ -3059,6 +3729,7 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 		},
 		Companies:         take(companies, 12),
 		Contacts:          take(contacts, 12),
+		AccessCredentials: take(accessCredentials, 20),
 		ActiveLeads:       take(activeLeads, 8),
 		ActiveWorkstreams: take(activeWorkstreams, 8),
 		ActiveProjects:    take(activeProjects, 8),
@@ -3601,6 +4272,9 @@ func scanCompany(row pgx.CollectableRow) (model.LCCompany, error) {
 	var c model.LCCompany
 	err := row.Scan(&c.ID, &c.UserID, &c.Naam, &c.Website, &c.Sector, &c.Status,
 		&c.RelatieType, &c.Notities, &c.LaatsteContact, &c.VolgendeActie,
+		&c.KVKNumber, &c.VATNumber, &c.BillingEmail, &c.BillingAddress, &c.BillingReference,
+		&c.PaymentTermsDays, &c.ContractStatus, &c.ServiceLevel, &c.PreferredChannel,
+		&c.PortalURL, &c.DefaultLoginURL, &c.OnboardingStatus, &c.DataProcessStatus,
 		&c.CreatedAt, &c.UpdatedAt, &c.Contacts, &c.Leads, &c.Workstreams,
 		&c.Projects, &c.ActionItems, &c.DossierDocuments)
 	return c, err
@@ -3609,7 +4283,19 @@ func scanCompany(row pgx.CollectableRow) (model.LCCompany, error) {
 func scanContact(row pgx.CollectableRow) (model.LCContact, error) {
 	var c model.LCContact
 	err := row.Scan(&c.ID, &c.UserID, &c.CompanyID, &c.Naam, &c.Email, &c.Telefoon,
-		&c.Rol, &c.IsPrimary, &c.Notities, &c.CreatedAt, &c.UpdatedAt)
+		&c.Rol, &c.IsPrimary, &c.Notities, &c.PreferredChannel, &c.DecisionRole,
+		&c.CreatedAt, &c.UpdatedAt)
+	return c, err
+}
+
+func scanAccessCredential(row pgx.CollectableRow) (model.LCAccessCredential, error) {
+	var c model.LCAccessCredential
+	err := row.Scan(&c.ID, &c.UserID, &c.CompanyID, &c.ContactID, &c.ProjectID,
+		&c.WorkstreamID, &c.Title, &c.LoginURL, &c.Username, &c.Role,
+		&c.Environment, &c.Status, &c.OwnerContact, &c.SecretLabel,
+		&c.SecretConfigured, &c.SecretHint, &c.SharingPolicy, &c.LastCheckedAt,
+		&c.ExpiresAt, &c.RevokedAt, &c.Notes, &c.CreatedAt, &c.UpdatedAt,
+		&c.CompanyName, &c.ContactName, &c.ProjectName, &c.WorkstreamTitle)
 	return c, err
 }
 
@@ -3706,7 +4392,9 @@ func scanInvoice(row pgx.CollectableRow) (model.LCInvoice, error) {
 		&i.QuoteID, &i.InvoiceNumber, &i.Status, &i.IssueDate, &i.DueDate, &i.Currency,
 		&i.SubtotalCents, &i.VatRateBps, &i.VatCents, &i.TotalCents, &i.PaidCents,
 		&i.PaymentProvider, &i.ProviderRequestID, &i.MerchantReference,
-		&i.PaymentURL, &i.SentAt, &i.PaidAt, &i.Notes, &i.CreatedAt, &i.UpdatedAt,
+		&i.PaymentURL, &i.DocumentURL, &i.DocumentGenerated, &i.UBLXML, &i.UBLGeneratedAt,
+		&i.PaymentCheckedAt, &i.PaymentStatus, &i.PaymentLastError, &i.ReminderCount,
+		&i.LastReminderAt, &i.SentAt, &i.PaidAt, &i.Notes, &i.CreatedAt, &i.UpdatedAt,
 		&i.CompanyName, &i.ProjectName, &i.WorkstreamTitle)
 	return i, err
 }
@@ -3772,6 +4460,27 @@ func cleanStatus(value, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func cleanStatusPtr(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return cleanStatus(*value, fallback)
+}
+
+func positiveIntOr(value *int, fallback int) int {
+	if value == nil || *value <= 0 {
+		return fallback
+	}
+	return *value
+}
+
+func positiveIntPtr(value *int) *int {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	return value
 }
 
 func cleanCurrency(value string) string {
@@ -3910,6 +4619,38 @@ func parseDateTimePtr(value *string) *time.Time {
 		}
 	}
 	return nil
+}
+
+func encryptLaventeCareSecret(value *string) (*string, error) {
+	raw := strings.TrimSpace(deref(value))
+	if raw == "" {
+		return nil, nil
+	}
+	keyMaterial := strings.TrimSpace(os.Getenv("LAVENTECARE_SECRET_KEY"))
+	if keyMaterial == "" {
+		keyMaterial = strings.TrimSpace(os.Getenv("APP_SECRET_KEY"))
+	}
+	if keyMaterial == "" || keyMaterial == "change-me" || keyMaterial == "change-me-to-a-long-random-secret" {
+		return nil, fmt.Errorf("LAVENTECARE_SECRET_KEY of APP_SECRET_KEY is nodig om klanttoegang versleuteld op te slaan")
+	}
+
+	sum := sha256.Sum256([]byte(keyMaterial))
+	block, err := aes.NewCipher(sum[:])
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	ciphertext := gcm.Seal(nil, nonce, []byte(raw), nil)
+	payload := append([]byte("v1:"), append(nonce, ciphertext...)...)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	return &encoded, nil
 }
 
 func shouldActivityUpdateLastContact(eventType string) bool {

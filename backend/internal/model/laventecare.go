@@ -9,80 +9,197 @@ import (
 // ─── LaventeCare CRM ────────────────────────────────────────────────────────
 
 type LCCompany struct {
-	ID               uuid.UUID  `json:"id" db:"id"`
-	UserID           string     `json:"user_id" db:"user_id"`
-	Naam             string     `json:"naam" db:"naam"`
-	Website          *string    `json:"website" db:"website"`
-	Sector           *string    `json:"sector" db:"sector"`
-	Status           string     `json:"status" db:"status"`
-	RelatieType      string     `json:"relatie_type" db:"relatie_type"`
-	Notities         *string    `json:"notities" db:"notities"`
-	LaatsteContact   *time.Time `json:"laatste_contact" db:"laatste_contact"`
-	VolgendeActie    *string    `json:"volgende_actie" db:"volgende_actie"`
-	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
-	Contacts         int        `json:"contacts"`
-	Leads            int        `json:"leads"`
-	Workstreams      int        `json:"workstreams"`
-	Projects         int        `json:"projects"`
-	ActionItems      int        `json:"actionItems"`
-	DossierDocuments int        `json:"dossierDocuments"`
+	ID                uuid.UUID  `json:"id" db:"id"`
+	UserID            string     `json:"user_id" db:"user_id"`
+	Naam              string     `json:"naam" db:"naam"`
+	Website           *string    `json:"website" db:"website"`
+	Sector            *string    `json:"sector" db:"sector"`
+	Status            string     `json:"status" db:"status"`
+	RelatieType       string     `json:"relatie_type" db:"relatie_type"`
+	Notities          *string    `json:"notities" db:"notities"`
+	LaatsteContact    *time.Time `json:"laatste_contact" db:"laatste_contact"`
+	VolgendeActie     *string    `json:"volgende_actie" db:"volgende_actie"`
+	KVKNumber         *string    `json:"kvk_number" db:"kvk_number"`
+	VATNumber         *string    `json:"vat_number" db:"vat_number"`
+	BillingEmail      *string    `json:"billing_email" db:"billing_email"`
+	BillingAddress    *string    `json:"billing_address" db:"billing_address"`
+	BillingReference  *string    `json:"billing_reference" db:"billing_reference"`
+	PaymentTermsDays  int        `json:"payment_terms_days" db:"payment_terms_days"`
+	ContractStatus    string     `json:"contract_status" db:"contract_status"`
+	ServiceLevel      string     `json:"service_level" db:"service_level"`
+	PreferredChannel  *string    `json:"preferred_channel" db:"preferred_channel"`
+	PortalURL         *string    `json:"portal_url" db:"portal_url"`
+	DefaultLoginURL   *string    `json:"default_login_url" db:"default_login_url"`
+	OnboardingStatus  string     `json:"onboarding_status" db:"onboarding_status"`
+	DataProcessStatus string     `json:"data_processing_status" db:"data_processing_status"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
+	Contacts          int        `json:"contacts"`
+	Leads             int        `json:"leads"`
+	Workstreams       int        `json:"workstreams"`
+	Projects          int        `json:"projects"`
+	ActionItems       int        `json:"actionItems"`
+	DossierDocuments  int        `json:"dossierDocuments"`
 }
 
 type LCCompanyCreate struct {
-	Naam           string  `json:"naam"`
-	Website        *string `json:"website"`
-	Sector         *string `json:"sector"`
-	Status         string  `json:"status"`
-	RelatieType    string  `json:"relatie_type"`
-	Notities       *string `json:"notities"`
-	LaatsteContact *string `json:"laatste_contact"`
-	VolgendeActie  *string `json:"volgende_actie"`
+	Naam              string  `json:"naam"`
+	Website           *string `json:"website"`
+	Sector            *string `json:"sector"`
+	Status            string  `json:"status"`
+	RelatieType       string  `json:"relatie_type"`
+	Notities          *string `json:"notities"`
+	LaatsteContact    *string `json:"laatste_contact"`
+	VolgendeActie     *string `json:"volgende_actie"`
+	KVKNumber         *string `json:"kvk_number"`
+	VATNumber         *string `json:"vat_number"`
+	BillingEmail      *string `json:"billing_email"`
+	BillingAddress    *string `json:"billing_address"`
+	BillingReference  *string `json:"billing_reference"`
+	PaymentTermsDays  *int    `json:"payment_terms_days"`
+	ContractStatus    *string `json:"contract_status"`
+	ServiceLevel      *string `json:"service_level"`
+	PreferredChannel  *string `json:"preferred_channel"`
+	PortalURL         *string `json:"portal_url"`
+	DefaultLoginURL   *string `json:"default_login_url"`
+	OnboardingStatus  *string `json:"onboarding_status"`
+	DataProcessStatus *string `json:"data_processing_status"`
 }
 
 type LCCompanyUpdate struct {
-	Naam           *string `json:"naam,omitempty"`
-	Website        *string `json:"website,omitempty"`
-	Sector         *string `json:"sector,omitempty"`
-	Status         *string `json:"status,omitempty"`
-	RelatieType    *string `json:"relatie_type,omitempty"`
-	Notities       *string `json:"notities,omitempty"`
-	LaatsteContact *string `json:"laatste_contact,omitempty"`
-	VolgendeActie  *string `json:"volgende_actie,omitempty"`
+	Naam              *string `json:"naam,omitempty"`
+	Website           *string `json:"website,omitempty"`
+	Sector            *string `json:"sector,omitempty"`
+	Status            *string `json:"status,omitempty"`
+	RelatieType       *string `json:"relatie_type,omitempty"`
+	Notities          *string `json:"notities,omitempty"`
+	LaatsteContact    *string `json:"laatste_contact,omitempty"`
+	VolgendeActie     *string `json:"volgende_actie,omitempty"`
+	KVKNumber         *string `json:"kvk_number,omitempty"`
+	VATNumber         *string `json:"vat_number,omitempty"`
+	BillingEmail      *string `json:"billing_email,omitempty"`
+	BillingAddress    *string `json:"billing_address,omitempty"`
+	BillingReference  *string `json:"billing_reference,omitempty"`
+	PaymentTermsDays  *int    `json:"payment_terms_days,omitempty"`
+	ContractStatus    *string `json:"contract_status,omitempty"`
+	ServiceLevel      *string `json:"service_level,omitempty"`
+	PreferredChannel  *string `json:"preferred_channel,omitempty"`
+	PortalURL         *string `json:"portal_url,omitempty"`
+	DefaultLoginURL   *string `json:"default_login_url,omitempty"`
+	OnboardingStatus  *string `json:"onboarding_status,omitempty"`
+	DataProcessStatus *string `json:"data_processing_status,omitempty"`
 }
 
 type LCContact struct {
-	ID        uuid.UUID  `json:"id" db:"id"`
-	UserID    string     `json:"user_id" db:"user_id"`
-	CompanyID *uuid.UUID `json:"company_id" db:"company_id"`
-	Naam      string     `json:"naam" db:"naam"`
-	Email     *string    `json:"email" db:"email"`
-	Telefoon  *string    `json:"telefoon" db:"telefoon"`
-	Rol       *string    `json:"rol" db:"rol"`
-	IsPrimary bool       `json:"is_primary" db:"is_primary"`
-	Notities  *string    `json:"notities" db:"notities"`
-	CreatedAt time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+	ID               uuid.UUID  `json:"id" db:"id"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	CompanyID        *uuid.UUID `json:"company_id" db:"company_id"`
+	Naam             string     `json:"naam" db:"naam"`
+	Email            *string    `json:"email" db:"email"`
+	Telefoon         *string    `json:"telefoon" db:"telefoon"`
+	Rol              *string    `json:"rol" db:"rol"`
+	IsPrimary        bool       `json:"is_primary" db:"is_primary"`
+	Notities         *string    `json:"notities" db:"notities"`
+	PreferredChannel *string    `json:"preferred_channel" db:"preferred_channel"`
+	DecisionRole     *string    `json:"decision_role" db:"decision_role"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 type LCContactCreate struct {
-	CompanyID *uuid.UUID `json:"company_id"`
-	Naam      string     `json:"naam"`
-	Email     *string    `json:"email"`
-	Telefoon  *string    `json:"telefoon"`
-	Rol       *string    `json:"rol"`
-	IsPrimary bool       `json:"is_primary"`
-	Notities  *string    `json:"notities"`
+	CompanyID        *uuid.UUID `json:"company_id"`
+	Naam             string     `json:"naam"`
+	Email            *string    `json:"email"`
+	Telefoon         *string    `json:"telefoon"`
+	Rol              *string    `json:"rol"`
+	IsPrimary        bool       `json:"is_primary"`
+	Notities         *string    `json:"notities"`
+	PreferredChannel *string    `json:"preferred_channel"`
+	DecisionRole     *string    `json:"decision_role"`
 }
 
 type LCContactUpdate struct {
-	CompanyID *uuid.UUID `json:"company_id,omitempty"`
-	Naam      *string    `json:"naam,omitempty"`
-	Email     *string    `json:"email,omitempty"`
-	Telefoon  *string    `json:"telefoon,omitempty"`
-	Rol       *string    `json:"rol,omitempty"`
-	IsPrimary *bool      `json:"is_primary,omitempty"`
-	Notities  *string    `json:"notities,omitempty"`
+	CompanyID        *uuid.UUID `json:"company_id,omitempty"`
+	Naam             *string    `json:"naam,omitempty"`
+	Email            *string    `json:"email,omitempty"`
+	Telefoon         *string    `json:"telefoon,omitempty"`
+	Rol              *string    `json:"rol,omitempty"`
+	IsPrimary        *bool      `json:"is_primary,omitempty"`
+	Notities         *string    `json:"notities,omitempty"`
+	PreferredChannel *string    `json:"preferred_channel,omitempty"`
+	DecisionRole     *string    `json:"decision_role,omitempty"`
+}
+
+type LCAccessCredential struct {
+	ID               uuid.UUID  `json:"id" db:"id"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	CompanyID        uuid.UUID  `json:"company_id" db:"company_id"`
+	ContactID        *uuid.UUID `json:"contact_id" db:"contact_id"`
+	ProjectID        *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID     *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	Title            string     `json:"title" db:"title"`
+	LoginURL         *string    `json:"login_url" db:"login_url"`
+	Username         *string    `json:"username" db:"username"`
+	Role             *string    `json:"role" db:"role"`
+	Environment      string     `json:"environment" db:"environment"`
+	Status           string     `json:"status" db:"status"`
+	OwnerContact     *string    `json:"owner_contact" db:"owner_contact"`
+	SecretLabel      string     `json:"secret_label" db:"secret_label"`
+	SecretConfigured bool       `json:"secret_configured"`
+	SecretHint       *string    `json:"secret_hint" db:"secret_hint"`
+	SharingPolicy    string     `json:"sharing_policy" db:"sharing_policy"`
+	LastCheckedAt    *time.Time `json:"last_checked_at" db:"last_checked_at"`
+	ExpiresAt        *time.Time `json:"expires_at" db:"expires_at"`
+	RevokedAt        *time.Time `json:"revoked_at" db:"revoked_at"`
+	Notes            *string    `json:"notes" db:"notes"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName      *string    `json:"company_name,omitempty"`
+	ContactName      *string    `json:"contact_name,omitempty"`
+	ProjectName      *string    `json:"project_name,omitempty"`
+	WorkstreamTitle  *string    `json:"workstream_title,omitempty"`
+}
+
+type LCAccessCredentialCreate struct {
+	CompanyID     uuid.UUID  `json:"company_id"`
+	ContactID     *uuid.UUID `json:"contact_id"`
+	ProjectID     *uuid.UUID `json:"project_id"`
+	WorkstreamID  *uuid.UUID `json:"workstream_id"`
+	Title         string     `json:"title"`
+	LoginURL      *string    `json:"login_url"`
+	Username      *string    `json:"username"`
+	Role          *string    `json:"role"`
+	Environment   string     `json:"environment"`
+	Status        string     `json:"status"`
+	OwnerContact  *string    `json:"owner_contact"`
+	SecretLabel   *string    `json:"secret_label"`
+	SecretValue   *string    `json:"secret_value"`
+	SecretHint    *string    `json:"secret_hint"`
+	SharingPolicy *string    `json:"sharing_policy"`
+	LastCheckedAt *string    `json:"last_checked_at"`
+	ExpiresAt     *string    `json:"expires_at"`
+	Notes         *string    `json:"notes"`
+}
+
+type LCAccessCredentialUpdate struct {
+	ContactID     *uuid.UUID `json:"contact_id,omitempty"`
+	ProjectID     *uuid.UUID `json:"project_id,omitempty"`
+	WorkstreamID  *uuid.UUID `json:"workstream_id,omitempty"`
+	Title         *string    `json:"title,omitempty"`
+	LoginURL      *string    `json:"login_url,omitempty"`
+	Username      *string    `json:"username,omitempty"`
+	Role          *string    `json:"role,omitempty"`
+	Environment   *string    `json:"environment,omitempty"`
+	Status        *string    `json:"status,omitempty"`
+	OwnerContact  *string    `json:"owner_contact,omitempty"`
+	SecretLabel   *string    `json:"secret_label,omitempty"`
+	SecretValue   *string    `json:"secret_value,omitempty"`
+	SecretHint    *string    `json:"secret_hint,omitempty"`
+	SharingPolicy *string    `json:"sharing_policy,omitempty"`
+	LastCheckedAt *string    `json:"last_checked_at,omitempty"`
+	ExpiresAt     *string    `json:"expires_at,omitempty"`
+	RevokedAt     *string    `json:"revoked_at,omitempty"`
+	Notes         *string    `json:"notes,omitempty"`
 }
 
 type LCLead struct {
@@ -743,6 +860,15 @@ type LCInvoice struct {
 	ProviderRequestID *string    `json:"provider_request_id" db:"provider_request_id"`
 	MerchantReference *string    `json:"merchant_reference" db:"merchant_reference"`
 	PaymentURL        *string    `json:"payment_url" db:"payment_url"`
+	DocumentURL       *string    `json:"document_url" db:"document_url"`
+	DocumentGenerated *time.Time `json:"document_generated_at" db:"document_generated_at"`
+	UBLXML            *string    `json:"-" db:"ubl_xml"`
+	UBLGeneratedAt    *time.Time `json:"ubl_generated_at" db:"ubl_generated_at"`
+	PaymentCheckedAt  *time.Time `json:"payment_checked_at" db:"payment_checked_at"`
+	PaymentStatus     *string    `json:"payment_status" db:"payment_status"`
+	PaymentLastError  *string    `json:"payment_last_error" db:"payment_last_error"`
+	ReminderCount     int        `json:"reminder_count" db:"reminder_count"`
+	LastReminderAt    *time.Time `json:"last_reminder_at" db:"last_reminder_at"`
 	SentAt            *time.Time `json:"sent_at" db:"sent_at"`
 	PaidAt            *time.Time `json:"paid_at" db:"paid_at"`
 	Notes             *string    `json:"notes" db:"notes"`
@@ -751,6 +877,25 @@ type LCInvoice struct {
 	CompanyName       *string    `json:"company_name,omitempty"`
 	ProjectName       *string    `json:"project_name,omitempty"`
 	WorkstreamTitle   *string    `json:"workstream_title,omitempty"`
+}
+
+type LCInvoiceDocument struct {
+	Invoice      LCInvoice       `json:"invoice"`
+	Lines        []LCInvoiceLine `json:"lines"`
+	Company      *LCCompany      `json:"company,omitempty"`
+	HTML         string          `json:"html"`
+	Text         string          `json:"text"`
+	UBLXML       string          `json:"ubl_xml"`
+	DownloadName string          `json:"download_name"`
+	GeneratedAt  time.Time       `json:"generated_at"`
+}
+
+type LCInvoicePaymentRefresh struct {
+	Invoice        LCInvoice `json:"invoice"`
+	ProviderStatus string    `json:"provider_status"`
+	Changed        bool      `json:"changed"`
+	Message        string    `json:"message"`
+	CheckedAt      time.Time `json:"checked_at"`
 }
 
 type LCInvoiceLine struct {
@@ -798,6 +943,9 @@ type LCInvoiceStatusUpdate struct {
 	ProviderRequestID *string `json:"provider_request_id"`
 	MerchantReference *string `json:"merchant_reference"`
 	PaymentURL        *string `json:"payment_url"`
+	PaymentStatus     *string `json:"payment_status"`
+	PaymentLastError  *string `json:"payment_last_error"`
+	PaymentCheckedAt  *string `json:"payment_checked_at"`
 	PaidAt            *string `json:"paid_at"`
 	SentAt            *string `json:"sent_at"`
 }
@@ -845,27 +993,29 @@ type LCSlaIncident struct {
 
 // LCCockpit is the aggregated dashboard response.
 type LCCockpit struct {
-	Summary           LCCockpitSummary    `json:"summary"`
-	Companies         []LCCompany         `json:"companies"`
-	Contacts          []LCContact         `json:"contacts"`
-	ActiveLeads       []LCLead            `json:"activeLeads"`
-	ActiveWorkstreams []LCWorkstream      `json:"activeWorkstreams"`
-	ActiveProjects    []LCProject         `json:"activeProjects"`
-	ActionItems       []LCActionItem      `json:"actionItems"`
-	OpenIncidents     []LCSlaIncident     `json:"openIncidents"`
-	OpenChanges       []LCChangeRequest   `json:"openChanges"`
-	RecentDecisions   []LCDecision        `json:"recentDecisions"`
-	DocumentCatalog   []LCDocument        `json:"documentCatalog"`
-	DossierDocuments  []LCDossierDocument `json:"dossierDocuments"`
-	ActivityEvents    []LCActivityEvent   `json:"activityEvents"`
-	Mailbox           *LCMailboxSummary   `json:"mailbox,omitempty"`
-	BusinessSignals   []LCBusinessSignal  `json:"businessSignals"`
-	FollowUps         []LCFollowUpSignal  `json:"followUps"`
+	Summary           LCCockpitSummary     `json:"summary"`
+	Companies         []LCCompany          `json:"companies"`
+	Contacts          []LCContact          `json:"contacts"`
+	AccessCredentials []LCAccessCredential `json:"accessCredentials"`
+	ActiveLeads       []LCLead             `json:"activeLeads"`
+	ActiveWorkstreams []LCWorkstream       `json:"activeWorkstreams"`
+	ActiveProjects    []LCProject          `json:"activeProjects"`
+	ActionItems       []LCActionItem       `json:"actionItems"`
+	OpenIncidents     []LCSlaIncident      `json:"openIncidents"`
+	OpenChanges       []LCChangeRequest    `json:"openChanges"`
+	RecentDecisions   []LCDecision         `json:"recentDecisions"`
+	DocumentCatalog   []LCDocument         `json:"documentCatalog"`
+	DossierDocuments  []LCDossierDocument  `json:"dossierDocuments"`
+	ActivityEvents    []LCActivityEvent    `json:"activityEvents"`
+	Mailbox           *LCMailboxSummary    `json:"mailbox,omitempty"`
+	BusinessSignals   []LCBusinessSignal   `json:"businessSignals"`
+	FollowUps         []LCFollowUpSignal   `json:"followUps"`
 }
 
 type LCCockpitSummary struct {
 	Companies         int  `json:"companies"`
 	Contacts          int  `json:"contacts"`
+	AccessCredentials int  `json:"accessCredentials"`
 	Leads             int  `json:"leads"`
 	ActiveLeads       int  `json:"activeLeads"`
 	Workstreams       int  `json:"workstreams"`

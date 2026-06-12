@@ -32,6 +32,7 @@ func registerRoutes(
 	settingsH *handler.SettingsHandler,
 	syncH *handler.SyncHandler,
 	pendingH *handler.PendingActionHandler,
+	focusH *handler.FocusHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
 
@@ -195,13 +196,18 @@ func registerRoutes(
 				r.Get("/contacts", lcH.ListContacts)
 				r.With(authMw).Post("/contacts", lcH.CreateContact)
 				r.With(authMw).Patch("/contacts/{id}", lcH.UpdateContact)
+				r.Get("/access-credentials", lcH.ListAccessCredentials)
+				r.With(authMw).Post("/access-credentials", lcH.CreateAccessCredential)
+				r.With(authMw).Patch("/access-credentials/{id}", lcH.UpdateAccessCredential)
 				r.With(authMw).Post("/quotes", lcH.CreateQuote)
 				r.With(authMw).Patch("/quotes/{id}/status", lcH.UpdateQuoteStatus)
 				r.With(authMw).Post("/quotes/{id}/invoice", lcH.CreateInvoiceFromQuote)
 				r.With(authMw).Post("/time-entries", lcH.CreateTimeEntry)
 				r.With(authMw).Post("/invoices", lcH.CreateInvoice)
+				r.Get("/invoices/{id}/document", lcH.GetInvoiceDocument)
 				r.With(authMw).Patch("/invoices/{id}/status", lcH.UpdateInvoiceStatus)
 				r.With(authMw).Post("/invoices/{id}/payment-request", lcH.CreateInvoicePaymentRequestAction)
+				r.With(authMw).Post("/invoices/{id}/payment-refresh", lcH.RefreshInvoicePaymentStatus)
 				r.Get("/documents", lcH.ListDocuments)
 				r.Get("/dossier-documents", lcH.ListDossierDocuments)
 				r.Get("/ai/dossier-advice", lcH.DossierAdvice)
@@ -249,6 +255,11 @@ func registerRoutes(
 				r.Get("/", pendingH.List)
 				r.With(authMw).Post("/{id}/confirm", pendingH.Confirm)
 				r.With(authMw).Post("/{id}/cancel", pendingH.Cancel)
+			})
+
+			// Focus cockpit
+			r.Route("/focus", func(r chi.Router) {
+				r.Get("/summary", focusH.Summary)
 			})
 
 			// Sync

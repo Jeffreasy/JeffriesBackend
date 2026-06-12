@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,20 @@ type sessionContext struct {
 	userID  int
 	userTyp string
 }
+
+type sessionCacheEntry struct {
+	session   *sessionContext
+	expiresAt time.Time
+}
+
+var bunqSessionCache = struct {
+	sync.Mutex
+	items map[string]sessionCacheEntry
+}{
+	items: make(map[string]sessionCacheEntry),
+}
+
+const bunqSessionCacheTTL = 15 * time.Minute
 
 type Introspection struct {
 	Environment      string    `json:"environment"`
@@ -183,18 +198,62 @@ func CreatePaymentRequest(ctx context.Context, cfg Config, input PaymentRequestI
 	return request, nil
 }
 
+func GetPaymentRequest(ctx context.Context, cfg Config, userID, monetaryAccountID, requestID int) (*PaymentRequest, error) {
+	if monetaryAccountID <= 0 {
+		return nil, errors.New("BUNQ_MONETARY_ACCOUNT_ID ontbreekt")
+	}
+	if requestID <= 0 {
+		return nil, errors.New("bunq request id ontbreekt")
+	}
+	session, err := authenticate(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if userID <= 0 {
+		userID = session.userID
+	}
+	if userID <= 0 {
+		return nil, errors.New("BUNQ_USER_ID ontbreekt")
+	}
+	env, err := session.client.do(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry/%d", userID, monetaryAccountID, requestID),
+		session.token,
+		nil,
+		false,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request-inquiry ophalen: %w", err)
+	}
+	request, ok := findPaymentRequest(env)
+	if !ok {
+		return nil, errors.New("request-inquiry ontbreekt in bunq response")
+	}
+	return request, nil
+}
+
 func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" {
 		return nil, errors.New("BUNQ_API_KEY ontbreekt")
 	}
+	env := normalizeEnvironment(cfg.Environment)
+	cacheKey := bunqCacheKey(env, apiKey, cfg.DeviceDescription)
+	now := time.Now()
+	bunqSessionCache.Lock()
+	if cached, ok := bunqSessionCache.items[cacheKey]; ok && cached.session != nil && now.Before(cached.expiresAt) {
+		session := cached.session
+		bunqSessionCache.Unlock()
+		return session, nil
+	}
+	bunqSessionCache.Unlock()
 
 	privateKey, err := rsa.GenerateKey(crand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("RSA key maken mislukt: %w", err)
 	}
 
-	env := normalizeEnvironment(cfg.Environment)
 	client := &Client{
 		baseURL:    baseURL(env),
 		userAgent:  "JeffriesHomeapp/1.0 " + env,
@@ -252,7 +311,23 @@ func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 		}
 	}
 
-	return &sessionContext{client: client, token: sessionToken, userID: userID, userTyp: userType}, nil
+	sessionContext := &sessionContext{client: client, token: sessionToken, userID: userID, userTyp: userType}
+	bunqSessionCache.Lock()
+	bunqSessionCache.items[cacheKey] = sessionCacheEntry{
+		session:   sessionContext,
+		expiresAt: time.Now().Add(bunqSessionCacheTTL),
+	}
+	bunqSessionCache.Unlock()
+	return sessionContext, nil
+}
+
+func bunqCacheKey(env, apiKey, deviceDescription string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey)))
+	return strings.Join([]string{
+		env,
+		hex.EncodeToString(sum[:]),
+		strings.TrimSpace(deviceDescription),
+	}, ":")
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, body any, signed bool) (*envelope, error) {
