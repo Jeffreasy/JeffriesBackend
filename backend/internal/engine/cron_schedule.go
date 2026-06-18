@@ -57,8 +57,12 @@ func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Cont
 			daysUntilMonday = 7 // next Monday
 		}
 		
-		startOfNextWeek := now.AddDate(0, 0, daysUntilMonday).Truncate(24 * time.Hour)
-		endOfNextWeek := startOfNextWeek.AddDate(0, 0, 7).Add(-time.Second) // Sunday 23:59:59
+		// Use an explicit local-midnight construction. time.Truncate(24h) snaps to
+		// a UTC boundary, which in Europe/Amsterdam lands at 01:00/02:00 local and
+		// pushes the week window a day too far.
+		nextMonday := now.AddDate(0, 0, daysUntilMonday)
+		startOfNextWeek := time.Date(nextMonday.Year(), nextMonday.Month(), nextMonday.Day(), 0, 0, 0, 0, amsterdam)
+		endOfNextWeek := startOfNextWeek.AddDate(0, 0, 7).Add(-time.Second) // Sunday 23:59:59 local
 
 		startIso := startOfNextWeek.Format("2006-01-02")
 		endIso := endOfNextWeek.Format("2006-01-02")

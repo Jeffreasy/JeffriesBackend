@@ -19,6 +19,11 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
 	slog.Info("============================================================")
 	slog.Info("🤖 Homeapp Automation Engine (PostgreSQL native)")
 	if len(cfg.HomeappUserID) > 12 {

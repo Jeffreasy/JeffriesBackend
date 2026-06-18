@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,13 +33,16 @@ type Server struct {
 func New(cfg *config.Config, db *store.DB) *Server {
 	r := chi.NewRouter()
 
-	// Global middleware
+	// Global middleware.
+	// NOTE: chi's middleware.RealIP is intentionally NOT used — it trusts
+	// X-Forwarded-For/X-Real-IP unconditionally, which lets a client spoof its IP
+	// and bypass the rate limiter. The limiter derives the client IP itself,
+	// honouring forwarded headers only for cfg.TrustedProxyCount proxy hops.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(slogMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.CORSOrigins))
-	r.Use(customMiddleware.RateLimiter())
+	r.Use(customMiddleware.RateLimiter(cfg.TrustedProxyCount))
 
 	// Handlers
 	wizClient := wiz.NewClient()
@@ -144,12 +148,15 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if originSet[origin] || len(origins) == 0 {
+			// Only reflect an explicitly allow-listed origin. An empty allow-list
+			// denies CORS rather than turning into allow-all-with-credentials.
+			if origin != "" && originSet[origin] {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Add("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -163,9 +170,11 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 // apiKeyMiddleware validates the X-API-Key header.
 func apiKeyMiddleware(secretKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
+		expected := []byte(secretKey)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := r.Header.Get("X-API-Key")
-			if key == "" || key != secretKey {
+			// Constant-time compare to avoid leaking the secret via timing.
+			if subtle.ConstantTimeCompare([]byte(key), expected) != 1 {
 				handler.Error(w, http.StatusForbidden,
 					"Ongeldige of ontbrekende API key. Stuur X-API-Key header.")
 				return

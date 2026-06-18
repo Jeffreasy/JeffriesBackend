@@ -17,6 +17,11 @@ type Config struct {
 	AppPort      int
 	AppDebug     bool
 
+	// TrustedProxyCount is the number of reverse-proxy hops in front of the app
+	// whose X-Forwarded-For entries may be trusted (e.g. 1 behind Render's edge).
+	// 0 means trust nothing and use the real TCP peer (un-spoofable).
+	TrustedProxyCount int
+
 	// Database
 	DatabaseURL string
 
@@ -97,6 +102,8 @@ func Load() *Config {
 		AppPort:      envIntOr("APP_PORT", envIntOr("PORT", 8000)),
 		AppDebug:     envBoolOr("APP_DEBUG", true),
 
+		TrustedProxyCount: envIntOr("TRUSTED_PROXY_COUNT", 0),
+
 		DatabaseURL: envOr("DATABASE_URL", "postgres://homeapp:change-me@localhost:5432/homeapp?sslmode=disable"),
 
 		HomeappGASSecret:           envOr("HOMEAPP_GAS_SECRET", "homeapp-gas-sync-2026-secure"),
@@ -162,6 +169,29 @@ func Load() *Config {
 // IsDevelopment returns true when running in development mode.
 func (c *Config) IsDevelopment() bool {
 	return c.AppEnv == "development"
+}
+
+// weakSecrets are placeholder values that must never gate a real deployment.
+var weakSecrets = map[string]bool{
+	"":                                  true,
+	"change-me":                         true,
+	"change-me-to-a-long-random-secret": true,
+}
+
+// Validate reports fatal misconfiguration and logs non-fatal warnings. Outside
+// development it refuses an empty or well-known-default APP_SECRET_KEY so the API
+// can never boot fully open.
+func (c *Config) Validate() error {
+	if weakSecrets[c.AppSecretKey] {
+		if !c.IsDevelopment() {
+			return fmt.Errorf("APP_SECRET_KEY is empty or a known default in env %q; set a strong random secret", c.AppEnv)
+		}
+		slog.Warn("APP_SECRET_KEY is empty or a default value — acceptable for development only, never deploy like this")
+	}
+	if c.BridgeAPIKey != "" && c.BridgeAPIKey == c.AppSecretKey {
+		slog.Warn("BRIDGE_API_KEY equals APP_SECRET_KEY — give the bridge its own secret to keep trust boundaries separate")
+	}
+	return nil
 }
 
 // SlogLevel converts the string log level to slog.Level.

@@ -27,6 +27,11 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
 	slog.Info("starting homeapp API", "env", cfg.AppEnv, "port", cfg.AppPort)
 
 	// Connect to database

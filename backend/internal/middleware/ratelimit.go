@@ -56,17 +56,45 @@ func getClient(key string, limit rate.Limit, burst int) *rate.Limiter {
 	return c.limiter
 }
 
-// RateLimiter returns an HTTP middleware that limits requests by IP.
-func RateLimiter() func(http.Handler) http.Handler {
+// clientIP returns the best-guess client IP. X-Forwarded-For is honoured only for
+// the number of trusted reverse-proxy hops in front of the app (trustedHops);
+// with trustedHops <= 0 the real TCP peer is used, which cannot be spoofed.
+func clientIP(r *http.Request, trustedHops int) string {
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	if trustedHops <= 0 {
+		return peer
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return peer
+	}
+	parts := strings.Split(xff, ",")
+	// Proxies append on the right, so the client seen by the outermost trusted
+	// proxy is trustedHops entries from the end.
+	idx := len(parts) - trustedHops
+	if idx < 0 {
+		idx = 0
+	}
+	ip := strings.TrimSpace(parts[idx])
+	if ip == "" {
+		return peer
+	}
+	return ip
+}
+
+// RateLimiter returns an HTTP middleware that limits requests per client IP.
+// trustedHops is the number of reverse-proxy hops whose X-Forwarded-For entries
+// may be trusted (e.g. 1 behind Render's edge; 0 to trust nothing).
+func RateLimiter(trustedHops int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				ip = r.RemoteAddr
-			}
+			ip := clientIP(r, trustedHops)
 
-			limit := rate.Limit(5)
-			burst := 10
+			limit := rate.Limit(30)
+			burst := 60
 			key := ip
 			if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/") {
 				limit = rate.Limit(20)
@@ -77,7 +105,9 @@ func RateLimiter() func(http.Handler) http.Handler {
 			limiter := getClient(key, limit, burst)
 			if !limiter.Allow() {
 				slog.Warn("Rate limit exceeded", "ip", ip, "path", r.URL.Path)
-				http.Error(w, `{"error": "Too Many Requests"}`, http.StatusTooManyRequests)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"Too Many Requests"}`))
 				return
 			}
 
