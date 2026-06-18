@@ -128,6 +128,12 @@ type ChatResult struct {
 	Antwoord string `json:"antwoord,omitempty"`
 	Error    string `json:"error,omitempty"`
 	Tokens   *Usage `json:"tokens,omitempty"`
+
+	// Telemetry for observability/logging.
+	Rounds       int      `json:"rounds,omitempty"`
+	ToolsUsed    []string `json:"toolsUsed,omitempty"`
+	FinishReason string   `json:"finishReason,omitempty"`
+	DurationMs   int64    `json:"durationMs,omitempty"`
 }
 
 // Chat runs a full chat interaction with tool calling.
@@ -235,9 +241,13 @@ func (c *GrokClient) Chat(
 				content = *msg.Content
 			}
 			return ChatResult{
-				OK:       true,
-				Antwoord: content,
-				Tokens:   totalUsage,
+				OK:           true,
+				Antwoord:     content,
+				Tokens:       totalUsage,
+				Rounds:       round + 1,
+				ToolsUsed:    toolsUsed,
+				FinishReason: choice.FinishReason,
+				DurationMs:   duration.Milliseconds(),
 			}
 		}
 
@@ -279,9 +289,13 @@ func (c *GrokClient) Chat(
 		content = *last.Content
 	}
 	return ChatResult{
-		OK:       true,
-		Antwoord: content,
-		Tokens:   totalUsage,
+		OK:           true,
+		Antwoord:     content,
+		Tokens:       totalUsage,
+		Rounds:       MaxToolRounds,
+		ToolsUsed:    toolsUsed,
+		FinishReason: "max_rounds",
+		DurationMs:   duration.Milliseconds(),
 	}
 }
 
@@ -375,9 +389,12 @@ Regels:
 		"tokens", grokResp.Usage.TotalTokens,
 	)
 	return ChatResult{
-		OK:       true,
-		Antwoord: answer,
-		Tokens:   &grokResp.Usage,
+		OK:           true,
+		Antwoord:     answer,
+		Tokens:       &grokResp.Usage,
+		Rounds:       1,
+		FinishReason: "web_search",
+		DurationMs:   time.Since(start).Milliseconds(),
 	}
 }
 

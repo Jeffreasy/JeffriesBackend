@@ -50,6 +50,11 @@ type Config struct {
 	GrokReasoningEffort string
 	GroqAPIKey          string
 
+	// Optional price per 1M tokens (input/output) used only to estimate cost in
+	// AI diagnostics. Default 0 → cost shows as 0 until configured.
+	GrokPriceInputPerMTok  float64
+	GrokPriceOutputPerMTok float64
+
 	// Cron Feature Flags
 	GmailEnabled          bool
 	GoogleCalendarEnabled bool
@@ -129,6 +134,9 @@ func Load() *Config {
 		GrokReasoningEffort: envOr("GROK_REASONING_EFFORT", "low"),
 		GroqAPIKey:          envOr("GROQ_API_KEY", ""),
 		WizDeviceIPs:        envOr("WIZ_DEVICE_IPS", ""),
+
+		GrokPriceInputPerMTok:  envFloatOr("GROK_PRICE_INPUT_PER_MTOK", 0),
+		GrokPriceOutputPerMTok: envFloatOr("GROK_PRICE_OUTPUT_PER_MTOK", 0),
 
 		GmailEnabled:          envBoolOr("GMAIL_SYNC_ENABLED", false),
 		GoogleCalendarEnabled: envBoolOr("GOOGLE_CALENDAR_SYNC_ENABLED", false),
@@ -234,6 +242,15 @@ func (c *Config) LaventeCareMailConfigured() bool {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envFloatOr(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
 	}
 	return fallback
 }

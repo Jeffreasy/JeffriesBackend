@@ -304,6 +304,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 
 	if hasExternalNewsIntent(strings.ToLower(text)) {
 		result := grokClient.SearchWeb(aiCtx, text)
+		e.logAICall(ctx, agentID, "web_search", result)
 		var reply string
 		if result.OK && result.Antwoord != "" {
 			reply = normalizeAssistantText(result.Antwoord)
@@ -325,6 +326,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()),
 	)
 	result := grokClient.Chat(aiCtx, prompt, text, aiHistory, tools, executor)
+	e.logAICall(ctx, agentID, "chat", result)
 
 	var reply string
 	if result.OK && result.Antwoord != "" {

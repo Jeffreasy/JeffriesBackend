@@ -323,6 +323,39 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// AI usage rollup (tokens / latency / estimated cost) over cumulative windows.
+	logStore := store.NewAICallLogStore(h.db)
+	now := time.Now()
+	windows := []struct {
+		label string
+		since time.Time
+	}{
+		{"today", now.Add(-24 * time.Hour)},
+		{"last7d", now.Add(-7 * 24 * time.Hour)},
+		{"last30d", now.Add(-30 * 24 * time.Hour)},
+	}
+	usage := map[string]any{
+		"priced": h.cfg.GrokPriceInputPerMTok > 0 || h.cfg.GrokPriceOutputPerMTok > 0,
+	}
+	for _, win := range windows {
+		w, err := logStore.UsageSince(ctx, win.since)
+		if err != nil {
+			continue
+		}
+		estCost := (float64(w.PromptTokens)/1e6)*h.cfg.GrokPriceInputPerMTok +
+			(float64(w.CompletionTokens)/1e6)*h.cfg.GrokPriceOutputPerMTok
+		usage[win.label] = map[string]any{
+			"calls":            w.Calls,
+			"errors":           w.Errors,
+			"promptTokens":     w.PromptTokens,
+			"completionTokens": w.CompletionTokens,
+			"totalTokens":      w.TotalTokens,
+			"avgDurationMs":    w.AvgDurationMs,
+			"maxDurationMs":    w.MaxDurationMs,
+			"estCost":          estCost,
+		}
+	}
+
 	resp := map[string]any{
 		"ok":          ok,
 		"generatedAt": time.Now().UTC().Format(time.RFC3339),
@@ -334,6 +367,7 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 			"telegramConfigured":  h.cfg.TelegramBotEnabled && h.telegram != nil,
 		},
 		"checks":          checks,
+		"usage":           usage,
 		"capabilities":    aiCapabilitySummary(),
 		"governance":      aiGovernanceSummary(),
 		"agents":          aiAgentCapabilities(),

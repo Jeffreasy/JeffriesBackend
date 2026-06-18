@@ -33,6 +33,15 @@ func NewConfirmingExecutor(pool *pgxpool.Pool, userID, agentID string, delegate 
 }
 
 func (e *ConfirmingExecutor) Execute(ctx context.Context, toolName string, argsJSON string) string {
+	// Hard authorization gate at execution time: the model-supplied tool name is
+	// untrusted. GetToolsForAgent only filters which tools are advertised, so a
+	// hallucinated/injected call to a tool outside this agent's policy must be
+	// refused here rather than dispatched.
+	if !ai.IsToolAllowed(e.agentID, toolName) {
+		return jsonString(map[string]any{
+			"error": fmt.Sprintf("Tool '%s' is niet toegestaan voor agent '%s'.", toolName, e.agentID),
+		})
+	}
 	if ai.IsMutatingTool(toolName) && ai.RequiresConfirmation(toolName) {
 		summary := summarizePendingTool(toolName, argsJSON)
 		action, err := e.pending.Create(ctx, e.userID, e.agentID, toolName, argsJSON, summary)

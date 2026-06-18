@@ -84,6 +84,9 @@ type Engine struct {
 
 	// aiSem bounds concurrent AI sessions started from the Telegram poller.
 	aiSem chan struct{}
+
+	// aiLog records token/latency telemetry per AI call.
+	aiLog *store.AICallLogStore
 }
 
 // grok returns the shared Grok client, building it once on first use.
@@ -110,6 +113,38 @@ func New(cfg *config.Config, db *store.DB) *Engine {
 		cron:       scheduler,
 		firedAt:    make(map[string]time.Time),
 		aiSem:      make(chan struct{}, maxConcurrentAISessions),
+		aiLog:      store.NewAICallLogStore(db),
+	}
+}
+
+// logAICall records one AI interaction's telemetry (best-effort).
+func (e *Engine) logAICall(ctx context.Context, agentID, kind string, result ai.ChatResult) {
+	if e.aiLog == nil {
+		return
+	}
+	entry := store.AICallLog{
+		UserID:       e.cfg.HomeappUserID,
+		AgentID:      agentID,
+		Model:        e.cfg.GrokModel,
+		Kind:         kind,
+		Rounds:       result.Rounds,
+		DurationMs:   int(result.DurationMs),
+		ToolsUsed:    result.ToolsUsed,
+		FinishReason: result.FinishReason,
+		OK:           result.OK,
+		Error:        result.Error,
+	}
+	if result.Tokens != nil {
+		entry.PromptTokens = result.Tokens.PromptTokens
+		entry.CompletionTokens = result.Tokens.CompletionTokens
+		entry.TotalTokens = result.Tokens.TotalTokens
+	}
+	// Use a short detached timeout so logging never blocks or is cancelled with
+	// the (possibly already-expired) request context.
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := e.aiLog.Insert(logCtx, entry); err != nil {
+		slog.Warn("ai_call_log insert failed", "error", err)
 	}
 }
 
