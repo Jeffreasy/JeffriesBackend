@@ -56,7 +56,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	sceneH := handler.NewSceneHandler(store.NewSceneStore(db), deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
 	autoH := handler.NewAutomationHandler(store.NewAutomationStore(db))
 	scheduleH := handler.NewScheduleHandler(store.NewScheduleStore(db))
-	transactionH := handler.NewTransactionHandler(store.NewTransactionStore(db))
+	transactionH := handler.NewTransactionHandler(store.NewTransactionStore(db), cfg.HomeappUserID)
 	salaryH := handler.NewSalaryHandler(store.NewSalaryStore(db))
 	loonstrookH := handler.NewLoonstrookHandler(store.NewLoonstrookStore(db))
 	personalEventH := handler.NewPersonalEventHandler(store.NewPersonalEventStore(db), cfg)

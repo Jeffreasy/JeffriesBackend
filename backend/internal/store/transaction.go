@@ -175,21 +175,25 @@ func (s *TransactionStore) ImportBatch(ctx context.Context, userID string, items
 	return inserted, tx.Commit(ctx)
 }
 
-// UpdateCategorie sets the categorie for a transaction.
-func (s *TransactionStore) UpdateCategorie(ctx context.Context, id uuid.UUID, categorie string) error {
-	_, err := s.db.Pool.Exec(ctx,
-		`UPDATE transactions SET categorie = $2 WHERE id = $1`, id, categorie)
-	return err
+// UpdateCategorie sets the categorie for a transaction owned by userID.
+// Returns the number of rows affected (0 means not found or not owned).
+func (s *TransactionStore) UpdateCategorie(ctx context.Context, userID string, id uuid.UUID, categorie string) (int64, error) {
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE transactions SET categorie = $3 WHERE id = $1 AND user_id = $2`, id, userID, categorie)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
-// BulkUpdateCategorie sets one category for multiple transactions.
-func (s *TransactionStore) BulkUpdateCategorie(ctx context.Context, ids []uuid.UUID, categorie string) (int, error) {
+// BulkUpdateCategorie sets one category for multiple transactions owned by userID.
+func (s *TransactionStore) BulkUpdateCategorie(ctx context.Context, userID string, ids []uuid.UUID, categorie string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	tag, err := s.db.Pool.Exec(ctx,
-		`UPDATE transactions SET categorie = $2 WHERE id = ANY($1)`,
-		ids, categorie)
+		`UPDATE transactions SET categorie = $3 WHERE id = ANY($1) AND user_id = $2`,
+		ids, userID, categorie)
 	if err != nil {
 		return 0, err
 	}

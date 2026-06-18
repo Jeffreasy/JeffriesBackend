@@ -13,11 +13,12 @@ import (
 )
 
 type TransactionHandler struct {
-	store *store.TransactionStore
+	store       *store.TransactionStore
+	ownerUserID string
 }
 
-func NewTransactionHandler(s *store.TransactionStore) *TransactionHandler {
-	return &TransactionHandler{store: s}
+func NewTransactionHandler(s *store.TransactionStore, ownerUserID string) *TransactionHandler {
+	return &TransactionHandler{store: s, ownerUserID: ownerUserID}
 }
 
 // TransactionListResponse represents the paginated response for transactions
@@ -180,6 +181,12 @@ func (h *TransactionHandler) UpdateCategorie(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusBadRequest, "Ongeldig transaction ID")
 		return
 	}
+	// Scope the mutation to the owner. The proxy injects the session userId;
+	// fall back to the configured owner id so the update can never be unscoped.
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		userID = h.ownerUserID
+	}
 	var body struct {
 		Categorie string `json:"categorie"`
 	}
@@ -187,8 +194,13 @@ func (h *TransactionHandler) UpdateCategorie(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusBadRequest, "Ongeldige JSON")
 		return
 	}
-	if err := h.store.UpdateCategorie(r.Context(), id, body.Categorie); err != nil {
+	rows, err := h.store.UpdateCategorie(r.Context(), userID, id, body.Categorie)
+	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rows == 0 {
+		Error(w, http.StatusNotFound, "Transactie niet gevonden")
 		return
 	}
 	JSON(w, http.StatusOK, map[string]bool{"ok": true})

@@ -9,12 +9,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/wiz"
 	"github.com/google/uuid"
 )
+
+// maxConcurrentAISessions bounds how many Telegram updates run the full
+// AI + tool pipeline at once, preventing an update burst from stampeding xAI
+// and the DB pool.
+const maxConcurrentAISessions = 3
 
 const (
 	EngineInterval  = 30 * time.Second
@@ -69,6 +75,23 @@ type Engine struct {
 	firedAt   map[string]time.Time
 	firedMu   sync.Mutex
 	tickCount int
+
+	// grokClient is a shared, lazily-built Grok client so its circuit breaker
+	// and HTTP transport persist across requests instead of being recreated
+	// per prompt (a per-call breaker can never trip).
+	grokClient *ai.GrokClient
+	grokOnce   sync.Once
+
+	// aiSem bounds concurrent AI sessions started from the Telegram poller.
+	aiSem chan struct{}
+}
+
+// grok returns the shared Grok client, building it once on first use.
+func (e *Engine) grok() *ai.GrokClient {
+	e.grokOnce.Do(func() {
+		e.grokClient = ai.NewGrokClientWithOptions(e.cfg.GrokAPIKey, e.cfg.GrokModel, e.cfg.GrokReasoningEffort)
+	})
+	return e.grokClient
 }
 
 // New creates a new automation engine.
@@ -86,6 +109,7 @@ func New(cfg *config.Config, db *store.DB) *Engine {
 		cmdStore:   store.NewDeviceCommandStore(db),
 		cron:       scheduler,
 		firedAt:    make(map[string]time.Time),
+		aiSem:      make(chan struct{}, maxConcurrentAISessions),
 	}
 }
 

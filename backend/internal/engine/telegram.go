@@ -70,6 +70,14 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 						slog.Error("telegram processUpdate panic", "recover", r)
 					}
 				}()
+				// Bound concurrent processing so an update burst cannot spawn
+				// many simultaneous AI/tool sessions.
+				select {
+				case e.aiSem <- struct{}{}:
+					defer func() { <-e.aiSem }()
+				case <-ctx.Done():
+					return
+				}
 				if ctx.Err() != nil {
 					return
 				}

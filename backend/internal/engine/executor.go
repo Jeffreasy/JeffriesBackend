@@ -1455,11 +1455,31 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}, periodErr)
 
 	case "salarisOpvragen":
+		var args struct {
+			Jaar    int `json:"jaar"`
+			Periode int `json:"periode"`
+		}
+		_ = e.parseArgs(argsJSON, &args) // optional filters; absent/invalid → no filter
 		salaries, err := e.salaryStore.List(ctx, e.userID)
+		if err == nil && (args.Jaar > 0 || args.Periode > 0) {
+			filtered := salaries[:0]
+			for _, s := range salaries {
+				if args.Jaar > 0 && s.Jaar != args.Jaar {
+					continue
+				}
+				if args.Periode > 0 && s.Maand != args.Periode {
+					continue
+				}
+				filtered = append(filtered, s)
+			}
+			salaries = filtered
+		}
 		return e.jsonResponse(map[string]any{
 			"scope":       "salaris",
 			"count":       len(salaries),
 			"items":       salaries,
+			"jaar":        args.Jaar,
+			"periode":     args.Periode,
 			"instruction": "Gebruik alleen bedragen en periodes uit deze loonstroken. Combineer met rooster-tools als de vraag over uren of prognose gaat.",
 		}, err)
 
@@ -1635,8 +1655,12 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		if err := e.transactionStore.UpdateCategorie(ctx, id, args.Categorie); err != nil {
+		rows, err := e.transactionStore.UpdateCategorie(ctx, e.userID, id, args.Categorie)
+		if err != nil {
 			return e.jsonResponse(nil, err)
+		}
+		if rows == 0 {
+			return e.jsonResponse(nil, fmt.Errorf("transactie niet gevonden"))
 		}
 		return e.jsonResponse(map[string]any{"ok": true, "transactionId": id.String(), "categorie": args.Categorie}, nil)
 
@@ -1663,8 +1687,8 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if len(ids) == 0 || strings.TrimSpace(args.Categorie) == "" {
 			return e.jsonResponse(nil, fmt.Errorf("transactionIds en categorie verplicht"))
 		}
-		updated, err := e.transactionStore.BulkUpdateCategorie(ctx, ids, args.Categorie)
-		return e.jsonResponse(map[string]any{"ok": true, "updated": updated, "categorie": args.Categorie}, err)
+		updated, err := e.transactionStore.BulkUpdateCategorie(ctx, e.userID, ids, args.Categorie)
+		return e.jsonResponse(map[string]any{"ok": true, "updated": updated, "requested": len(ids), "categorie": args.Categorie}, err)
 
 	// ── NOTITIES ─────────────────────────────────────────────────────
 	case "notitiesZoeken":

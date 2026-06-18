@@ -295,10 +295,15 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		return "", err
 	}
 
-	grokClient := ai.NewGrokClientWithOptions(grokKey, e.cfg.GrokModel, e.cfg.GrokReasoningEffort)
+	grokClient := e.grok()
+
+	// Bound the whole interaction (the multi-round tool loop, not just one HTTP
+	// round) with a single overall budget so a slow loop cannot run for minutes.
+	aiCtx, cancelAI := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelAI()
 
 	if hasExternalNewsIntent(strings.ToLower(text)) {
-		result := grokClient.SearchWeb(ctx, text)
+		result := grokClient.SearchWeb(aiCtx, text)
 		var reply string
 		if result.OK && result.Antwoord != "" {
 			reply = normalizeAssistantText(result.Antwoord)
@@ -319,7 +324,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		agentID,
 		NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()),
 	)
-	result := grokClient.Chat(ctx, prompt, text, aiHistory, tools, executor)
+	result := grokClient.Chat(aiCtx, prompt, text, aiHistory, tools, executor)
 
 	var reply string
 	if result.OK && result.Antwoord != "" {
