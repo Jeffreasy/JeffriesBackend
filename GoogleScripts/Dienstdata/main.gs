@@ -6,7 +6,6 @@
  *   main.gs        — CONFIG, onOpen, syncCalendarToSheet, sheet helpers
  *   Todoist.gs     — Todoist API integratie (aanmaken, sluiten, verwijderen)
  *   Googleagenda.gs — Google Calendar archief voor gedraaide diensten
- *   convex.gs      — Homeapp/Convex sync
  *   DashboardBuild.gs — Diensten dashboard (apart bestand)
  * ============================================================================
  */
@@ -51,7 +50,7 @@ const CONFIG = {
 // ============================================================================
 
 /**
- * Sla Homeapp/Convex koppeling op in ScriptProperties.
+ * Sla de Homeapp-koppeling op in ScriptProperties.
  * Run eenmalig via het menu.
  */
 function setHomeappProperties() {
@@ -70,7 +69,6 @@ function setHomeappProperties() {
   }
 
   props.setProperty('HOMEAPP_USER_ID', CLERK_USER_ID);
-  props.setProperty('HOMEAPP_CONVEX_URL', 'https://adorable-mink-458.eu-west-1.convex.site');
 
   Logger.log(`✅ Ingesteld! HOMEAPP_USER_ID = ${CLERK_USER_ID}`);
   SpreadsheetApp.getActiveSpreadsheet().toast(`✅ Homeapp gekoppeld! User: ${CLERK_USER_ID}`, '☁️ Setup Voltooid', 8);
@@ -310,16 +308,6 @@ function syncCalendarToSheet() {
     const msg = `Sync klaar! +${stats.added} nieuw | ↻${stats.updated} bijgewerkt | ⏭️${stats.unchanged} skip | 🗑️${stats.ghosts} ghosts | dedup ${stats.deduped}`;
     Logger.log(msg);
     safeToast('Sync Voltooid', msg, 10);
-
-    // 🔁 Push data automatisch naar Homeapp (Convex)
-    try {
-      const pushResult = pushScheduleToConvex(sheet, headers);
-      Logger.log(`☁️ Convex push: ${pushResult}`);
-      safeToast('☁️ Homeapp Sync', pushResult, 5);
-    } catch (pushErr) {
-      Logger.log(`⚠️ Convex push mislukt: ${pushErr.message}`);
-      safeToast('⚠️ Homeapp Push', pushErr.message, 8);
-    }
 
   } catch (e) {
     Logger.log(`Sync fout: ${e.message}\n${e.stack}`);

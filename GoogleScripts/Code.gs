@@ -45,9 +45,7 @@ function setHomeappProperties() {
   }
 
   const props = PropertiesService.getScriptProperties();
-  props.setProperty('HOMEAPP_SYNC_KEY', 'homeapp-gas-sync-2026-secure');
   props.setProperty('HOMEAPP_USER_ID', CLERK_USER_ID);
-  props.setProperty('HOMEAPP_CONVEX_URL', 'https://adorable-mink-458.eu-west-1.convex.site');
 
   Logger.log(`✅ Ingesteld! HOMEAPP_SYNC_KEY + HOMEAPP_USER_ID = ${CLERK_USER_ID}`);
   SpreadsheetApp.getActiveSpreadsheet().toast(
@@ -455,16 +453,6 @@ function syncCalendarToSheet() {
     Logger.log(msg);
     safeToast("Sync Voltooid", msg, 10);
 
-    // 🔁 Push data automatisch naar Homeapp (Convex)
-    try {
-      const pushResult = pushScheduleToConvex(sheet, headers);
-      Logger.log(`☁️ Convex push: ${pushResult}`);
-      safeToast("☁️ Homeapp Sync", pushResult, 5);
-    } catch (pushErr) {
-      Logger.log(`⚠️ Convex push mislukt: ${pushErr.message}`);
-      safeToast("⚠️ Homeapp Push", `${pushErr.message}`, 8);
-    }
-    
   } catch (e) {
     Logger.log(`Sync fout: ${e.message}\n${e.stack}`);
     safeToast("Sync Mislukt", e.message, 15);
@@ -1049,142 +1037,4 @@ function purgeLegacyTasks() {
     safeToast('Opschoning Mislukt', e.message, 15);
     if (ui) ui.alert('❌ Fout: ' + e.message);
   }
-}
-
-// ============================================================================
-// ☁️ CONVEX PUSH — Homeapp Real-time Sync
-// ============================================================================
-// Instellingen (eenmalig): Ga naar Extensies → Apps Script → Projectinstellingen
-// → Script properties → Voeg toe:
-//   HOMEAPP_SYNC_KEY = <jouw geheime sleutel>
-//   HOMEAPP_USER_ID  = <jouw Clerk user ID (bijv. user_2xyz...)>
-//   HOMEAPP_CONVEX_URL = https://adorable-mink-458.eu-west-1.convex.site
-
-/**
- * Leest de DienstenData sheet en pusht alle rijen naar Convex
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {string[]} headers
- * @returns {string} Resultaat bericht
- */
-function pushScheduleToConvex(sheet, headers) {
-  const props = PropertiesService.getScriptProperties();
-  const syncKey = props.getProperty('HOMEAPP_SYNC_KEY');
-  const userId  = props.getProperty('HOMEAPP_USER_ID');
-  const baseUrl = props.getProperty('HOMEAPP_CONVEX_URL') 
-                  || 'https://adorable-mink-458.eu-west-1.convex.site';
-
-  if (!syncKey) throw new Error('HOMEAPP_SYNC_KEY niet ingesteld in Script Properties');
-  if (!userId)  throw new Error('HOMEAPP_USER_ID niet ingesteld in Script Properties');
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return 'Geen diensten om te pushen';
-
-  const dataRange = sheet.getRange(2, 1, lastRow - 1, headers.length);
-  const rows = dataRange.getValues();
-
-  // Map header naam → index
-  const hi = {};
-  headers.forEach((h, i) => hi[h] = i);
-
-  const diensten = [];
-  rows.forEach(row => {
-    const eventId   = String(row[hi['Event ID']] || '').trim();
-    const status    = String(row[hi['Status']]   || '').trim();
-    if (!eventId || status === 'VERWIJDERD') return;
-
-    const rawDuur = row[hi['Duur (uur)']] ?? 0;
-    const duur = typeof rawDuur === 'number' ? rawDuur
-               : parseFloat(String(rawDuur).replace(',', '.')) || 0;
-
-    diensten.push({
-      userId,
-      eventId,
-      titel:        String(row[hi['Titel']]         || ''),
-      startDatum:   _gasDateToIso(row[hi['Start Datum']]),
-      startTijd:    _gasTimeToHHMM(row[hi['Start Tijd']]),
-      eindDatum:    _gasDateToIso(row[hi['Eind Datum']]),
-      eindTijd:     _gasTimeToHHMM(row[hi['Eind Tijd']]),
-      werktijd:     String(row[hi['Werktijd']]       || ''),
-      locatie:      String(row[hi['Locatie']]        || ''),
-      team:         String(row[hi['Team Prefix']]    || ''),
-      shiftType:    String(row[hi['Shift Type']]     || 'Dienst'),
-      prioriteit:   Number(row[hi['Prioriteit']]     || 1),
-      duur,
-      weeknr:       String(row[hi['Weeknr']]         || ''),
-      dag:          String(row[hi['Dag']]            || ''),
-      status,
-      beschrijving: String(row[hi['Beschrijving']]   || ''),
-      heledag:      String(row[hi['Hele Dag']]       || 'Nee').toLowerCase() === 'ja',
-    });
-  });
-
-  return pushToConvex(baseUrl, syncKey, userId, diensten);
-}
-
-/**
- * Doet de daadwerkelijke HTTP POST naar Convex
- */
-function pushToConvex(baseUrl, syncKey, userId, diensten) {
-  const url = `${baseUrl}/sync-schedule`;
-  const payload = JSON.stringify({ userId, diensten });
-
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'Authorization': `Bearer ${syncKey}` },
-    payload,
-    muteHttpExceptions: true,
-  };
-
-  const resp = UrlFetchApp.fetch(url, options);
-  const code = resp.getResponseCode();
-  const body = JSON.parse(resp.getContentText() || '{}');
-
-  if (code !== 200 || !body.ok) {
-    throw new Error(`HTTP ${code}: ${body.error || resp.getContentText()}`);
-  }
-
-  return `✅ ${body.count} diensten gesynchroniseerd naar Homeapp`;
-}
-
-/**
- * Converteert GAS Date object of string naar "YYYY-MM-DD"
- */
-function _gasDateToIso(val) {
-  if (!val) return '';
-  if (val instanceof Date) {
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  }
-  const s = String(val).trim();
-  // Al in YYYY-MM-DD formaat
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  // DD-MM-YYYY formaat
-  if (/^\d{2}-\d{2}-\d{4}/.test(s)) {
-    const [d, m, y] = s.split('-');
-    return `${y}-${m}-${d}`;
-  }
-  return s;
-}
-
-
-/**
- * Converteert GAS tijdwaarde → "HH:MM"
- * GAS leest tijdkolommen als Date-objecten op 30-12-1899 (epoch 0)
- */
-function _gasTimeToHHMM(val) {
-  if (!val && val !== 0) return '';
-  if (val instanceof Date) {
-    // GAS Date met tijdcomponent op 1899-12-30
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'HH:mm');
-  }
-  if (typeof val === 'number') {
-    // Excel/Sheets fractioneel getal: 0.208333 = 05:00
-    const totalMinutes = Math.round(val * 24 * 60);
-    const h = Math.floor(totalMinutes / 60) % 24;
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-  const s = String(val).trim();
-  if (/^\d{1,2}:\d{2}/.test(s)) return s.slice(0, 5);
-  return s;
 }

@@ -131,16 +131,6 @@ function buildSalarisSheet() {
     const sheet = _initSalarisSheet(ss);
     _schrijfResultaten(sheet, resultaten);
 
-    // 5. Push naar Convex Homeapp DB
-    try {
-      const pushMsg = pushSalarisToConvex(resultaten);
-      Logger.log(pushMsg);
-    } catch (pushErr) {
-      // Push-fout is niet-fataal: sheet is al succesvol geschreven
-      Logger.log(`⚠️ Salaris push naar Convex mislukt: ${pushErr.message}`);
-      safeToast('⚠️ Homeapp Sync', `Sheet klaar, Convex push mislukt: ${pushErr.message}`, 10);
-    }
-
     const duur = ((Date.now() - start) / 1000).toFixed(1);
     const msg = `💰 Salaris dashboard gebouwd! ${resultaten.length} maanden | ${duur}s`;
     Logger.log(msg);
