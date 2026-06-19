@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,11 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrGoogleReauthRequired signals that the refresh token is expired or revoked
+// (Google returns invalid_grant). Callers can errors.Is() this to surface a
+// single actionable "re-authenticate" message instead of a generic error.
+var ErrGoogleReauthRequired = errors.New("google re-authentication required (refresh token invalid_grant)")
 
 // OAuthClient manages Google OAuth2 token refresh and authenticated HTTP calls.
 type OAuthClient struct {
@@ -70,6 +76,15 @@ func (c *OAuthClient) getAccessToken(ctx context.Context) (string, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
+		// Classify an expired/revoked refresh token so callers can react to it
+		// distinctly (one re-auth alert) instead of treating it as a transient error.
+		var gerr struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &gerr)
+		if gerr.Error == "invalid_grant" {
+			return "", fmt.Errorf("%w (HTTP %d): %s", ErrGoogleReauthRequired, resp.StatusCode, string(body))
+		}
 		return "", fmt.Errorf("token refresh failed (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 

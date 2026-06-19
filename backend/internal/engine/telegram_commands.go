@@ -81,10 +81,37 @@ var (
 	}
 )
 
+// telegramMenuCommands is the curated "/" menu registered via setMyCommands.
+// The long alias set in commandRegistry stays available as hidden synonyms.
+func telegramMenuCommands() []tg.BotCommand {
+	return []tg.BotCommand{
+		{Command: "start", Description: "Startmenu en dagoverzicht"},
+		{Command: "briefing", Description: "AI dagbriefing"},
+		{Command: "planning", Description: "Planning (rooster + afspraken)"},
+		{Command: "agenda", Description: "Agenda / afspraken"},
+		{Command: "rooster", Description: "Werkrooster en uren"},
+		{Command: "finance", Description: "Saldo en transacties"},
+		{Command: "laventecare", Description: "LaventeCare cockpit"},
+		{Command: "email", Description: "Inbox en e-mailsignalen"},
+		{Command: "notities", Description: "Notities-overzicht"},
+		{Command: "noteai", Description: "AI notitie-assistent"},
+		{Command: "habits", Description: "Habits en streaks"},
+		{Command: "lampen", Description: "Lampstatus en bediening"},
+		{Command: "news", Description: "Actueel nieuws (web search)"},
+		{Command: "pending", Description: "Openstaande bevestigingen"},
+		{Command: "sync", Description: "Gmail/agenda sync-status"},
+		{Command: "ai", Description: "AI-diagnose en status"},
+		{Command: "help", Description: "Alle commando's"},
+	}
+}
+
 func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int64, text string) {
-	// Save user message
+	// NOTE: the user message is intentionally NOT persisted here. Slash commands,
+	// callback tokens (note_*, pending_*) and lamp commands return before reaching
+	// the model, so persisting up-front would pollute AI history with non-
+	// conversational tokens. We only save genuine free text just before it is sent
+	// to the model (see the ProcessAIPrompt call below).
 	chatStore := store.NewChatStore(e.db.Pool)
-	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
 
 	if e.handlePendingConfirmationCommand(ctx, client, chatID, text) {
 		return
@@ -221,6 +248,8 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		agentID = agentHint
 	}
 
+	// Persist only the conversational text that actually reaches the model.
+	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
 	_, _ = e.ProcessAIPrompt(ctx, chatID, text, agentID, true)
 }
 
@@ -498,6 +527,7 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 				_ = emailStore.UpsertSyncMeta(ctx, userID, newHistoryID, lastFullSync, totalSynced)
 				gmailMsg = fmt.Sprintf("Gmail: %d nieuwe mails gesynchroniseerd (totaal %d).", upserted, totalSynced)
 			} else {
+				_ = emailStore.MarkSyncFailed(ctx, userID, gmailErrVal.Error())
 				gmailMsg = fmt.Sprintf("Gmail sync mislukt: %v", gmailErrVal)
 			}
 		} else {

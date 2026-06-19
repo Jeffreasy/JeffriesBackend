@@ -95,6 +95,7 @@ wijzigen.
 
 ## ANTI-HALLUCINATIE (KRITIEK)
 VERZIN NOOIT data. Toon PRECIES de aantallen, bedragen en namen uit het tool-resultaat.
+Rapporteer een sync (Gmail/agenda) ALLEEN als 'ok' wanneer het bijbehorende status-veld (bijv. gmailSyncStatus) gelijk is aan 'ok'; staat het op 'failed', meld dan de storing met de bijbehorende last-error. Tellingen zoals lastSuccessfulCount/totalSynced zijn historisch (laatste succes) en bewijzen NIET dat de sync nu werkt.
 
 ## DATUM
 Vandaag is %s.`,

@@ -53,11 +53,11 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	var pendingCommands, processingCommands, failedCommands int
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'pending'`).Scan(&pendingCommands)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`).Scan(&processingCommands)
-	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'failed'`).Scan(&failedCommands)
+	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'`).Scan(&failedCommands)
 
 	var bridgeLastSeen *time.Time
-	_ = h.db.Pool.QueryRow(ctx, `SELECT MAX(last_seen) FROM devices`).Scan(&bridgeLastSeen)
-	bridgeOnline := bridgeLastSeen != nil && time.Since(bridgeLastSeen.UTC()) <= 10*time.Minute
+	_ = h.db.Pool.QueryRow(ctx, `SELECT MAX(last_seen) FROM bridge_heartbeat`).Scan(&bridgeLastSeen)
+	bridgeOnline := bridgeLastSeen != nil && time.Since(bridgeLastSeen.UTC()) <= bridgeOfflineThreshold
 	bridgeStatus := "Offline"
 	if bridgeOnline {
 		bridgeStatus = "Active"

@@ -53,6 +53,7 @@ type bridgeDeviceStatusRequest struct {
 }
 
 func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
+	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	var input bridgeClaimRequest
 	if err := DecodeJSON(r, &input); err != nil {
 		Error(w, http.StatusBadRequest, "Invalid request body")
@@ -119,6 +120,7 @@ func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BridgeHandler) CompleteCommand(w http.ResponseWriter, r *http.Request) {
+	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	id, err := uuid.Parse(chi.URLParam(r, "commandID"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "Invalid command ID")
@@ -138,6 +140,17 @@ func (h *BridgeHandler) CompleteCommand(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// A reported failure is requeued for a few attempts before becoming terminal,
+	// so a transient LAN/UDP blip doesn't permanently fail the command.
+	if input.Status == store.DeviceCommandStatusFailed {
+		if _, err := h.commands.RequeueOrFail(r.Context(), id, 3); err != nil {
+			Error(w, http.StatusInternalServerError, "Command completion failed: "+err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if err := h.commands.MarkDone(r.Context(), id, input.Status); err != nil {
 		Error(w, http.StatusInternalServerError, "Command completion failed: "+err.Error())
 		return
@@ -146,6 +159,7 @@ func (h *BridgeHandler) CompleteCommand(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *BridgeHandler) UpdateDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
 		Error(w, http.StatusBadRequest, "Invalid device ID")

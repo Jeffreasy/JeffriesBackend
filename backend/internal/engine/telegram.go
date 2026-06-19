@@ -23,6 +23,11 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 	client := tg.NewClient(token)
 	_ = client.DeleteWebhook(false)
 
+	// Register the native "/" command menu so commands are discoverable.
+	if err := client.SetMyCommands(telegramMenuCommands()); err != nil {
+		slog.Warn("telegram setMyCommands failed", "error", err)
+	}
+
 	var offset int64
 	backoff := 3 * time.Second
 

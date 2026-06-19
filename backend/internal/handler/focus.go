@@ -145,6 +145,10 @@ func (h *FocusHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// bridgeOfflineThreshold: the bridge claims commands every ~2s, so a healthy
+// bridge should never be silent for more than a few minutes.
+const bridgeOfflineThreshold = 3 * time.Minute
+
 func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, errors *[]string) FocusHealth {
 	health := FocusHealth{}
 	health.DevicesTotal = h.count(ctx, errors, "devices.total", `SELECT COUNT(*) FROM devices`)
@@ -153,9 +157,14 @@ func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, errors *[
 	health.DevicesOffline = maxInt(0, health.DevicesTotal-health.DevicesOnline)
 	health.CommandsPending = h.count(ctx, errors, "commands.pending", `SELECT COUNT(*) FROM device_commands WHERE status = 'pending'`)
 	health.CommandsProcessing = h.count(ctx, errors, "commands.processing", `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`)
-	health.CommandsFailed = h.count(ctx, errors, "commands.failed", `SELECT COUNT(*) FROM device_commands WHERE status = 'failed'`)
-	health.BridgeLastSeenAt = h.timePtr(ctx, errors, "devices.lastSeen", `SELECT MAX(last_seen) FROM devices`)
-	health.BridgeOnline = health.BridgeLastSeenAt != nil && now.Sub(health.BridgeLastSeenAt.In(now.Location())) <= 10*time.Minute
+	// Only recent failures matter — without a window, historical failures (e.g.
+	// from a past bridge-auth outage) would alert forever.
+	health.CommandsFailed = h.count(ctx, errors, "commands.failed", `SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'`)
+	// Bridge liveness comes from the dedicated heartbeat (bumped on every /bridge/*
+	// call), NOT MAX(devices.last_seen) which only moves when a per-device UDP
+	// status POST lands — so it stays stale while the bridge is actively polling.
+	health.BridgeLastSeenAt = h.timePtr(ctx, errors, "bridge.heartbeat", `SELECT MAX(last_seen) FROM bridge_heartbeat`)
+	health.BridgeOnline = health.BridgeLastSeenAt != nil && now.Sub(health.BridgeLastSeenAt.In(now.Location())) <= bridgeOfflineThreshold
 	if health.BridgeOnline {
 		health.BridgeStatus = "online"
 	} else {

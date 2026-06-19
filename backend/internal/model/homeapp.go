@@ -230,6 +230,12 @@ type EmailSyncMeta struct {
 	LastFullSync *time.Time `json:"last_full_sync" db:"last_full_sync"`
 	TotalSynced  int        `json:"total_synced" db:"total_synced"`
 	UpdatedAt    time.Time  `json:"updated_at" db:"updated_at"`
+
+	// Current sync health. UpdatedAt/TotalSynced reflect the last SUCCESS only,
+	// so they cannot signal a current failure on their own.
+	SyncStatus    string     `json:"sync_status" db:"sync_status"`
+	LastError     string     `json:"last_error" db:"last_error"`
+	LastAttemptAt *time.Time `json:"last_attempt_at" db:"last_attempt_at"`
 }
 
 // ─── Privacy Settings ───────────────────────────────────────────────────────

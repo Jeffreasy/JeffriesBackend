@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -58,6 +59,23 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		},
 	})
 
+	// Prune terminal device commands so historical done/failed rows don't
+	// accumulate forever (and stop inflating the failed-command alert count).
+	s.Register(CronJob{
+		Name:     "cleanup-device-commands",
+		Interval: 24 * time.Hour,
+		RunFunc: func(ctx context.Context) error {
+			deleted, err := e.cmdStore.DeleteOldCompleted(ctx, 7*24*time.Hour)
+			if err != nil {
+				return err
+			}
+			if deleted > 0 {
+				slog.Info("🗑️ cleanup-device-commands: done", "deleted", deleted)
+			}
+			return nil
+		},
+	})
+
 	// ── Google OAuth client (shared by Gmail + Calendar) ─────────────────────
 	var oauthClient *google.OAuthClient
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRefreshToken != "" {
@@ -84,7 +102,7 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "sync-gmail",
 			Interval: 5 * time.Minute,
-			RunFunc:  cronGmailSync(oauthClient, e.db, cfg),
+			RunFunc:  e.wrapGoogleCron(cronGmailSync(oauthClient, e.db, cfg)),
 		})
 	}
 
@@ -93,19 +111,19 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		s.Register(CronJob{
 			Name:     "sync-schedule-daily",
 			Interval: 24 * time.Hour,
-			RunFunc:  cronScheduleSync(oauthClient, e.db, cfg),
+			RunFunc:  e.wrapGoogleCron(cronScheduleSync(oauthClient, e.db, cfg)),
 		})
 
 		s.Register(CronJob{
 			Name:     "sync-personal-events",
 			Interval: 1 * time.Hour,
-			RunFunc:  cronPersonalEventsSync(oauthClient, e.db, cfg),
+			RunFunc:  e.wrapGoogleCron(cronPersonalEventsSync(oauthClient, e.db, cfg)),
 		})
 
 		s.Register(CronJob{
 			Name:     "process-pending-calendar",
 			Interval: 5 * time.Minute,
-			RunFunc:  cronPendingCalendar(oauthClient, e.db, cfg),
+			RunFunc:  e.wrapGoogleCron(cronPendingCalendar(oauthClient, e.db, cfg)),
 		})
 	}
 
@@ -162,6 +180,9 @@ func cronGmailSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) fun
 
 		result, parsedEmails, newHistID, err := google.SyncGmail(ctx, client, cfg.UserID, historyID)
 		if err != nil {
+			// Record current failure health so the briefing/status cannot report
+			// the last successful count as if the sync were still healthy.
+			_ = emailStore.MarkSyncFailed(ctx, cfg.UserID, err.Error())
 			return err
 		}
 
@@ -517,25 +538,17 @@ func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) e
 			return nil
 		}
 
-		// 2. Check if briefing was already sent today (start of today in Amsterdam)
-		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, amsterdam)
-
-		var alreadySent bool
-		err = e.db.Pool.QueryRow(ctx,
-			`SELECT EXISTS (
-				SELECT 1 FROM chat_messages
-				WHERE chat_id = $1 AND role = 'assistant' AND agent_id = 'brain'
-				  AND (content LIKE '%briefing%' OR content LIKE '%Briefing%')
-				  AND created_at >= $2
-			)`,
-			chatID, startOfToday,
-		).Scan(&alreadySent)
+		// 2. Atomically claim today's briefing. ON CONFLICT DO NOTHING makes the
+		// once-per-day guard atomic, so it survives the multi-second LLM loop and
+		// any concurrent tick/process (unlike the old non-atomic content-LIKE check).
+		today := now.Format("2006-01-02")
+		claim, err := e.db.Pool.Exec(ctx,
+			`INSERT INTO briefing_sent (day) VALUES ($1) ON CONFLICT (day) DO NOTHING`, today)
 		if err != nil {
-			slog.Warn("cronTelegramBriefing: failed to check chat history", "error", err)
+			slog.Warn("cronTelegramBriefing: failed to claim briefing day", "error", err)
 			return nil
 		}
-
-		if alreadySent {
+		if claim.RowsAffected() == 0 {
 			slog.Debug("cronTelegramBriefing: briefing already sent today")
 			return nil
 		}
@@ -551,6 +564,8 @@ func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) e
 
 		_, err = e.ProcessAIPrompt(ctx, chatID, briefingQuery, "brain", false)
 		if err != nil {
+			// Release the day's claim so a later tick can retry today.
+			_, _ = e.db.Pool.Exec(ctx, `DELETE FROM briefing_sent WHERE day = $1`, today)
 			slog.Error("cronTelegramBriefing: failed to process briefing prompt", "error", err)
 			return err
 		}
@@ -589,6 +604,19 @@ func cronTelegramHealthAlert(e *Engine, cfg CronConfig) func(ctx context.Context
 		}
 
 		return nil
+	}
+}
+
+// wrapGoogleCron runs a Google-backed sync job and, when it fails because the
+// refresh token is expired/revoked (invalid_grant), fires a single
+// de-duplicated re-auth reminder instead of logging the same error every tick.
+func (e *Engine) wrapGoogleCron(inner func(ctx context.Context) error) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		err := inner(ctx)
+		if err != nil && errors.Is(err, google.ErrGoogleReauthRequired) {
+			e.alertGoogleReauthOnce(ctx)
+		}
+		return err
 	}
 }
 

@@ -104,6 +104,67 @@ func (s *DeviceCommandStore) MarkDone(ctx context.Context, id uuid.UUID, status 
 	return err
 }
 
+// RequeueOrFail increments the attempt counter and either requeues the command
+// to 'pending' for another try, or marks it 'failed' once maxAttempts is reached.
+// Returns whether the command was requeued. Use for transient send failures so a
+// one-off LAN/bridge blip does not become a permanent failure.
+func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, maxAttempts int) (bool, error) {
+	if maxAttempts < 1 {
+		maxAttempts = 3
+	}
+	var requeued bool
+	err := s.db.Pool.QueryRow(ctx,
+		`UPDATE device_commands
+		    SET attempts = attempts + 1,
+		        status = CASE WHEN attempts + 1 < $2 THEN 'pending' ELSE 'failed' END,
+		        claimed_at = NULL,
+		        completed_at = CASE WHEN attempts + 1 < $2 THEN NULL ELSE now() END,
+		        updated_at = now()
+		  WHERE id = $1
+		    AND status IN ('pending', 'processing')
+		  RETURNING (status = 'pending')`,
+		id, maxAttempts,
+	).Scan(&requeued)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	return requeued, err
+}
+
+// TouchBridge bumps the bridge liveness heartbeat. Called on every authenticated
+// /bridge/* request so bridge liveness is independent of WiZ UDP reachability.
+func (s *DeviceCommandStore) TouchBridge(ctx context.Context) error {
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO bridge_heartbeat (id, last_seen) VALUES (1, now())
+		 ON CONFLICT (id) DO UPDATE SET last_seen = now()`)
+	return err
+}
+
+// BridgeLastSeen returns the last bridge heartbeat (zero time if never seen).
+func (s *DeviceCommandStore) BridgeLastSeen(ctx context.Context) (time.Time, error) {
+	var t time.Time
+	err := s.db.Pool.QueryRow(ctx, `SELECT last_seen FROM bridge_heartbeat WHERE id = 1`).Scan(&t)
+	if err == pgx.ErrNoRows {
+		return time.Time{}, nil
+	}
+	return t, err
+}
+
+// DeleteOldCompleted removes terminal (done/failed) commands older than cutoff
+// so historical failures stop accumulating (and stop inflating alert counts).
+func (s *DeviceCommandStore) DeleteOldCompleted(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM device_commands
+		  WHERE status IN ('done', 'failed')
+		    AND COALESCE(completed_at, updated_at) < $1`,
+		cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Create inserts a new device command.
 func (s *DeviceCommandStore) Create(ctx context.Context, userID string, deviceID *uuid.UUID, command json.RawMessage) (*DeviceCommand, error) {
 	var c DeviceCommand

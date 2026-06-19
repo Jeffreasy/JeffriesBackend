@@ -81,6 +81,21 @@ func (c *Client) SendMessageWithKeyboard(chatID int64, text string, keyboard Inl
 	return err
 }
 
+// BotCommand is one entry in the Telegram "/" command menu.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands registers the bot's command list so Telegram shows the native
+// "/" autocomplete menu. Call once at startup.
+func (c *Client) SetMyCommands(commands []BotCommand) error {
+	_, err := c.post("setMyCommands", map[string]any{
+		"commands": commands,
+	})
+	return err
+}
+
 // AnswerCallbackQuery removes the loading state from a clicked inline button.
 func (c *Client) AnswerCallbackQuery(callbackQueryID string, text string) error {
 	payload := map[string]any{

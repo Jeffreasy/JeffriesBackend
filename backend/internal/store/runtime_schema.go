@@ -47,7 +47,35 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureAICallLogSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure ai call log schema: %w", err)
 	}
+	if err := ensureSyncHealthSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure sync health schema: %w", err)
+	}
 	return nil
+}
+
+// ensureSyncHealthSchema adds current-sync-health columns, the bridge heartbeat
+// table, and device-command retry bookkeeping. Mirrors migrations/024_sync_health.up.sql.
+func ensureSyncHealthSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+ALTER TABLE email_sync_meta
+    ADD COLUMN IF NOT EXISTS sync_status     TEXT NOT NULL DEFAULT 'ok',
+    ADD COLUMN IF NOT EXISTS last_error      TEXT,
+    ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS bridge_heartbeat (
+    id        INTEGER     PRIMARY KEY DEFAULT 1,
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE device_commands
+    ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS briefing_sent (
+    day     DATE        PRIMARY KEY,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`)
+	return err
 }
 
 // ensureAICallLogSchema creates the ai_call_log table used for AI token/cost/

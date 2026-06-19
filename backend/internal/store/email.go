@@ -195,9 +195,11 @@ func (s *EmailStore) CountUnread(ctx context.Context, userID string) (int, error
 func (s *EmailStore) GetSyncMeta(ctx context.Context, userID string) (*model.EmailSyncMeta, error) {
 	var m model.EmailSyncMeta
 	err := s.db.Pool.QueryRow(ctx,
-		`SELECT id, user_id, history_id, last_full_sync, total_synced, updated_at
+		`SELECT id, user_id, history_id, last_full_sync, total_synced, updated_at,
+		        COALESCE(sync_status, 'ok'), COALESCE(last_error, ''), last_attempt_at
 		   FROM email_sync_meta WHERE user_id = $1`, userID,
-	).Scan(&m.ID, &m.UserID, &m.HistoryID, &m.LastFullSync, &m.TotalSynced, &m.UpdatedAt)
+	).Scan(&m.ID, &m.UserID, &m.HistoryID, &m.LastFullSync, &m.TotalSynced, &m.UpdatedAt,
+		&m.SyncStatus, &m.LastError, &m.LastAttemptAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -207,17 +209,40 @@ func (s *EmailStore) GetSyncMeta(ctx context.Context, userID string) (*model.Ema
 	return &m, nil
 }
 
-// UpsertSyncMeta creates or updates the sync metadata.
+// UpsertSyncMeta creates or updates the sync metadata after a SUCCESSFUL sync.
+// It clears any prior failure state.
 func (s *EmailStore) UpsertSyncMeta(ctx context.Context, userID, historyID string, lastFullSync *time.Time, totalSynced int) error {
 	_, err := s.db.Pool.Exec(ctx,
-		`INSERT INTO email_sync_meta (id, user_id, history_id, last_full_sync, total_synced, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW())
+		`INSERT INTO email_sync_meta (id, user_id, history_id, last_full_sync, total_synced, updated_at, sync_status, last_error, last_attempt_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW(), 'ok', NULL, NOW())
 		 ON CONFLICT (user_id) DO UPDATE SET
 		    history_id = EXCLUDED.history_id,
 		    last_full_sync = EXCLUDED.last_full_sync,
 		    total_synced = EXCLUDED.total_synced,
-		    updated_at = NOW()`,
+		    updated_at = NOW(),
+		    sync_status = 'ok',
+		    last_error = NULL,
+		    last_attempt_at = NOW()`,
 		uuid.New(), userID, historyID, lastFullSync, totalSynced,
+	)
+	return err
+}
+
+// MarkSyncFailed records a failed sync attempt WITHOUT touching the
+// last-success fields (history_id, total_synced, updated_at), so current health
+// can be distinguished from the last successful snapshot.
+func (s *EmailStore) MarkSyncFailed(ctx context.Context, userID, errMsg string) error {
+	if len(errMsg) > 500 {
+		errMsg = errMsg[:500]
+	}
+	_, err := s.db.Pool.Exec(ctx,
+		`INSERT INTO email_sync_meta (id, user_id, history_id, total_synced, updated_at, sync_status, last_error, last_attempt_at)
+		 VALUES ($1, $2, '', 0, NOW(), 'failed', $3, NOW())
+		 ON CONFLICT (user_id) DO UPDATE SET
+		    sync_status = 'failed',
+		    last_error = EXCLUDED.last_error,
+		    last_attempt_at = NOW()`,
+		uuid.New(), userID, errMsg,
 	)
 	return err
 }

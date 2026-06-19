@@ -1309,7 +1309,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err := e.pool.QueryRow(ctx,
 			`SELECT COUNT(*) FILTER (WHERE status = 'pending'),
 			        COUNT(*) FILTER (WHERE status = 'processing'),
-			        COUNT(*) FILTER (WHERE status = 'failed')
+			        COUNT(*) FILTER (WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours')
 			   FROM device_commands
 			  WHERE user_id = $1`,
 			e.userID,
@@ -1327,11 +1327,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 				"pending": pendingPersonal,
 			},
 			"gmail": map[string]any{
-				"updatedAt":     emailMetaValue(emailMeta, "updatedAt"),
-				"lastFullSync":  emailMetaValue(emailMeta, "lastFullSync"),
-				"totalSynced":   emailMetaValue(emailMeta, "totalSynced"),
-				"historyIDSet":  emailMeta != nil && strings.TrimSpace(emailMeta.HistoryID) != "",
-				"metaAvailable": emailMeta != nil,
+				"syncStatus":          emailSyncStatus(emailMeta),
+				"lastError":           emailSyncLastError(emailMeta),
+				"lastSuccessAt":       emailMetaValue(emailMeta, "updatedAt"),
+				"lastFullSync":        emailMetaValue(emailMeta, "lastFullSync"),
+				"lastSuccessfulCount": emailMetaValue(emailMeta, "totalSynced"),
+				"historyIDSet":        emailMeta != nil && strings.TrimSpace(emailMeta.HistoryID) != "",
+				"metaAvailable":       emailMeta != nil,
+				"instruction":         "syncStatus is de huidige gezondheid; rapporteer Gmail alleen als 'ok' wanneer syncStatus=='ok'. lastSuccessfulCount is historisch.",
 			},
 			"commands": map[string]int{
 				"pending":    pendingCommands,
@@ -1366,7 +1369,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err := e.pool.QueryRow(ctx,
 			`SELECT COUNT(*) FILTER (WHERE status = 'pending'),
 			        COUNT(*) FILTER (WHERE status = 'processing'),
-			        COUNT(*) FILTER (WHERE status = 'failed')
+			        COUNT(*) FILTER (WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours')
 			   FROM device_commands
 			  WHERE user_id = $1`,
 			e.userID,

@@ -87,6 +87,39 @@ type Engine struct {
 
 	// aiLog records token/latency telemetry per AI call.
 	aiLog *store.AICallLogStore
+
+	// alertFiredAt de-duplicates proactive alerts so a persistently-failing
+	// condition (e.g. Google invalid_grant) does not notify every cron tick.
+	alertMu      sync.Mutex
+	alertFiredAt map[string]time.Time
+}
+
+// shouldFireAlert reports whether an alert keyed by `key` may fire now, given it
+// last fired more than `window` ago. It records the fire time when it returns true.
+func (e *Engine) shouldFireAlert(key string, window time.Duration) bool {
+	e.alertMu.Lock()
+	defer e.alertMu.Unlock()
+	if e.alertFiredAt == nil {
+		e.alertFiredAt = make(map[string]time.Time)
+	}
+	now := time.Now()
+	if last, ok := e.alertFiredAt[key]; ok && now.Sub(last) < window {
+		return false
+	}
+	e.alertFiredAt[key] = now
+	return true
+}
+
+// alertGoogleReauthOnce sends a single de-duplicated re-auth reminder (max once
+// per 24h) when Google sync fails with an expired/revoked refresh token.
+func (e *Engine) alertGoogleReauthOnce(ctx context.Context) {
+	if !e.shouldFireAlert("google-reauth", 24*time.Hour) {
+		return
+	}
+	msg := "🔑 Google re-auth nodig\n\nDe Google refresh token is verlopen of ingetrokken (invalid_grant), waardoor Gmail- en agenda-sync stilliggen.\n\nHerstel: draai scripts/gen-gmail-token.mjs, vervang GOOGLE_REFRESH_TOKEN op Render en redeploy."
+	if err := e.SendProactiveNotification(ctx, msg); err != nil {
+		slog.Warn("alertGoogleReauthOnce: failed to send", "error", err)
+	}
 }
 
 // grok returns the shared Grok client, building it once on first use.

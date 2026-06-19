@@ -80,12 +80,17 @@ func (e *HomeBotExecutor) buildContextBriefing(ctx context.Context, opts context
 			"label":    periodLabel(start, end, loc),
 		},
 		"sync": map[string]any{
-			"scheduleImportedAt": scheduleMetaValue(scheduleMeta, "importedAt"),
-			"scheduleTotalRows":  scheduleMetaValue(scheduleMeta, "totalRows"),
-			"gmailUpdatedAt":     emailMetaValue(emailMeta, "updatedAt"),
-			"gmailLastFullSync":  emailMetaValue(emailMeta, "lastFullSync"),
-			"gmailTotalSynced":   emailMetaValue(emailMeta, "totalSynced"),
-			"gmailHistoryIDSet":  emailMeta != nil && strings.TrimSpace(emailMeta.HistoryID) != "",
+			"scheduleImportedAt":     scheduleMetaValue(scheduleMeta, "importedAt"),
+			"scheduleTotalRows":      scheduleMetaValue(scheduleMeta, "totalRows"),
+			"gmailLastSuccessAt":     emailMetaValue(emailMeta, "updatedAt"),
+			"gmailLastFullSync":      emailMetaValue(emailMeta, "lastFullSync"),
+			"gmailLastSuccessfulCnt": emailMetaValue(emailMeta, "totalSynced"),
+			"gmailHistoryIDSet":      emailMeta != nil && strings.TrimSpace(emailMeta.HistoryID) != "",
+			// CURRENT health — the only authoritative ok/failed signal. The count
+			// above is historical (last success) and must not be read as "ok now".
+			"gmailSyncStatus": emailSyncStatus(emailMeta),
+			"gmailLastError":  emailSyncLastError(emailMeta),
+			"instruction":     "gmailSyncStatus is de enige bron voor huidige sync-gezondheid. Rapporteer Gmail-sync alleen als 'ok' wanneer gmailSyncStatus == 'ok'; bij 'failed' meld je de storing met gmailLastError. gmailLastSuccessfulCnt is historisch, geen bewijs van huidige werking.",
 		},
 		"planning": map[string]any{
 			"aantalDiensten":  len(schedules),
@@ -105,6 +110,20 @@ func (e *HomeBotExecutor) buildContextBriefing(ctx context.Context, opts context
 		"errors":      errors,
 		"instruction": "Dit is de cross-domain live briefing voor Telegram/Grok. Combineer planning, email, notities en LaventeCare; zeg niet dat data ontbreekt wanneer de bijbehorende aantallen groter zijn dan 0.",
 	}, nil
+}
+
+func emailSyncStatus(m *model.EmailSyncMeta) string {
+	if m == nil || strings.TrimSpace(m.SyncStatus) == "" {
+		return "unknown"
+	}
+	return m.SyncStatus
+}
+
+func emailSyncLastError(m *model.EmailSyncMeta) string {
+	if m == nil {
+		return ""
+	}
+	return m.LastError
 }
 
 func normalizeBriefingScope(scope string) string {

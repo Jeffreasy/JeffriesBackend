@@ -411,6 +411,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 
 	result, parsedEmails, newHistoryID, err := google.SyncGmail(ctx, client, userID, historyID)
 	if err != nil {
+		_ = emailStore.MarkSyncFailed(ctx, userID, err.Error())
 		Error(w, http.StatusInternalServerError, "Gmail sync failed: "+err.Error())
 		return
 	}
@@ -499,6 +500,8 @@ func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	var gmailLastFull any
 	var gmailTotal int
 	var gmailHistoryID string
+	gmailSyncStatus := "unknown"
+	gmailLastError := ""
 	if emailMeta != nil {
 		gmailLastSuccess = emailMeta.UpdatedAt.Format(time.RFC3339)
 		if emailMeta.LastFullSync != nil {
@@ -506,6 +509,10 @@ func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		gmailTotal = emailMeta.TotalSynced
 		gmailHistoryID = emailMeta.HistoryID
+		if emailMeta.SyncStatus != "" {
+			gmailSyncStatus = emailMeta.SyncStatus
+		}
+		gmailLastError = emailMeta.LastError
 	}
 
 	personalLastSuccess := sqlTimeRFC3339(personalUpdated)
@@ -529,6 +536,8 @@ func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"gmail": map[string]any{
 			"status":          syncSourceStatus(true, googleConfigured, gmailLastSuccess),
+			"syncStatus":      gmailSyncStatus,
+			"lastError":       gmailLastError,
 			"enabled":         h.cfg.GmailEnabled,
 			"autoEnabled":     h.cfg.GmailEnabled,
 			"manualAvailable": googleConfigured,
