@@ -39,6 +39,23 @@ func NewOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
 	}
 }
 
+var (
+	sharedClientOnce sync.Once
+	sharedClient     *OAuthClient
+)
+
+// SharedOAuthClient returns a process-wide OAuthClient so the access-token cache
+// is shared across the crons and all HTTP handlers, instead of every call site
+// building its own client and re-refreshing the token on each request. All call
+// sites use the same env-derived credentials, which only change on redeploy
+// (process restart), so a singleton is safe.
+func SharedOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
+	sharedClientOnce.Do(func() {
+		sharedClient = NewOAuthClient(clientID, clientSecret, refreshToken)
+	})
+	return sharedClient
+}
+
 // tokenResponse maps the Google token endpoint JSON response.
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`

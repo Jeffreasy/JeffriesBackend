@@ -199,7 +199,9 @@ func SyncScheduleDetailed(ctx context.Context, client *OAuthClient, userID, cale
 	return &ScheduleSyncResult{
 		Diensten:        diensten,
 		FetchedEventIDs: fetchedEventIDs,
-		PruneStartDatum: now.Format("2006-01-02"),
+		// Prune across the full fetched window (timeMin..timeMax), not just from
+		// today, so a recently-past shift deleted in Google is reconciled too.
+		PruneStartDatum: timeMin.In(amsterdam).Format("2006-01-02"),
 		PruneEindDatum:  timeMax.In(amsterdam).Format("2006-01-02"),
 	}, nil
 }
@@ -258,7 +260,9 @@ func SyncPersonalEventsDetailed(ctx context.Context, client *OAuthClient, userID
 		Events:          allEvents,
 		FetchedEventIDs: fetchedEventIDs,
 		SyncedKalenders: syncedKalenders,
-		PruneStartDatum: now.Format("2006-01-02"),
+		// Prune across the full fetched window so recently-past events deleted in
+		// Google are reconciled, matching the schedule sync behaviour.
+		PruneStartDatum: timeMin.In(amsterdam).Format("2006-01-02"),
 		PruneEindDatum:  timeMax.In(amsterdam).Format("2006-01-02"),
 	}, nil
 }
@@ -355,6 +359,66 @@ func DeletePersonalEvent(ctx context.Context, client *OAuthClient, calendarID, e
 		return fmt.Errorf("DELETE %s: HTTP %d — %s", u, resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+// ─── Calendar target resolution ──────────────────────────────────────────────
+//
+// These helpers are the single source of truth for translating a stored
+// PersonalEvent (its Kalender column + namespaced EventID) into the (calendarID,
+// googleEventID) pair used against the Google Calendar API. Both the engine
+// crons, the HTTP /sync handler and the Telegram sync path call them so the
+// alias rules can never drift between paths.
+
+// NormalizeCalendarID maps stored calendar aliases to a real Google calendar id.
+// "" and "Main" are the user's primary calendar. "AI" is a synthetic marker the
+// assistant historically wrote into the kalender column when staging an
+// AI-created appointment — it is NOT a real calendar id, so it must also resolve
+// to "primary" (otherwise CreatePersonalEvent POSTs to /calendars/AI/events and
+// Google returns a permanent 404).
+func NormalizeCalendarID(raw string) string {
+	id := strings.TrimSpace(raw)
+	if id == "" || strings.EqualFold(id, "Main") || strings.EqualFold(id, "AI") {
+		return "primary"
+	}
+	return id
+}
+
+// ResolveCalendarTarget returns the Google calendar id and the bare Google event
+// id for a stored personal event, stripping the "calendarName:" namespace prefix
+// that non-primary calendars carry.
+func ResolveCalendarTarget(event model.PersonalEvent) (calendarID, googleEventID string) {
+	calendarID = NormalizeCalendarID(event.Kalender)
+	googleEventID = event.EventID
+	if calendarID != "primary" {
+		googleEventID = strings.TrimPrefix(googleEventID, calendarID+":")
+	}
+	return calendarID, googleEventID
+}
+
+// StoredCalendarEventID namespaces a freshly created Google event id with its
+// calendar so non-primary events stay addressable on later edits/deletes.
+func StoredCalendarEventID(calendarID, googleEventID string) string {
+	if calendarID == "" || calendarID == "primary" {
+		return googleEventID
+	}
+	return calendarID + ":" + googleEventID
+}
+
+// SplitCalendarIDs parses a comma-separated calendar id list, defaulting to the
+// primary calendar when empty.
+func SplitCalendarIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	calendarIDs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			calendarIDs = append(calendarIDs, part)
+		}
+	}
+	if len(calendarIDs) == 0 {
+		return []string{"primary"}
+	}
+	return calendarIDs
 }
 
 // ─── Parsing helpers ─────────────────────────────────────────────────────────
@@ -568,16 +632,25 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 
 	isAllDay := ev.Start.Date != "" && ev.Start.DateTime == ""
 	var startDt, eindDt time.Time
+	var startErr, endErr error
 
 	if isAllDay {
-		startDt, _ = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
-		googleEndDt, _ := time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
-		eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
+		startDt, startErr = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
+		var googleEndDt time.Time
+		googleEndDt, endErr = time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		if startErr == nil && endErr == nil {
+			eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
+		}
 	} else {
-		startDt, _ = time.Parse(time.RFC3339, ev.Start.DateTime)
-		eindDt, _ = time.Parse(time.RFC3339, ev.End.DateTime)
+		startDt, startErr = time.Parse(time.RFC3339, ev.Start.DateTime)
+		eindDt, endErr = time.Parse(time.RFC3339, ev.End.DateTime)
 		startDt = startDt.In(amsterdam)
 		eindDt = eindDt.In(amsterdam)
+	}
+	if startErr != nil || endErr != nil {
+		slog.Warn("schedule event skipped: unparseable time",
+			"summary", ev.Summary, "startErr", startErr, "endErr", endErr)
+		return nil
 	}
 
 	locatie := ev.Location
@@ -640,16 +713,25 @@ func parsePersonalEvent(ev calendarEvent, userID, kalenderName string, isPrimary
 
 	isAllDay := ev.Start.Date != "" && ev.Start.DateTime == ""
 	var startDt, eindDt time.Time
+	var startErr, endErr error
 
 	if isAllDay {
-		startDt, _ = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
-		googleEndDt, _ := time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
-		eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
+		startDt, startErr = time.ParseInLocation("2006-01-02", ev.Start.Date, amsterdam)
+		var googleEndDt time.Time
+		googleEndDt, endErr = time.ParseInLocation("2006-01-02", ev.End.Date, amsterdam)
+		if startErr == nil && endErr == nil {
+			eindDt = inclusiveAllDayEnd(startDt, googleEndDt)
+		}
 	} else {
-		startDt, _ = time.Parse(time.RFC3339, ev.Start.DateTime)
-		eindDt, _ = time.Parse(time.RFC3339, ev.End.DateTime)
+		startDt, startErr = time.Parse(time.RFC3339, ev.Start.DateTime)
+		eindDt, endErr = time.Parse(time.RFC3339, ev.End.DateTime)
 		startDt = startDt.In(amsterdam)
 		eindDt = eindDt.In(amsterdam)
+	}
+	if startErr != nil || endErr != nil {
+		slog.Warn("personal event skipped: unparseable time",
+			"summary", ev.Summary, "startErr", startErr, "endErr", endErr)
+		return nil
 	}
 
 	eventID := ev.ID

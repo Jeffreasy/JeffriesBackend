@@ -42,7 +42,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	client := google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 
 	// Start sync asynchronously to prevent timeout, or synchronously if it's fast enough.
 	// We'll do it synchronously for simplicity so frontend gets immediate response.
@@ -113,7 +113,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 
 	calendarIDs := []string{"primary"}
 	if h.cfg.PersonalCalendarIDs != "" {
-		calendarIDs = splitCalendarIDs(h.cfg.PersonalCalendarIDs)
+		calendarIDs = google.SplitCalendarIDs(h.cfg.PersonalCalendarIDs)
 	}
 
 	personalSync, err := google.SyncPersonalEventsDetailed(ctx, client, userID, calendarIDs, h.cfg.SDBCalendarID)
@@ -267,7 +267,7 @@ func processPendingCalendar(ctx context.Context, client *google.OAuthClient, peS
 }
 
 func processPendingCalendarEvent(ctx context.Context, client *google.OAuthClient, peStore *store.PersonalEventStore, event model.PersonalEvent) error {
-	calendarID, googleEventID := calendarTarget(event)
+	calendarID, googleEventID := google.ResolveCalendarTarget(event)
 	nextStatus := resolvedPersonalEventStatus(event)
 
 	switch event.Status {
@@ -276,7 +276,7 @@ func processPendingCalendarEvent(ctx context.Context, client *google.OAuthClient
 		if err != nil {
 			return err
 		}
-		return peStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedCalendarEventID(calendarID, createdID), nextStatus)
+		return peStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, google.StoredCalendarEventID(calendarID, createdID), nextStatus)
 	case store.PersonalEventStatusPendingUpdate:
 		if err := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); err != nil {
 			return err
@@ -299,41 +299,6 @@ func isPendingCalendarStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func calendarTarget(event model.PersonalEvent) (calendarID, googleEventID string) {
-	calendarID = strings.TrimSpace(event.Kalender)
-	if calendarID == "" || strings.EqualFold(calendarID, "Main") {
-		calendarID = "primary"
-	}
-
-	googleEventID = event.EventID
-	if calendarID != "primary" {
-		googleEventID = strings.TrimPrefix(googleEventID, calendarID+":")
-	}
-	return calendarID, googleEventID
-}
-
-func storedCalendarEventID(calendarID, googleEventID string) string {
-	if calendarID == "" || calendarID == "primary" {
-		return googleEventID
-	}
-	return calendarID + ":" + googleEventID
-}
-
-func splitCalendarIDs(raw string) []string {
-	parts := strings.Split(raw, ",")
-	calendarIDs := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			calendarIDs = append(calendarIDs, part)
-		}
-	}
-	if len(calendarIDs) == 0 {
-		return []string{"primary"}
-	}
-	return calendarIDs
 }
 
 func resolvedPersonalEventStatus(event model.PersonalEvent) string {
@@ -383,7 +348,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	client := google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 	emailStore := store.NewEmailStore(h.db)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

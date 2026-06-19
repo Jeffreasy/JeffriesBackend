@@ -287,24 +287,14 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 		pending, err := peStore.ListPendingCalendar(ctx, userID, 50)
 		if err == nil {
 			for _, event := range pending {
-				calendarID := strings.TrimSpace(event.Kalender)
-				if calendarID == "" || strings.EqualFold(calendarID, "Main") {
-					calendarID = "primary"
-				}
-				googleEventID := event.EventID
-				if calendarID != "primary" {
-					googleEventID = strings.TrimPrefix(googleEventID, calendarID+":")
-				}
+				calendarID, googleEventID := google.ResolveCalendarTarget(event)
 
 				// Map pending states
 				switch event.Status {
 				case store.PersonalEventStatusPendingCreate:
 					createdID, err := google.CreatePersonalEvent(ctx, oauthClient, calendarID, event)
 					if err == nil {
-						targetID := createdID
-						if calendarID != "primary" {
-							targetID = calendarID + ":" + createdID
-						}
+						targetID := google.StoredCalendarEventID(calendarID, createdID)
 						_ = peStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, targetID, store.PersonalEventStatusUpcoming)
 					}
 				case store.PersonalEventStatusPendingUpdate:

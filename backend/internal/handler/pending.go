@@ -102,7 +102,7 @@ func (h *PendingActionHandler) googleClient() *google.OAuthClient {
 	if h.cfg == nil || h.cfg.GoogleClientID == "" || h.cfg.GoogleClientSecret == "" || h.cfg.GoogleRefreshToken == "" {
 		return nil
 	}
-	return google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	return google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 }
 
 func toPendingActionView(action store.PendingAction) pendingActionView {

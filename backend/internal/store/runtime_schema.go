@@ -50,7 +50,26 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureSyncHealthSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure sync health schema: %w", err)
 	}
+	if err := ensurePersonalEventRetrySchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure personal event retry schema: %w", err)
+	}
 	return nil
+}
+
+// ensurePersonalEventRetrySchema adds retry/dead-letter bookkeeping to
+// personal_events so a permanently-failing pending calendar op can be capped
+// instead of retried forever, and backfills the legacy "AI" calendar alias
+// (which 404'd on push) to "Main". Mirrors migrations/025_personal_event_retry.up.sql.
+func ensurePersonalEventRetrySchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+ALTER TABLE personal_events
+    ADD COLUMN IF NOT EXISTS attempts        INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_error      TEXT,
+    ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+
+UPDATE personal_events SET kalender = 'Main' WHERE kalender = 'AI';
+`)
+	return err
 }
 
 // ensureSyncHealthSchema adds current-sync-health columns, the bridge heartbeat

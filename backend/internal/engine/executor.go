@@ -2178,7 +2178,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			BusinessContextID:    optionalStringPtr(businessContextID),
 			BusinessContextTitle: optionalStringPtr(businessContextTitle),
 			Status:               store.PersonalEventStatusPendingCreate,
-			Kalender:             "AI",
+			// "Main" resolves to the user's primary Google calendar. (Historically
+			// this was "AI", which is not a real calendar id and 404'd on push.)
+			Kalender: "Main",
 		}
 		if event.Heledag {
 			event.StartTijd = nil

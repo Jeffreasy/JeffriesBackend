@@ -197,7 +197,7 @@ func (h *PersonalEventHandler) tryProcessPendingCalendarEventNow(parent context.
 		return result
 	}
 
-	client := google.NewOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
+	client := google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 	if err := processPendingCalendarEvent(ctx, client, h.store, event); err != nil {
 		result["syncError"] = err.Error()
 		return result

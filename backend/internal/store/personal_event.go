@@ -24,7 +24,14 @@ const (
 	PersonalEventStatusPendingCreate = "PendingCreate"
 	PersonalEventStatusPendingUpdate = "PendingUpdate"
 	PersonalEventStatusPendingDelete = "PendingDelete"
+	// PersonalEventStatusPendingFailed is the terminal state for a pending
+	// calendar op that keeps failing. It is excluded from ListPendingCalendar so
+	// it is no longer retried, and from sync/prune overwrites so it stays visible.
+	PersonalEventStatusPendingFailed = "PendingFailed"
 )
+
+// pendingFailureErrMax bounds how much of a Google error is stored on the row.
+const pendingFailureErrMax = 500
 
 const peColumns = `id, user_id, event_id, titel, start_datum::text, start_tijd,
 	eind_datum::text, eind_tijd, heledag, locatie, beschrijving,
@@ -182,15 +189,41 @@ func (s *PersonalEventStore) UpsertSynced(ctx context.Context, e model.PersonalE
 		    business_context_title=COALESCE(EXCLUDED.business_context_title, personal_events.business_context_title),
 		    status=EXCLUDED.status,
 		    kalender=EXCLUDED.kalender
-		  WHERE personal_events.status NOT IN ($19, $20, $21)`,
+		  WHERE personal_events.status NOT IN ($19, $20, $21, $22)`,
 		e.ID, e.UserID, e.EventID, e.Titel, e.StartDatum, e.StartTijd,
 		e.EindDatum, e.EindTijd, e.Heledag, e.Locatie, e.Beschrijving,
 		e.ConflictMetDienst, e.Symbol, e.BusinessContextType, e.BusinessContextID,
 		e.BusinessContextTitle, e.Status, e.Kalender,
 		PersonalEventStatusPendingCreate,
 		PersonalEventStatusPendingUpdate,
-		PersonalEventStatusPendingDelete)
+		PersonalEventStatusPendingDelete,
+		PersonalEventStatusPendingFailed)
 	return err
+}
+
+// RecordPendingFailure increments the retry counter for a failing pending
+// calendar op and records the error. When attempts reach maxAttempts the row is
+// moved to the terminal PendingFailed status so it is no longer retried. It
+// returns true when the row was dead-lettered on this call.
+func (s *PersonalEventStore) RecordPendingFailure(ctx context.Context, userID, eventID, errMsg string, maxAttempts int) (bool, error) {
+	if r := []rune(errMsg); len(r) > pendingFailureErrMax {
+		errMsg = string(r[:pendingFailureErrMax])
+	}
+	var status string
+	err := s.db.Pool.QueryRow(ctx,
+		`UPDATE personal_events
+		    SET attempts = attempts + 1,
+		        last_error = $3,
+		        last_attempt_at = now(),
+		        status = CASE WHEN attempts + 1 >= $4 THEN $5 ELSE status END
+		  WHERE user_id = $1 AND event_id = $2
+		  RETURNING status`,
+		userID, eventID, errMsg, maxAttempts, PersonalEventStatusPendingFailed,
+	).Scan(&status)
+	if err != nil {
+		return false, err
+	}
+	return status == PersonalEventStatusPendingFailed, nil
 }
 
 func (s *PersonalEventStore) UpdateStatus(ctx context.Context, userID, eventID, status string) error {
@@ -208,12 +241,18 @@ func (s *PersonalEventStore) MarkMissingSyncedInDateRange(ctx context.Context, u
 	if userID == "" || startIso == "" || eindIso == "" || len(syncedKalenders) == 0 {
 		return 0, nil
 	}
+	// Guard against a transient empty fetch (all synced calendars returned zero
+	// events) marking the whole window deleted. Only reconcile when at least one
+	// event was fetched; a genuinely-emptied calendar lingers until it reappears.
+	if len(keepEventIDs) == 0 {
+		return 0, nil
+	}
 
 	baseWhere := `user_id = $1
 	    AND start_datum >= $2
 	    AND start_datum <= $3
 	    AND kalender = ANY($4)
-	    AND status NOT IN ($5, $6, $7, $8)`
+	    AND status NOT IN ($5, $6, $7, $8, $9)`
 
 	args := []any{
 		userID,
@@ -224,6 +263,7 @@ func (s *PersonalEventStore) MarkMissingSyncedInDateRange(ctx context.Context, u
 		PersonalEventStatusPendingCreate,
 		PersonalEventStatusPendingUpdate,
 		PersonalEventStatusPendingDelete,
+		PersonalEventStatusPendingFailed,
 	}
 
 	sql := `UPDATE personal_events
@@ -231,7 +271,7 @@ func (s *PersonalEventStore) MarkMissingSyncedInDateRange(ctx context.Context, u
 		 WHERE ` + baseWhere
 
 	if len(keepEventIDs) > 0 {
-		sql += ` AND NOT (event_id = ANY($9))`
+		sql += ` AND NOT (event_id = ANY($10))`
 		args = append(args, keepEventIDs)
 	}
 
@@ -365,7 +405,8 @@ func normalizePersonalEventStatuses(events []model.PersonalEvent) {
 func normalizePersonalEventStatus(event *model.PersonalEvent, now personalEventClock) {
 	switch event.Status {
 	case PersonalEventStatusPendingCreate, PersonalEventStatusPendingUpdate,
-		PersonalEventStatusPendingDelete, PersonalEventStatusDeleted:
+		PersonalEventStatusPendingDelete, PersonalEventStatusPendingFailed,
+		PersonalEventStatusDeleted:
 		return
 	}
 

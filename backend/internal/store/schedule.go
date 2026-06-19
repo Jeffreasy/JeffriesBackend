@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -133,18 +134,15 @@ func (s *ScheduleStore) PruneMissingInDateRange(ctx context.Context, userID, sta
 		return 0, nil
 	}
 
+	// Guard against a transient empty fetch wiping the whole window: Google can
+	// return 200 with zero events (e.g. a misconfigured calendar id, or an
+	// orderBy/singleEvents edge case). Deleting every local shift on that signal
+	// is destructive and self-inflicted. Only prune when at least one event was
+	// fetched; a genuinely-emptied window simply lingers until an event reappears.
 	if len(keepEventIDs) == 0 {
-		tag, err := s.db.Pool.Exec(ctx,
-			`DELETE FROM schedule
-			  WHERE user_id = $1
-			    AND start_datum >= $2
-			    AND start_datum <= $3`,
-			userID, startIso, eindIso,
-		)
-		if err != nil {
-			return 0, err
-		}
-		return int(tag.RowsAffected()), nil
+		slog.Warn("schedule prune skipped: zero events fetched for window (guarding against mass delete)",
+			"userId", userID, "start", startIso, "eind", eindIso)
+		return 0, nil
 	}
 
 	tag, err := s.db.Pool.Exec(ctx,

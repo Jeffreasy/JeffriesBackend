@@ -73,7 +73,7 @@ func (e *Engine) googleOAuthClient() *google.OAuthClient {
 	if e.cfg.GoogleClientID == "" || e.cfg.GoogleClientSecret == "" || e.cfg.GoogleRefreshToken == "" {
 		return nil
 	}
-	return google.NewOAuthClient(e.cfg.GoogleClientID, e.cfg.GoogleClientSecret, e.cfg.GoogleRefreshToken)
+	return google.SharedOAuthClient(e.cfg.GoogleClientID, e.cfg.GoogleClientSecret, e.cfg.GoogleRefreshToken)
 }
 
 func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[string]any {

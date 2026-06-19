@@ -76,10 +76,10 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		},
 	})
 
-	// ── Google OAuth client (shared by Gmail + Calendar) ─────────────────────
+	// ── Google OAuth client (shared by Gmail + Calendar + HTTP handlers) ──────
 	var oauthClient *google.OAuthClient
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRefreshToken != "" {
-		oauthClient = google.NewOAuthClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRefreshToken)
+		oauthClient = google.SharedOAuthClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRefreshToken)
 	}
 
 	// ── Telegram crons ───────────────────────────────────────────────────────
@@ -100,30 +100,34 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 	// ── Gmail sync — every 5 minutes ─────────────────────────────────────────
 	if cfg.GmailEnabled && oauthClient != nil {
 		s.Register(CronJob{
-			Name:     "sync-gmail",
-			Interval: 5 * time.Minute,
-			RunFunc:  e.wrapGoogleCron(cronGmailSync(oauthClient, e.db, cfg)),
+			Name:       "sync-gmail",
+			Interval:   5 * time.Minute,
+			RunOnStart: true,
+			RunFunc:    e.wrapGoogleCron(cronGmailSync(oauthClient, e.db, cfg)),
 		})
 	}
 
 	// ── Google Calendar sync (work schedule) — daily ─────────────────────────
 	if cfg.GoogleCalendarEnabled && oauthClient != nil {
 		s.Register(CronJob{
-			Name:     "sync-schedule-daily",
-			Interval: 24 * time.Hour,
-			RunFunc:  e.wrapGoogleCron(cronScheduleSync(oauthClient, e.db, cfg)),
+			Name:       "sync-schedule-daily",
+			Interval:   24 * time.Hour,
+			RunOnStart: true,
+			RunFunc:    e.wrapGoogleCron(cronScheduleSync(oauthClient, e.db, cfg)),
 		})
 
 		s.Register(CronJob{
-			Name:     "sync-personal-events",
-			Interval: 1 * time.Hour,
-			RunFunc:  e.wrapGoogleCron(cronPersonalEventsSync(oauthClient, e.db, cfg)),
+			Name:       "sync-personal-events",
+			Interval:   1 * time.Hour,
+			RunOnStart: true,
+			RunFunc:    e.wrapGoogleCron(cronPersonalEventsSync(oauthClient, e.db, cfg)),
 		})
 
 		s.Register(CronJob{
-			Name:     "process-pending-calendar",
-			Interval: 5 * time.Minute,
-			RunFunc:  e.wrapGoogleCron(cronPendingCalendar(oauthClient, e.db, cfg)),
+			Name:       "process-pending-calendar",
+			Interval:   5 * time.Minute,
+			RunOnStart: true,
+			RunFunc:    e.wrapGoogleCron(e.cronPendingCalendar(oauthClient, cfg)),
 		})
 	}
 
@@ -332,7 +336,7 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 
 		calendarIDs := []string{"primary"}
 		if cfg.PersonalCalendarIDs != "" {
-			calendarIDs = splitCalendarIDs(cfg.PersonalCalendarIDs)
+			calendarIDs = google.SplitCalendarIDs(cfg.PersonalCalendarIDs)
 		}
 
 		personalSync, err := google.SyncPersonalEventsDetailed(ctx, client, cfg.UserID, calendarIDs, cfg.SDBCalendarID)
@@ -396,8 +400,14 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 	}
 }
 
-func cronPendingCalendar(client *google.OAuthClient, db *store.DB, cfg CronConfig) func(ctx context.Context) error {
-	evStore := store.NewPersonalEventStore(db)
+// pendingCalendarMaxAttempts caps how often a single failing pending calendar
+// operation is retried before it is dead-lettered (status PendingFailed), so a
+// permanently-bad op (e.g. a deleted target, malformed time) can no longer loop
+// forever on every 5-minute tick.
+const pendingCalendarMaxAttempts = 5
+
+func (e *Engine) cronPendingCalendar(client *google.OAuthClient, cfg CronConfig) func(ctx context.Context) error {
+	evStore := store.NewPersonalEventStore(e.db)
 
 	return func(ctx context.Context) error {
 		slog.Info("📅 process-pending-calendar: starting")
@@ -408,48 +418,79 @@ func cronPendingCalendar(client *google.OAuthClient, db *store.DB, cfg CronConfi
 		}
 
 		processed := 0
+		deadLettered := 0
 		for _, event := range events {
-			calendarID, googleEventID := calendarTarget(event)
+			calendarID, googleEventID := google.ResolveCalendarTarget(event)
 			nextStatus := resolvedPersonalEventStatus(event)
 
+			var opErr error
 			switch event.Status {
 			case store.PersonalEventStatusPendingCreate:
-				createdID, err := google.CreatePersonalEvent(ctx, client, calendarID, event)
-				if err != nil {
-					slog.Warn("pending calendar create failed", "eventId", event.EventID, "error", err)
-					continue
+				createdID, cerr := google.CreatePersonalEvent(ctx, client, calendarID, event)
+				if cerr != nil {
+					opErr = cerr
+					break
 				}
-				storedID := storedCalendarEventID(calendarID, createdID)
-				if err := evStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedID, nextStatus); err != nil {
-					slog.Warn("pending calendar create status update failed", "eventId", event.EventID, "googleEventId", storedID, "error", err)
-					continue
-				}
+				storedID := google.StoredCalendarEventID(calendarID, createdID)
+				opErr = evStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedID, nextStatus)
 			case store.PersonalEventStatusPendingUpdate:
-				if err := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); err != nil {
-					slog.Warn("pending calendar update failed", "eventId", event.EventID, "error", err)
-					continue
+				if uerr := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); uerr != nil {
+					opErr = uerr
+					break
 				}
-				if err := evStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus); err != nil {
-					slog.Warn("pending calendar update status failed", "eventId", event.EventID, "error", err)
-					continue
-				}
+				opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus)
 			case store.PersonalEventStatusPendingDelete:
-				if err := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); err != nil {
-					slog.Warn("pending calendar delete failed", "eventId", event.EventID, "error", err)
-					continue
+				if derr := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); derr != nil {
+					opErr = derr
+					break
 				}
-				if err := evStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted); err != nil {
-					slog.Warn("pending calendar delete status failed", "eventId", event.EventID, "error", err)
-					continue
-				}
+				opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted)
 			default:
+				continue
+			}
+
+			if opErr != nil {
+				// A token problem isn't the op's fault — abort the run and let
+				// wrapGoogleCron fire the de-duped re-auth alert, without burning
+				// this op's retry budget.
+				if errors.Is(opErr, google.ErrGoogleReauthRequired) {
+					return opErr
+				}
+				deadLetter, recErr := evStore.RecordPendingFailure(ctx, event.UserID, event.EventID, opErr.Error(), pendingCalendarMaxAttempts)
+				if recErr != nil {
+					slog.Warn("pending calendar failure bookkeeping failed", "eventId", event.EventID, "error", recErr)
+				}
+				if deadLetter {
+					deadLettered++
+					slog.Warn("pending calendar op dead-lettered after max attempts",
+						"eventId", event.EventID, "status", event.Status, "error", opErr)
+				} else {
+					slog.Warn("pending calendar op failed (will retry)",
+						"eventId", event.EventID, "status", event.Status, "error", opErr)
+				}
 				continue
 			}
 			processed++
 		}
 
-		slog.Info("📅 process-pending-calendar: done", "pending", len(events), "processed", processed)
+		if deadLettered > 0 {
+			e.alertPendingCalendarFailures(ctx, deadLettered)
+		}
+
+		slog.Info("📅 process-pending-calendar: done", "pending", len(events), "processed", processed, "deadLettered", deadLettered)
 		return nil
+	}
+}
+
+// alertPendingCalendarFailures sends a single de-duplicated notification (max
+// once per 24h) when one or more pending calendar ops are dead-lettered.
+func (e *Engine) alertPendingCalendarFailures(ctx context.Context, count int) {
+	if !e.shouldFireAlert("pending-calendar-failed", 24*time.Hour) {
+		return
+	}
+	msg := fmt.Sprintf("⚠️ Agenda-sync probleem\n\n%d agenda-bewerking(en) zijn na %d pogingen mislukt en op 'mislukt' gezet, zodat ze niet eindeloos opnieuw geprobeerd worden. Bekijk de openstaande afspraken in de app.", count, pendingCalendarMaxAttempts)
+	if err := e.SendProactiveNotification(ctx, msg); err != nil {
+		slog.Warn("alertPendingCalendarFailures: failed to send", "error", err)
 	}
 }
 
@@ -627,42 +668,6 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-func calendarTarget(event model.PersonalEvent) (calendarID, googleEventID string) {
-	calendarID = strings.TrimSpace(event.Kalender)
-	if calendarID == "" || strings.EqualFold(calendarID, "Main") {
-		calendarID = "primary"
-	}
-
-	googleEventID = event.EventID
-	if calendarID != "primary" {
-		prefix := calendarID + ":"
-		googleEventID = strings.TrimPrefix(googleEventID, prefix)
-	}
-	return calendarID, googleEventID
-}
-
-func storedCalendarEventID(calendarID, googleEventID string) string {
-	if calendarID == "" || calendarID == "primary" {
-		return googleEventID
-	}
-	return calendarID + ":" + googleEventID
-}
-
-func splitCalendarIDs(raw string) []string {
-	parts := strings.Split(raw, ",")
-	calendarIDs := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			calendarIDs = append(calendarIDs, part)
-		}
-	}
-	if len(calendarIDs) == 0 {
-		return []string{"primary"}
-	}
-	return calendarIDs
 }
 
 func resolvedPersonalEventStatus(event model.PersonalEvent) string {

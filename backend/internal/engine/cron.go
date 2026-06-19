@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -12,6 +13,10 @@ type CronJob struct {
 	Name     string
 	Interval time.Duration
 	RunFunc  func(ctx context.Context) error
+	// RunOnStart runs the job once shortly after boot (with a small jitter)
+	// instead of waiting a full interval. Set this on idempotent sync jobs so a
+	// deploy/restart doesn't leave data stale for up to a day.
+	RunOnStart bool
 }
 
 // CronScheduler manages background cron jobs as goroutines.
@@ -61,6 +66,19 @@ func (s *CronScheduler) Run(ctx context.Context) {
 
 func (s *CronScheduler) runJob(ctx context.Context, job CronJob) {
 	slog.Info("⏰ cron job started", "name", job.Name, "interval", job.Interval)
+
+	if job.RunOnStart {
+		// Small per-job jitter so all startup syncs don't fire at once.
+		jitter := time.Duration(rand.Intn(8000)) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			slog.Info("⏹ cron job stopped", "name", job.Name)
+			return
+		case <-time.After(jitter):
+			s.execJob(ctx, job)
+		}
+	}
+
 	ticker := time.NewTicker(job.Interval)
 	defer ticker.Stop()
 
@@ -70,12 +88,16 @@ func (s *CronScheduler) runJob(ctx context.Context, job CronJob) {
 			slog.Info("⏹ cron job stopped", "name", job.Name)
 			return
 		case <-ticker.C:
-			start := time.Now()
-			if err := job.RunFunc(ctx); err != nil {
-				slog.Warn("❌ cron job failed", "name", job.Name, "error", err, "took", time.Since(start))
-			} else {
-				slog.Debug("✅ cron job done", "name", job.Name, "took", time.Since(start))
-			}
+			s.execJob(ctx, job)
 		}
+	}
+}
+
+func (s *CronScheduler) execJob(ctx context.Context, job CronJob) {
+	start := time.Now()
+	if err := job.RunFunc(ctx); err != nil {
+		slog.Warn("❌ cron job failed", "name", job.Name, "error", err, "took", time.Since(start))
+	} else {
+		slog.Debug("✅ cron job done", "name", job.Name, "took", time.Since(start))
 	}
 }
