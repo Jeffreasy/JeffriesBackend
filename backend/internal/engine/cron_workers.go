@@ -346,41 +346,41 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 		events := personalSync.Events
 
 		evStore := store.NewPersonalEventStore(db)
-		upserted := 0
+		peEvents := make([]model.PersonalEvent, 0, len(events))
 		for _, e := range events {
-			startTijd := strPtr(e.StartTijd)
-			eindTijd := strPtr(e.EindTijd)
-			locatie := strPtr(e.Locatie)
-			beschrijving := strPtr(e.Beschrijving)
-			symbol := strPtr(e.Symbol)
-			businessContextType := strPtr(e.BusinessContextType)
-			businessContextID := strPtr(e.BusinessContextID)
-			businessContextTitle := strPtr(e.BusinessContextTitle)
-
-			pe := model.PersonalEvent{
+			peEvents = append(peEvents, model.PersonalEvent{
 				UserID:               e.UserID,
 				EventID:              e.EventID,
 				Titel:                e.Titel,
 				StartDatum:           e.StartDatum,
-				StartTijd:            startTijd,
+				StartTijd:            strPtr(e.StartTijd),
 				EindDatum:            e.EindDatum,
-				EindTijd:             eindTijd,
+				EindTijd:             strPtr(e.EindTijd),
 				Heledag:              e.Heledag,
-				Locatie:              locatie,
-				Beschrijving:         beschrijving,
-				Symbol:               symbol,
-				BusinessContextType:  businessContextType,
-				BusinessContextID:    businessContextID,
-				BusinessContextTitle: businessContextTitle,
+				Locatie:              strPtr(e.Locatie),
+				Beschrijving:         strPtr(e.Beschrijving),
+				Symbol:               strPtr(e.Symbol),
+				BusinessContextType:  strPtr(e.BusinessContextType),
+				BusinessContextID:    strPtr(e.BusinessContextID),
+				BusinessContextTitle: strPtr(e.BusinessContextTitle),
 				Status:               e.Status,
 				Kalender:             e.Kalender,
+			})
+		}
+
+		// Batch upsert in one transaction; fall back to per-row so a single bad
+		// row (e.g. an over-length field) doesn't block the whole sync.
+		upserted, err := evStore.BulkUpsertSynced(ctx, peEvents)
+		if err != nil {
+			slog.Warn("personal events batch upsert failed, falling back to per-row", "error", err)
+			upserted = 0
+			for _, pe := range peEvents {
+				if e := evStore.UpsertSynced(ctx, pe); e != nil {
+					slog.Warn("personal event upsert failed", "eventId", pe.EventID, "error", e)
+					continue
+				}
+				upserted++
 			}
-			err := evStore.UpsertSynced(ctx, pe)
-			if err != nil {
-				slog.Warn("personal event upsert failed", "eventId", e.EventID, "error", err)
-				continue
-			}
-			upserted++
 		}
 
 		pruned, err := evStore.MarkMissingSyncedInDateRange(
@@ -407,79 +407,84 @@ func cronPersonalEventsSync(client *google.OAuthClient, db *store.DB, cfg CronCo
 const pendingCalendarMaxAttempts = 5
 
 func (e *Engine) cronPendingCalendar(client *google.OAuthClient, cfg CronConfig) func(ctx context.Context) error {
-	evStore := store.NewPersonalEventStore(e.db)
-
 	return func(ctx context.Context) error {
 		slog.Info("📅 process-pending-calendar: starting")
-
-		events, err := evStore.ListPendingCalendar(ctx, cfg.UserID, 50)
+		processed, deadLettered, err := e.processPendingCalendarOps(ctx, client, cfg.UserID)
 		if err != nil {
-			return err
+			return err // re-auth: wrapGoogleCron fires the de-duped alert
 		}
-
-		processed := 0
-		deadLettered := 0
-		for _, event := range events {
-			calendarID, googleEventID := google.ResolveCalendarTarget(event)
-			nextStatus := resolvedPersonalEventStatus(event)
-
-			var opErr error
-			switch event.Status {
-			case store.PersonalEventStatusPendingCreate:
-				createdID, cerr := google.CreatePersonalEvent(ctx, client, calendarID, event)
-				if cerr != nil {
-					opErr = cerr
-					break
-				}
-				storedID := google.StoredCalendarEventID(calendarID, createdID)
-				opErr = evStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedID, nextStatus)
-			case store.PersonalEventStatusPendingUpdate:
-				if uerr := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); uerr != nil {
-					opErr = uerr
-					break
-				}
-				opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus)
-			case store.PersonalEventStatusPendingDelete:
-				if derr := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); derr != nil {
-					opErr = derr
-					break
-				}
-				opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted)
-			default:
-				continue
-			}
-
-			if opErr != nil {
-				// A token problem isn't the op's fault — abort the run and let
-				// wrapGoogleCron fire the de-duped re-auth alert, without burning
-				// this op's retry budget.
-				if errors.Is(opErr, google.ErrGoogleReauthRequired) {
-					return opErr
-				}
-				deadLetter, recErr := evStore.RecordPendingFailure(ctx, event.UserID, event.EventID, opErr.Error(), pendingCalendarMaxAttempts)
-				if recErr != nil {
-					slog.Warn("pending calendar failure bookkeeping failed", "eventId", event.EventID, "error", recErr)
-				}
-				if deadLetter {
-					deadLettered++
-					slog.Warn("pending calendar op dead-lettered after max attempts",
-						"eventId", event.EventID, "status", event.Status, "error", opErr)
-				} else {
-					slog.Warn("pending calendar op failed (will retry)",
-						"eventId", event.EventID, "status", event.Status, "error", opErr)
-				}
-				continue
-			}
-			processed++
-		}
-
 		if deadLettered > 0 {
 			e.alertPendingCalendarFailures(ctx, deadLettered)
 		}
-
-		slog.Info("📅 process-pending-calendar: done", "pending", len(events), "processed", processed, "deadLettered", deadLettered)
+		slog.Info("📅 process-pending-calendar: done", "processed", processed, "deadLettered", deadLettered)
 		return nil
 	}
+}
+
+// processPendingCalendarOps pushes all pending personal-event ops to Google with
+// retry-cap/dead-letter bookkeeping. Shared by the cron and the Telegram /sync
+// path so error handling can't drift. It returns the processed and dead-lettered
+// counts, and a non-nil error only for a re-auth (token) failure — which aborts
+// the batch so the op's retry budget isn't burned on a token problem.
+func (e *Engine) processPendingCalendarOps(ctx context.Context, client *google.OAuthClient, userID string) (processed, deadLettered int, err error) {
+	evStore := store.NewPersonalEventStore(e.db)
+	events, listErr := evStore.ListPendingCalendar(ctx, userID, 50)
+	if listErr != nil {
+		return 0, 0, listErr
+	}
+
+	for _, event := range events {
+		calendarID, googleEventID := google.ResolveCalendarTarget(event)
+		nextStatus := resolvedPersonalEventStatus(event)
+
+		var opErr error
+		switch event.Status {
+		case store.PersonalEventStatusPendingCreate:
+			createdID, cerr := google.CreatePersonalEvent(ctx, client, calendarID, event)
+			if cerr != nil {
+				opErr = cerr
+				break
+			}
+			storedID := google.StoredCalendarEventID(calendarID, createdID)
+			opErr = evStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, storedID, nextStatus)
+		case store.PersonalEventStatusPendingUpdate:
+			if uerr := google.UpdatePersonalEvent(ctx, client, calendarID, googleEventID, event); uerr != nil {
+				opErr = uerr
+				break
+			}
+			opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, nextStatus)
+		case store.PersonalEventStatusPendingDelete:
+			if derr := google.DeletePersonalEvent(ctx, client, calendarID, googleEventID); derr != nil {
+				opErr = derr
+				break
+			}
+			opErr = evStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted)
+		default:
+			continue
+		}
+
+		if opErr != nil {
+			if errors.Is(opErr, google.ErrGoogleReauthRequired) {
+				return processed, deadLettered, opErr
+			}
+			deadLetter, recErr := evStore.RecordPendingFailure(ctx, event.UserID, event.EventID, opErr.Error(), pendingCalendarMaxAttempts)
+			if recErr != nil {
+				slog.Warn("pending calendar failure bookkeeping failed", "eventId", event.EventID, "error", recErr)
+			}
+			if deadLetter {
+				deadLettered++
+				slog.Warn("pending calendar op dead-lettered after max attempts",
+					"eventId", event.EventID, "status", event.Status, "error", opErr)
+			} else {
+				slog.Warn("pending calendar op failed (will retry)",
+					"eventId", event.EventID, "status", event.Status, "error", opErr)
+			}
+			continue
+		}
+		processed++
+	}
+
+	return processed, deadLettered, nil
 }
 
 // alertPendingCalendarFailures sends a single de-duplicated notification (max

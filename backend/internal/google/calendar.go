@@ -2,10 +2,13 @@ package google
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -37,6 +40,7 @@ type calendarDateTime struct {
 }
 
 type calendarEventWrite struct {
+	ID          string           `json:"id,omitempty"`
 	Summary     string           `json:"summary"`
 	Description string           `json:"description,omitempty"`
 	Location    string           `json:"location,omitempty"`
@@ -303,21 +307,45 @@ func fetchCalendarEvents(ctx context.Context, client *OAuthClient, calendarID st
 }
 
 // CreatePersonalEvent creates a Google Calendar event and returns the Google event id.
+//
+// It supplies a deterministic, client-side event id derived from the local
+// pending id, which makes the insert idempotent: if a previous attempt created
+// the event in Google but failed to update the local row, the retry returns HTTP
+// 409 (conflict) instead of creating a duplicate, and we treat that as success.
 func CreatePersonalEvent(ctx context.Context, client *OAuthClient, calendarID string, event model.PersonalEvent) (string, error) {
 	payload, err := personalEventPayload(event)
 	if err != nil {
 		return "", err
 	}
+	desiredID := deterministicEventID(event.EventID)
+	payload.ID = desiredID
 
 	u := fmt.Sprintf("%s/calendars/%s/events", calendarBase, url.PathEscape(calendarID))
 	var created calendarEvent
 	if err := client.SendJSON(ctx, "POST", u, payload, &created); err != nil {
+		if StatusCode(err) == http.StatusConflict {
+			// Event already exists from a prior attempt — our id is authoritative.
+			return desiredID, nil
+		}
 		return "", err
 	}
 	if created.ID == "" {
-		return "", fmt.Errorf("google calendar returned empty event id")
+		return desiredID, nil
 	}
 	return created.ID, nil
+}
+
+// deterministicEventID maps a local pending event id to a stable Google Calendar
+// event id. Google requires base32hex (lowercase a-v + 0-9, length 5–1024); a
+// hex SHA-256 is a valid subset, so the same local id always yields the same
+// remote id, giving idempotent inserts. Falls back to empty (Google generates an
+// id) when there is no local id to key on.
+func deterministicEventID(localID string) string {
+	if localID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(localID))
+	return hex.EncodeToString(sum[:])
 }
 
 // UpdatePersonalEvent patches a Google Calendar event in place.

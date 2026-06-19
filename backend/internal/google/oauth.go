@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +20,39 @@ import (
 // (Google returns invalid_grant). Callers can errors.Is() this to surface a
 // single actionable "re-authenticate" message instead of a generic error.
 var ErrGoogleReauthRequired = errors.New("google re-authentication required (refresh token invalid_grant)")
+
+// APIError is returned for non-2xx Google API responses and exposes the HTTP
+// status so callers can branch on it (e.g. a 404 expired Gmail historyId, which
+// is expected and warrants a full resync, versus a transient 5xx/429).
+type APIError struct {
+	Method string
+	URL    string
+	Status int
+	Body   string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("%s %s: HTTP %d — %s", e.Method, e.URL, e.Status, e.Body)
+}
+
+// StatusCode extracts the HTTP status from a Google APIError anywhere in the
+// error chain, or 0 if the error is not an APIError.
+func StatusCode(err error) int {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status
+	}
+	return 0
+}
+
+func isRetryableStatus(status int) bool {
+	return status == http.StatusTooManyRequests || (status >= 500 && status <= 599)
+}
+
+const (
+	maxGetRetries  = 3
+	retryBaseDelay = 400 * time.Millisecond
+)
 
 // OAuthClient manages Google OAuth2 token refresh and authenticated HTTP calls.
 type OAuthClient struct {
@@ -136,19 +171,41 @@ func (c *OAuthClient) Do(ctx context.Context, method, url string, body io.Reader
 }
 
 // GetJSON performs a GET request and decodes the JSON response into result.
+// Transient failures (HTTP 429/5xx) are retried with bounded exponential backoff
+// plus jitter, since GETs are idempotent. Non-retryable statuses return an
+// *APIError so callers can branch on the status code.
 func (c *OAuthClient) GetJSON(ctx context.Context, url string, result any) error {
-	resp, err := c.Do(ctx, "GET", url, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 0; attempt <= maxGetRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay*time.Duration(1<<(attempt-1)) + time.Duration(rand.Int63n(int64(retryBaseDelay)))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("GET %s: HTTP %d — %s", url, resp.StatusCode, string(body))
-	}
+		resp, err := c.Do(ctx, "GET", url, nil)
+		if err != nil {
+			// Token errors (incl. invalid_grant) are not retryable here.
+			return err
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-	return json.Unmarshal(body, result)
+		if resp.StatusCode == http.StatusOK {
+			return json.Unmarshal(body, result)
+		}
+
+		apiErr := &APIError{Method: "GET", URL: url, Status: resp.StatusCode, Body: string(body)}
+		if !isRetryableStatus(resp.StatusCode) {
+			return apiErr
+		}
+		lastErr = apiErr
+		slog.Warn("google GET transient error, retrying", "url", url, "status", resp.StatusCode, "attempt", attempt+1)
+	}
+	return lastErr
 }
 
 // SendJSON performs an authenticated JSON request and decodes an optional JSON response.
@@ -170,7 +227,9 @@ func (c *OAuthClient) SendJSON(ctx context.Context, method, url string, payload 
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: HTTP %d — %s", method, url, resp.StatusCode, string(respBody))
+		// No retry on writes: a retried POST could duplicate a created event.
+		// Idempotency is handled by callers supplying a deterministic event id.
+		return &APIError{Method: method, URL: url, Status: resp.StatusCode, Body: string(respBody)}
 	}
 	if result == nil || len(respBody) == 0 {
 		return nil

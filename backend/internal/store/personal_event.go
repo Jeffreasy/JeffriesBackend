@@ -171,25 +171,26 @@ func (s *PersonalEventStore) Upsert(ctx context.Context, e model.PersonalEvent) 
 	return err
 }
 
-func (s *PersonalEventStore) UpsertSynced(ctx context.Context, e model.PersonalEvent) error {
-	if e.ID == uuid.Nil {
-		e.ID = uuid.New()
-	}
-	_, err := s.db.Pool.Exec(ctx,
-		`INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,symbol,business_context_type,business_context_id,business_context_title,status,kalender)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-		 ON CONFLICT (user_id, event_id) DO UPDATE SET
-		    titel=EXCLUDED.titel, start_datum=EXCLUDED.start_datum, start_tijd=EXCLUDED.start_tijd,
-		    eind_datum=EXCLUDED.eind_datum, eind_tijd=EXCLUDED.eind_tijd, heledag=EXCLUDED.heledag,
-		    locatie=EXCLUDED.locatie, beschrijving=EXCLUDED.beschrijving,
-		    conflict_met_dienst=EXCLUDED.conflict_met_dienst,
-		    symbol=COALESCE(EXCLUDED.symbol, personal_events.symbol),
-		    business_context_type=COALESCE(EXCLUDED.business_context_type, personal_events.business_context_type),
-		    business_context_id=COALESCE(EXCLUDED.business_context_id, personal_events.business_context_id),
-		    business_context_title=COALESCE(EXCLUDED.business_context_title, personal_events.business_context_title),
-		    status=EXCLUDED.status,
-		    kalender=EXCLUDED.kalender
-		  WHERE personal_events.status NOT IN ($19, $20, $21, $22)`,
+// upsertSyncedSQL upserts a synced personal event without clobbering rows that
+// are in a pending/failed state, and COALESCEs metadata so a metadata-less sync
+// row does not wipe existing context. Shared by UpsertSynced and BulkUpsertSynced.
+const upsertSyncedSQL = `INSERT INTO personal_events (id,user_id,event_id,titel,start_datum,start_tijd,eind_datum,eind_tijd,heledag,locatie,beschrijving,conflict_met_dienst,symbol,business_context_type,business_context_id,business_context_title,status,kalender)
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+	 ON CONFLICT (user_id, event_id) DO UPDATE SET
+	    titel=EXCLUDED.titel, start_datum=EXCLUDED.start_datum, start_tijd=EXCLUDED.start_tijd,
+	    eind_datum=EXCLUDED.eind_datum, eind_tijd=EXCLUDED.eind_tijd, heledag=EXCLUDED.heledag,
+	    locatie=EXCLUDED.locatie, beschrijving=EXCLUDED.beschrijving,
+	    conflict_met_dienst=EXCLUDED.conflict_met_dienst,
+	    symbol=COALESCE(EXCLUDED.symbol, personal_events.symbol),
+	    business_context_type=COALESCE(EXCLUDED.business_context_type, personal_events.business_context_type),
+	    business_context_id=COALESCE(EXCLUDED.business_context_id, personal_events.business_context_id),
+	    business_context_title=COALESCE(EXCLUDED.business_context_title, personal_events.business_context_title),
+	    status=EXCLUDED.status,
+	    kalender=EXCLUDED.kalender
+	  WHERE personal_events.status NOT IN ($19, $20, $21, $22)`
+
+func upsertSyncedArgs(e model.PersonalEvent) []any {
+	return []any{
 		e.ID, e.UserID, e.EventID, e.Titel, e.StartDatum, e.StartTijd,
 		e.EindDatum, e.EindTijd, e.Heledag, e.Locatie, e.Beschrijving,
 		e.ConflictMetDienst, e.Symbol, e.BusinessContextType, e.BusinessContextID,
@@ -197,8 +198,47 @@ func (s *PersonalEventStore) UpsertSynced(ctx context.Context, e model.PersonalE
 		PersonalEventStatusPendingCreate,
 		PersonalEventStatusPendingUpdate,
 		PersonalEventStatusPendingDelete,
-		PersonalEventStatusPendingFailed)
+		PersonalEventStatusPendingFailed,
+	}
+}
+
+func (s *PersonalEventStore) UpsertSynced(ctx context.Context, e model.PersonalEvent) error {
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	_, err := s.db.Pool.Exec(ctx, upsertSyncedSQL, upsertSyncedArgs(e)...)
 	return err
+}
+
+// BulkUpsertSynced upserts many synced personal events in a single transaction
+// (all-or-nothing), avoiding the per-row round trips and partial-write state of
+// looping UpsertSynced. Callers should fall back to per-row on error so a single
+// bad row does not block the whole sync. Returns the number of rows written.
+func (s *PersonalEventStore) BulkUpsertSynced(ctx context.Context, events []model.PersonalEvent) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	count := 0
+	for _, e := range events {
+		if e.ID == uuid.Nil {
+			e.ID = uuid.New()
+		}
+		tag, err := tx.Exec(ctx, upsertSyncedSQL, upsertSyncedArgs(e)...)
+		if err != nil {
+			return 0, err
+		}
+		count += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // RecordPendingFailure increments the retry counter for a failing pending

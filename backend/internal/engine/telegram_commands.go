@@ -282,31 +282,12 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	go func() {
 		defer wg.Done()
 
-		// 1. Process pending calendar operations in DB first
-		peStore := store.NewPersonalEventStore(e.db)
-		pending, err := peStore.ListPendingCalendar(ctx, userID, 50)
-		if err == nil {
-			for _, event := range pending {
-				calendarID, googleEventID := google.ResolveCalendarTarget(event)
-
-				// Map pending states
-				switch event.Status {
-				case store.PersonalEventStatusPendingCreate:
-					createdID, err := google.CreatePersonalEvent(ctx, oauthClient, calendarID, event)
-					if err == nil {
-						targetID := google.StoredCalendarEventID(calendarID, createdID)
-						_ = peStore.ReplaceEventIDAndStatus(ctx, event.UserID, event.EventID, targetID, store.PersonalEventStatusUpcoming)
-					}
-				case store.PersonalEventStatusPendingUpdate:
-					if err := google.UpdatePersonalEvent(ctx, oauthClient, calendarID, googleEventID, event); err == nil {
-						_ = peStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusUpcoming)
-					}
-				case store.PersonalEventStatusPendingDelete:
-					if err := google.DeletePersonalEvent(ctx, oauthClient, calendarID, googleEventID); err == nil {
-						_ = peStore.UpdateStatus(ctx, event.UserID, event.EventID, store.PersonalEventStatusDeleted)
-					}
-				}
-			}
+		// 1. Process pending calendar operations first — shared retry-aware path
+		//    (records failures + dead-letters instead of silently dropping them).
+		if _, deadLettered, perr := e.processPendingCalendarOps(ctx, oauthClient, userID); perr != nil {
+			slog.Warn("telegram sync: pending calendar processing aborted", "error", perr)
+		} else if deadLettered > 0 {
+			e.alertPendingCalendarFailures(ctx, deadLettered)
 		}
 
 		// 2. Sync Google Calendar shifts
@@ -370,66 +351,39 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 		personalErr = err
 		if personalErr == nil {
 			personalEvents = personalSync.Events
+			peStore := store.NewPersonalEventStore(e.db)
+			ptr := func(s string) *string {
+				if s == "" {
+					return nil
+				}
+				return &s
+			}
+			peEvents := make([]model.PersonalEvent, 0, len(personalEvents))
 			for _, pe := range personalEvents {
-				startTijd := pe.StartTijd
-				var pStartTijd *string
-				if startTijd != "" {
-					pStartTijd = &startTijd
-				}
-				eindTijd := pe.EindTijd
-				var pEindTijd *string
-				if eindTijd != "" {
-					pEindTijd = &eindTijd
-				}
-				locatie := pe.Locatie
-				var pLocatie *string
-				if locatie != "" {
-					pLocatie = &locatie
-				}
-				beschrijving := pe.Beschrijving
-				var pBeschrijving *string
-				if beschrijving != "" {
-					pBeschrijving = &beschrijving
-				}
-				symbol := pe.Symbol
-				var pSymbol *string
-				if symbol != "" {
-					pSymbol = &symbol
-				}
-				businessContextType := pe.BusinessContextType
-				var pBusinessContextType *string
-				if businessContextType != "" {
-					pBusinessContextType = &businessContextType
-				}
-				businessContextID := pe.BusinessContextID
-				var pBusinessContextID *string
-				if businessContextID != "" {
-					pBusinessContextID = &businessContextID
-				}
-				businessContextTitle := pe.BusinessContextTitle
-				var pBusinessContextTitle *string
-				if businessContextTitle != "" {
-					pBusinessContextTitle = &businessContextTitle
-				}
-
-				_ = peStore.UpsertSynced(ctx, model.PersonalEvent{
+				peEvents = append(peEvents, model.PersonalEvent{
 					UserID:               userID,
 					EventID:              pe.EventID,
 					Titel:                pe.Titel,
 					StartDatum:           pe.StartDatum,
-					StartTijd:            pStartTijd,
+					StartTijd:            ptr(pe.StartTijd),
 					EindDatum:            pe.EindDatum,
-					EindTijd:             pEindTijd,
+					EindTijd:             ptr(pe.EindTijd),
 					Heledag:              pe.Heledag,
-					Locatie:              pLocatie,
-					Beschrijving:         pBeschrijving,
-					Symbol:               pSymbol,
-					BusinessContextType:  pBusinessContextType,
-					BusinessContextID:    pBusinessContextID,
-					BusinessContextTitle: pBusinessContextTitle,
+					Locatie:              ptr(pe.Locatie),
+					Beschrijving:         ptr(pe.Beschrijving),
+					Symbol:               ptr(pe.Symbol),
+					BusinessContextType:  ptr(pe.BusinessContextType),
+					BusinessContextID:    ptr(pe.BusinessContextID),
+					BusinessContextTitle: ptr(pe.BusinessContextTitle),
 					Status:               pe.Status,
 					Kalender:             pe.Kalender,
 				})
+			}
+			if _, bulkErr := peStore.BulkUpsertSynced(ctx, peEvents); bulkErr != nil {
+				slog.Warn("telegram personal events batch upsert failed, falling back to per-row", "error", bulkErr)
+				for _, pe := range peEvents {
+					_ = peStore.UpsertSynced(ctx, pe)
+				}
 			}
 			personalPruned, personalErr = peStore.MarkMissingSyncedInDateRange(
 				ctx,

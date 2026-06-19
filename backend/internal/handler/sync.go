@@ -125,74 +125,44 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 
 	// Update personal events in db
 	peStore := store.NewPersonalEventStore(h.db)
-	personalWriteFailed := false
+	ptr := func(s string) *string {
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+	peEvents := make([]model.PersonalEvent, 0, len(personalEvents))
 	for _, pe := range personalEvents {
-		startTijd := pe.StartTijd
-		var pStartTijd *string
-		if startTijd != "" {
-			pStartTijd = &startTijd
-		}
-
-		eindTijd := pe.EindTijd
-		var pEindTijd *string
-		if eindTijd != "" {
-			pEindTijd = &eindTijd
-		}
-
-		locatie := pe.Locatie
-		var pLocatie *string
-		if locatie != "" {
-			pLocatie = &locatie
-		}
-
-		beschrijving := pe.Beschrijving
-		var pBeschrijving *string
-		if beschrijving != "" {
-			pBeschrijving = &beschrijving
-		}
-
-		symbol := pe.Symbol
-		var pSymbol *string
-		if symbol != "" {
-			pSymbol = &symbol
-		}
-		businessContextType := pe.BusinessContextType
-		var pBusinessContextType *string
-		if businessContextType != "" {
-			pBusinessContextType = &businessContextType
-		}
-		businessContextID := pe.BusinessContextID
-		var pBusinessContextID *string
-		if businessContextID != "" {
-			pBusinessContextID = &businessContextID
-		}
-		businessContextTitle := pe.BusinessContextTitle
-		var pBusinessContextTitle *string
-		if businessContextTitle != "" {
-			pBusinessContextTitle = &businessContextTitle
-		}
-
-		err = peStore.UpsertSynced(ctx, model.PersonalEvent{
+		peEvents = append(peEvents, model.PersonalEvent{
 			UserID:               userID,
 			EventID:              pe.EventID,
 			Titel:                pe.Titel,
 			StartDatum:           pe.StartDatum,
-			StartTijd:            pStartTijd,
+			StartTijd:            ptr(pe.StartTijd),
 			EindDatum:            pe.EindDatum,
-			EindTijd:             pEindTijd,
+			EindTijd:             ptr(pe.EindTijd),
 			Heledag:              pe.Heledag,
-			Locatie:              pLocatie,
-			Beschrijving:         pBeschrijving,
-			Symbol:               pSymbol,
-			BusinessContextType:  pBusinessContextType,
-			BusinessContextID:    pBusinessContextID,
-			BusinessContextTitle: pBusinessContextTitle,
+			Locatie:              ptr(pe.Locatie),
+			Beschrijving:         ptr(pe.Beschrijving),
+			Symbol:               ptr(pe.Symbol),
+			BusinessContextType:  ptr(pe.BusinessContextType),
+			BusinessContextID:    ptr(pe.BusinessContextID),
+			BusinessContextTitle: ptr(pe.BusinessContextTitle),
 			Status:               pe.Status,
 			Kalender:             pe.Kalender,
 		})
-		if err != nil {
-			personalWriteFailed = true
-			slog.Error("Failed to upsert personal event", "error", err)
+	}
+
+	// Batch upsert in one transaction; fall back to per-row so one bad row
+	// doesn't block the rest. prune is skipped if any row ultimately failed.
+	personalWriteFailed := false
+	if _, bulkErr := peStore.BulkUpsertSynced(ctx, peEvents); bulkErr != nil {
+		slog.Warn("personal events batch upsert failed, falling back to per-row", "error", bulkErr)
+		for _, pe := range peEvents {
+			if e := peStore.UpsertSynced(ctx, pe); e != nil {
+				personalWriteFailed = true
+				slog.Error("Failed to upsert personal event", "error", e)
+			}
 		}
 	}
 	personalPruned := 0

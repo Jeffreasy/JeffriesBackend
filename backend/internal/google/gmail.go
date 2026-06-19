@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,11 +18,13 @@ type gmailListResponse struct {
 	Messages []struct {
 		ID string `json:"id"`
 	} `json:"messages"`
+	NextPageToken string `json:"nextPageToken"`
 }
 
 type gmailHistoryResponse struct {
-	History   []gmailHistoryEntry `json:"history"`
-	HistoryID string              `json:"historyId"`
+	History       []gmailHistoryEntry `json:"history"`
+	HistoryID     string              `json:"historyId"`
+	NextPageToken string              `json:"nextPageToken"`
 }
 
 type gmailHistoryEntry struct {
@@ -95,50 +98,81 @@ type GmailSyncResult struct {
 }
 
 const (
-	gmailBase      = "https://gmail.googleapis.com/gmail/v1/users/me"
-	maxInitialSync = 200
+	gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
+	// maxInitialSync caps how many of the newest messages a full sync captures.
+	// A full sync runs only on first sync or expired-history fallback; this is an
+	// explicit, documented bound rather than a silent single-page truncation.
+	maxInitialSync = 500
+	gmailPageSize  = 250
 	messageWorkers = 8
 )
 
 // SyncGmail performs incremental or full Gmail sync and returns parsed emails.
+//
+// A full sync only captures the newest maxInitialSync messages, so it is used
+// only when there is no historyId yet, or when the stored historyId has expired
+// (Gmail returns HTTP 404 — it retains history for a bounded window). Any other
+// incremental error (transient 5xx/429/network) is propagated so the cron simply
+// retries next tick instead of doing a wasteful, lossy full re-list.
 func SyncGmail(ctx context.Context, client *OAuthClient, userID, historyID string) (*GmailSyncResult, []ParsedEmail, string, error) {
 	if historyID != "" {
 		result, emails, newHistID, err := incrementalGmailSync(ctx, client, userID, historyID)
 		if err == nil {
 			return result, emails, newHistID, nil
 		}
-		slog.Warn("incremental sync failed, falling back to full", "error", err)
+		if StatusCode(err) != http.StatusNotFound {
+			return nil, nil, "", err
+		}
+		slog.Warn("gmail historyId expired (404), falling back to full sync", "error", err)
 	}
 
 	return fullGmailSync(ctx, client, userID)
 }
 
 func incrementalGmailSync(ctx context.Context, client *OAuthClient, userID, historyID string) (*GmailSyncResult, []ParsedEmail, string, error) {
-	params := url.Values{
-		"startHistoryId": {historyID},
-		"historyTypes":   {"messageAdded", "labelAdded", "labelRemoved"},
-	}
-
-	var histResp gmailHistoryResponse
-	if err := client.GetJSON(ctx, gmailBase+"/history?"+params.Encode(), &histResp); err != nil {
-		return nil, nil, "", fmt.Errorf("history list: %w", err)
-	}
-
 	changedIDs := make(map[string]bool)
-	for _, h := range histResp.History {
-		for _, m := range h.MessagesAdded {
-			changedIDs[m.Message.ID] = true
+	newHistoryID := ""
+	pageToken := ""
+
+	// Paginate the full history: dropping later pages while still advancing the
+	// historyId would silently lose changes that accumulated between ticks.
+	for {
+		params := url.Values{
+			"startHistoryId": {historyID},
+			"historyTypes":   {"messageAdded", "labelAdded", "labelRemoved"},
 		}
-		for _, m := range h.LabelsAdded {
-			changedIDs[m.Message.ID] = true
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
 		}
-		for _, m := range h.LabelsRemoved {
-			changedIDs[m.Message.ID] = true
+
+		var histResp gmailHistoryResponse
+		if err := client.GetJSON(ctx, gmailBase+"/history?"+params.Encode(), &histResp); err != nil {
+			return nil, nil, "", fmt.Errorf("history list: %w", err)
+		}
+
+		for _, h := range histResp.History {
+			for _, m := range h.MessagesAdded {
+				changedIDs[m.Message.ID] = true
+			}
+			for _, m := range h.LabelsAdded {
+				changedIDs[m.Message.ID] = true
+			}
+			for _, m := range h.LabelsRemoved {
+				changedIDs[m.Message.ID] = true
+			}
+		}
+		if histResp.HistoryID != "" {
+			newHistoryID = histResp.HistoryID
+		}
+
+		pageToken = histResp.NextPageToken
+		if pageToken == "" {
+			break
 		}
 	}
 
 	if len(changedIDs) == 0 {
-		return &GmailSyncResult{Synced: 0, Mode: "incremental"}, nil, histResp.HistoryID, nil
+		return &GmailSyncResult{Synced: 0, Mode: "incremental"}, nil, newHistoryID, nil
 	}
 
 	ids := make([]string, 0, len(changedIDs))
@@ -151,18 +185,35 @@ func incrementalGmailSync(ctx context.Context, client *OAuthClient, userID, hist
 		return nil, nil, "", err
 	}
 
-	return &GmailSyncResult{Synced: len(emails), Mode: "incremental"}, emails, histResp.HistoryID, nil
+	return &GmailSyncResult{Synced: len(emails), Mode: "incremental"}, emails, newHistoryID, nil
 }
 
 func fullGmailSync(ctx context.Context, client *OAuthClient, userID string) (*GmailSyncResult, []ParsedEmail, string, error) {
-	var listResp gmailListResponse
-	if err := client.GetJSON(ctx, fmt.Sprintf("%s/messages?maxResults=%d", gmailBase, maxInitialSync), &listResp); err != nil {
-		return nil, nil, "", fmt.Errorf("messages list: %w", err)
-	}
+	ids := make([]string, 0, maxInitialSync)
+	pageToken := ""
 
-	ids := make([]string, len(listResp.Messages))
-	for i, m := range listResp.Messages {
-		ids[i] = m.ID
+	for len(ids) < maxInitialSync {
+		params := url.Values{"maxResults": {strconv.Itoa(gmailPageSize)}}
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+
+		var listResp gmailListResponse
+		if err := client.GetJSON(ctx, gmailBase+"/messages?"+params.Encode(), &listResp); err != nil {
+			return nil, nil, "", fmt.Errorf("messages list: %w", err)
+		}
+
+		for _, m := range listResp.Messages {
+			ids = append(ids, m.ID)
+			if len(ids) >= maxInitialSync {
+				break
+			}
+		}
+
+		pageToken = listResp.NextPageToken
+		if pageToken == "" {
+			break
+		}
 	}
 
 	emails, err := fetchMessageBatch(ctx, client, userID, ids)

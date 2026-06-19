@@ -1,6 +1,8 @@
 package google
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
@@ -49,6 +51,41 @@ func TestStoredCalendarEventID(t *testing.T) {
 	_, id := ResolveCalendarTarget(model.PersonalEvent{Kalender: "work@x.com", EventID: stored})
 	if id != "evt1" {
 		t.Errorf("round-trip: got %q, want evt1", id)
+	}
+}
+
+func TestDeterministicEventID(t *testing.T) {
+	in := "ai-550e8400-e29b-41d4-a716-446655440000"
+	a := deterministicEventID(in)
+	if a != deterministicEventID(in) {
+		t.Fatal("not deterministic")
+	}
+	if len(a) < 5 || len(a) > 1024 {
+		t.Fatalf("length %d outside Google's 5..1024 range", len(a))
+	}
+	for _, r := range a { // Google requires base32hex: 0-9 and a-v
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'v')) {
+			t.Fatalf("invalid base32hex char %q in %q", r, a)
+		}
+	}
+	if deterministicEventID("") != "" {
+		t.Fatal("empty input must yield empty id")
+	}
+	if deterministicEventID("other-id") == a {
+		t.Fatal("distinct inputs must not collide")
+	}
+}
+
+func TestStatusCode(t *testing.T) {
+	apiErr := &APIError{Method: "GET", URL: "u", Status: 404, Body: "x"}
+	if StatusCode(apiErr) != 404 {
+		t.Error("direct APIError status not extracted")
+	}
+	if StatusCode(fmt.Errorf("history list: %w", apiErr)) != 404 {
+		t.Error("wrapped APIError status not extracted")
+	}
+	if StatusCode(errors.New("plain")) != 0 {
+		t.Error("non-APIError should yield 0")
 	}
 }
 
