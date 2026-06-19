@@ -53,7 +53,31 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensurePersonalEventRetrySchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure personal event retry schema: %w", err)
 	}
+	if err := ensureSyncRunsSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure sync runs schema: %w", err)
+	}
 	return nil
+}
+
+// ensureSyncRunsSchema creates the sync_runs audit table: one row per background
+// sync execution (gmail, schedule, personal, pending-calendar) so a history of
+// outcomes/latency/failures is queryable, not just the latest snapshot. Mirrors
+// migrations/026_sync_runs.up.sql.
+func ensureSyncRunsSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS sync_runs (
+    id          BIGSERIAL   PRIMARY KEY,
+    source      TEXT        NOT NULL,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    duration_ms INTEGER     NOT NULL DEFAULT 0,
+    ok          BOOLEAN     NOT NULL DEFAULT true,
+    error       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_runs_source_started ON sync_runs (source, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sync_runs_started ON sync_runs (started_at DESC);
+`)
+	return err
 }
 
 // ensurePersonalEventRetrySchema adds retry/dead-letter bookkeeping to

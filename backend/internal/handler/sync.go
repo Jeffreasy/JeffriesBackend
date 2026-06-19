@@ -452,8 +452,16 @@ func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 
 	personalLastSuccess := sqlTimeRFC3339(personalUpdated)
 
+	// Recent sync-run history (best-effort — never fail /sync/status over it).
+	recentRuns, runsErr := store.NewSyncRunStore(h.db).Recent(r.Context(), 20)
+	if runsErr != nil {
+		slog.Warn("sync status: recent runs query failed", "error", runsErr)
+		recentRuns = nil
+	}
+
 	JSON(w, http.StatusOK, map[string]any{
-		"userId": userID,
+		"userId":     userID,
+		"recentRuns": recentRuns,
 		"schedule": map[string]any{
 			"status":        syncSourceStatus(h.cfg.GoogleCalendarEnabled, googleConfigured, scheduleLastSuccess),
 			"enabled":       h.cfg.GoogleCalendarEnabled,

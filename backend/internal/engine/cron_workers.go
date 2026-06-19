@@ -76,6 +76,22 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		},
 	})
 
+	// Prune sync-run audit history so the table doesn't grow unbounded.
+	s.Register(CronJob{
+		Name:     "cleanup-sync-runs",
+		Interval: 24 * time.Hour,
+		RunFunc: func(ctx context.Context) error {
+			deleted, err := store.NewSyncRunStore(e.db).DeleteOlderThan(ctx, 14*24*time.Hour)
+			if err != nil {
+				return err
+			}
+			if deleted > 0 {
+				slog.Info("🗑️ cleanup-sync-runs: done", "deleted", deleted)
+			}
+			return nil
+		},
+	})
+
 	// ── Google OAuth client (shared by Gmail + Calendar + HTTP handlers) ──────
 	var oauthClient *google.OAuthClient
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRefreshToken != "" {
@@ -103,7 +119,7 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 			Name:       "sync-gmail",
 			Interval:   5 * time.Minute,
 			RunOnStart: true,
-			RunFunc:    e.wrapGoogleCron(cronGmailSync(oauthClient, e.db, cfg)),
+			RunFunc:    e.wrapGoogleCron(recordingCron(e.db, "gmail", cronGmailSync(oauthClient, e.db, cfg))),
 		})
 	}
 
@@ -113,21 +129,21 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 			Name:       "sync-schedule-daily",
 			Interval:   24 * time.Hour,
 			RunOnStart: true,
-			RunFunc:    e.wrapGoogleCron(cronScheduleSync(oauthClient, e.db, cfg)),
+			RunFunc:    e.wrapGoogleCron(recordingCron(e.db, "schedule", cronScheduleSync(oauthClient, e.db, cfg))),
 		})
 
 		s.Register(CronJob{
 			Name:       "sync-personal-events",
 			Interval:   1 * time.Hour,
 			RunOnStart: true,
-			RunFunc:    e.wrapGoogleCron(cronPersonalEventsSync(oauthClient, e.db, cfg)),
+			RunFunc:    e.wrapGoogleCron(recordingCron(e.db, "personal", cronPersonalEventsSync(oauthClient, e.db, cfg))),
 		})
 
 		s.Register(CronJob{
 			Name:       "process-pending-calendar",
 			Interval:   5 * time.Minute,
 			RunOnStart: true,
-			RunFunc:    e.wrapGoogleCron(e.cronPendingCalendar(oauthClient, cfg)),
+			RunFunc:    e.wrapGoogleCron(recordingCron(e.db, "pending-calendar", e.cronPendingCalendar(oauthClient, cfg))),
 		})
 	}
 
@@ -650,6 +666,37 @@ func cronTelegramHealthAlert(e *Engine, cfg CronConfig) func(ctx context.Context
 		}
 
 		return nil
+	}
+}
+
+// recordSyncRun persists one sync-run audit row (best-effort, detached ctx so it
+// isn't cancelled with an already-finishing request).
+func recordSyncRun(ctx context.Context, db *store.DB, run store.SyncRun) {
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := store.NewSyncRunStore(db).Record(logCtx, run); err != nil {
+		slog.Warn("sync_runs record failed", "source", run.Source, "error", err)
+	}
+}
+
+// recordingCron wraps a sync job so every run is timed and audited in sync_runs,
+// giving a queryable history of outcomes/latency instead of only the latest
+// freshness snapshot. The wrapped error is passed through unchanged.
+func recordingCron(db *store.DB, source string, inner func(ctx context.Context) error) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		start := time.Now()
+		err := inner(ctx)
+		run := store.SyncRun{
+			Source:     source,
+			StartedAt:  start,
+			DurationMs: int(time.Since(start).Milliseconds()),
+			OK:         err == nil,
+		}
+		if err != nil {
+			run.Error = err.Error()
+		}
+		recordSyncRun(ctx, db, run)
+		return err
 	}
 }
 
