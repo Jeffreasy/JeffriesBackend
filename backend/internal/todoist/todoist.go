@@ -254,8 +254,10 @@ func (c *Client) buildPayload(d Dienst) map[string]any {
 }
 
 func makeHash(d Dienst) string {
+	// Include title, shift type and duration so an edit to any of them changes the
+	// hash and re-syncs the existing Todoist task (they were previously ignored).
 	return strings.ReplaceAll(
-		fmt.Sprintf("%s|%s|%s|%s", d.StartDatum, d.StartTijd, d.EindTijd, d.Locatie),
+		fmt.Sprintf("%s|%s|%s|%s|%s|%s|%.2f", d.StartDatum, d.StartTijd, d.EindTijd, d.Locatie, d.Titel, d.ShiftType, d.Duur),
 		" ", "",
 	)
 }

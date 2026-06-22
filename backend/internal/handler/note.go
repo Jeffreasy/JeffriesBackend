@@ -19,6 +19,29 @@ type NoteHandler struct{ store *store.NoteStore }
 
 func NewNoteHandler(s *store.NoteStore) *NoteHandler { return &NoteHandler{store: s} }
 
+// normalizeTags trims, drops blanks, and de-duplicates tags (case-insensitive,
+// first spelling wins) so a note never stores duplicate or empty tags.
+func normalizeTags(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		key := strings.ToLower(t)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, t)
+	}
+	return out
+}
+
 // List returns all notes for a user.
 // @Summary List notes
 // @Description Returns all notes for the user
@@ -129,7 +152,7 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 	n := model.Note{
 		Titel:                body.Titel,
 		Inhoud:               body.Inhoud,
-		Tags:                 body.Tags,
+		Tags:                 normalizeTags(body.Tags),
 		Kleur:                body.Kleur,
 		Deadline:             deadline,
 		LinkedEventID:        linkedEventID,
@@ -202,7 +225,7 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		fields["inhoud"] = *body.Inhoud
 	}
 	if body.Tags != nil {
-		fields["tags"] = body.Tags
+		fields["tags"] = normalizeTags(body.Tags)
 	}
 	if body.Kleur != nil {
 		fields["kleur"] = *body.Kleur

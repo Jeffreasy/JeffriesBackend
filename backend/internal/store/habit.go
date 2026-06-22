@@ -747,7 +747,8 @@ func (s *HabitStore) HeatmapData(ctx context.Context, userID string, days int) (
 func (s *HabitStore) Stats(ctx context.Context, userID string) (HabitStats, error) {
 	var stats HabitStats
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(totaal_xp), 0),
+		SELECT COALESCE(SUM(totaal_xp), 0)
+		         + COALESCE((SELECT SUM(xp_bonus) FROM habit_badges WHERE user_id = $1), 0),
 		       COALESCE(SUM(totaal_voltooid), 0),
 		       COUNT(*),
 		       COALESCE(MAX(huidige_streak), 0),
