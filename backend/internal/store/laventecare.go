@@ -572,8 +572,12 @@ func (s *LaventeCareStore) UpdateAccessCredential(ctx context.Context, userID st
 		return err
 	}
 
+	// setSecret distinguishes "change the secret" (SecretValue provided, possibly
+	// empty → clear it) from "leave it" (nil). An empty value encrypts to nil and
+	// then clears the column, instead of being silently kept by COALESCE.
+	setSecret := input.SecretValue != nil
 	var secret *string
-	if input.SecretValue != nil {
+	if setSecret {
 		secret, err = encryptLaventeCareSecret(input.SecretValue)
 		if err != nil {
 			return err
@@ -599,7 +603,7 @@ func (s *LaventeCareStore) UpdateAccessCredential(ctx context.Context, userID st
 		    status = COALESCE($11, status),
 		    owner_contact = COALESCE($12, owner_contact),
 		    secret_label = COALESCE($13, secret_label),
-		    secret_value_encrypted = COALESCE($14, secret_value_encrypted),
+		    secret_value_encrypted = CASE WHEN $22 THEN $14 ELSE secret_value_encrypted END,
 		    secret_hint = COALESCE($15, secret_hint),
 		    sharing_policy = COALESCE($16, sharing_policy),
 		    last_checked_at = COALESCE($17, last_checked_at),
@@ -614,7 +618,7 @@ func (s *LaventeCareStore) UpdateAccessCredential(ctx context.Context, userID st
 		cleanStringPtr(input.OwnerContact), cleanStringPtr(input.SecretLabel), secret,
 		cleanStringPtr(input.SecretHint), cleanStringPtr(input.SharingPolicy),
 		parseDateTimePtr(input.LastCheckedAt), parseDateTimePtr(input.ExpiresAt),
-		revokedAt, cleanStringPtr(input.Notes), now)
+		revokedAt, cleanStringPtr(input.Notes), now, setSecret)
 	if err != nil {
 		return err
 	}
@@ -1177,27 +1181,39 @@ func (s *LaventeCareStore) ConvertWorkstreamToProject(ctx context.Context, userI
 		}
 	}
 
-	project, err := s.CreateProject(ctx, userID, model.LCProject{
-		CompanyID:       workstream.CompanyID,
-		LeadID:          workstream.LeadID,
-		Naam:            name,
-		Fase:            fase,
-		Status:          status,
-		WaardeIndicatie: workstream.WaardeIndicatie,
-		Deadline:        workstream.Deadline,
-		Samenvatting:    summary,
-	})
+	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	done := "omgezet_project"
-	if err := s.UpdateWorkstream(ctx, userID, input.WorkstreamID, model.LCWorkstreamUpdate{
-		ProjectID: &project.ID,
-		Status:    &done,
-	}); err != nil {
+	defer tx.Rollback(ctx)
+
+	// Create the project and mark the workstream converted atomically, so a
+	// partial failure can't leave a project without its workstream link (or
+	// duplicate the project on retry).
+	now := time.Now().UTC()
+	proj := model.LCProject{
+		ID: uuid.New(), UserID: userID, CompanyID: workstream.CompanyID, LeadID: workstream.LeadID,
+		Naam: name, Fase: fase, Status: status, WaardeIndicatie: workstream.WaardeIndicatie,
+		Deadline: workstream.Deadline, Samenvatting: summary, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO lc_projects (id, user_id, company_id, lead_id, naam, fase, status,
+		        waarde_indicatie, start_datum, deadline, samenvatting, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
+		proj.ID, proj.UserID, proj.CompanyID, proj.LeadID, proj.Naam, proj.Fase, proj.Status,
+		proj.WaardeIndicatie, proj.StartDatum, proj.Deadline, proj.Samenvatting, proj.CreatedAt); err != nil {
 		return nil, err
 	}
-	return project, nil
+	if _, err := tx.Exec(ctx,
+		`UPDATE lc_workstreams SET project_id = $3, status = 'omgezet_project', updated_at = $4
+		  WHERE user_id = $1 AND id = $2`,
+		userID, input.WorkstreamID, proj.ID, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &proj, nil
 }
 
 // ─── Action Items ────────────────────────────────────────────────────────────
