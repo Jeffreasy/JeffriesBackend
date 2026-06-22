@@ -297,7 +297,7 @@ func compactLaventeCare(cockpit *model.LCCockpit, dossierAdvice *model.LCDossier
 		"available":         true,
 		"summary":           cockpit.Summary,
 		"companies":         takeBriefingItems(cockpit.Companies, limit),
-		"contacts":          takeBriefingItems(cockpit.Contacts, limit),
+		"contacts":          minimizeBriefingContacts(takeBriefingItems(cockpit.Contacts, limit)),
 		"activeLeads":       takeBriefingItems(cockpit.ActiveLeads, limit),
 		"activeWorkstreams": takeBriefingItems(cockpit.ActiveWorkstreams, limit),
 		"activeProjects":    takeBriefingItems(cockpit.ActiveProjects, limit),
@@ -308,6 +308,23 @@ func compactLaventeCare(cockpit *model.LCCockpit, dossierAdvice *model.LCDossier
 		"dossierAdvice":     advice,
 		"documentsSeeded":   cockpit.Summary.DocumentsSeeded,
 	}
+}
+
+// minimizeBriefingContacts strips direct PII (email, phone, free-text notes)
+// from contacts before they enter the model prompt; name/role/company is enough
+// context for the assistant to reason about who to follow up with.
+func minimizeBriefingContacts(contacts []model.LCContact) []map[string]any {
+	out := make([]map[string]any, 0, len(contacts))
+	for _, c := range contacts {
+		out = append(out, map[string]any{
+			"naam":         c.Naam,
+			"rol":          c.Rol,
+			"isPrimary":    c.IsPrimary,
+			"companyId":    c.CompanyID,
+			"decisionRole": c.DecisionRole,
+		})
+	}
+	return out
 }
 
 func takeBriefingItems[T any](items []T, limit int) []T {

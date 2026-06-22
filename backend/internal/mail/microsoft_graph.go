@@ -11,6 +11,7 @@ import (
 	"net/http"
 	netmail "net/mail"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -177,39 +178,73 @@ func (s *Sender) graphRequest(ctx context.Context, method, path string, body any
 		return err
 	}
 
-	var bodyReader io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		encoded, err = json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		bodyReader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, graphBaseURL+path, bodyReader)
-	if err != nil {
+	const maxAttempts = 3
+	for attempt := 1; ; attempt++ {
+		var bodyReader io.Reader
+		if encoded != nil {
+			bodyReader = bytes.NewReader(encoded)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, graphBaseURL+path, bodyReader)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+		if encoded != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := s.http.Do(req)
+		if err != nil {
+			return err
+		}
+
+		// Honour Graph throttling: on 429/503 wait Retry-After and retry.
+		if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable) && attempt < maxAttempts {
+			wait := retryAfterDuration(resp.Header.Get("Retry-After"), time.Duration(attempt)*2*time.Second)
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			text, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			return fmt.Errorf("microsoft graph request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(text)))
+		}
+		if out == nil || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusAccepted {
+			resp.Body.Close()
+			return nil
+		}
+		err = json.NewDecoder(resp.Body).Decode(out)
+		resp.Body.Close()
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+}
 
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return err
+// retryAfterDuration parses a Retry-After header (seconds), capped so a worker
+// never blocks too long, falling back to the given backoff when absent.
+func retryAfterDuration(header string, fallback time.Duration) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		d := time.Duration(secs) * time.Second
+		if d > 60*time.Second {
+			return 60 * time.Second
+		}
+		return d
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		text, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("microsoft graph request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(text)))
-	}
-	if out == nil || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusAccepted {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return fallback
 }
 
 func (s *Sender) accessToken(ctx context.Context) (string, error) {

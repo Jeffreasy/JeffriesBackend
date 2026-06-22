@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -184,26 +185,65 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "userId required"
 // @Router /settings/backup [get]
+// exportTables are the user-scoped tables included in a data export (GDPR
+// portability). Smart-home tables (rooms/devices/scenes) have no user_id and are
+// excluded, as are encrypted access credentials and the mail outbox.
+var exportTables = []string{
+	"notes", "note_links", "habits", "habit_logs", "habit_badges",
+	"transactions", "personal_events", "schedule", "salary", "loonstroken",
+	"privacy_settings", "brain_preferences", "emails",
+	"lc_companies", "lc_contacts", "lc_leads", "lc_projects", "lc_workstreams",
+	"lc_action_items", "lc_invoices", "lc_invoice_lines", "lc_quotes", "lc_quote_lines",
+	"lc_time_entries", "lc_activity_events", "lc_documents", "lc_dossier_documents",
+}
+
 func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
-	// For now, we return a simple JSON showing backup was initiated.
-	// In a real scenario, this would query all tables and dump them.
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId required")
 		return
 	}
 
-	// Just a structural dump for now
+	data := make(map[string][]json.RawMessage, len(exportTables))
+	for _, table := range exportTables {
+		rows, err := h.dumpUserTable(r.Context(), table, userID)
+		if err != nil {
+			Error(w, http.StatusInternalServerError, fmt.Sprintf("export %s: %v", table, err))
+			return
+		}
+		data[table] = rows
+	}
+
 	dump := map[string]any{
-		"version":    "1.0",
+		"version":    "2.0",
 		"userId":     userID,
-		"exportedAt": time.Now().Format(time.RFC3339),
-		"message":    "Backup functionaliteit wordt geïmplementeerd in fase 2.",
+		"exportedAt": time.Now().UTC().Format(time.RFC3339),
+		"data":       data,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"jeffries-homeapp-backup.json\"")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"jeffries-homeapp-export.json\"")
 	json.NewEncoder(w).Encode(dump)
+}
+
+// dumpUserTable returns every row of a user-scoped table as raw JSON. The table
+// name is from the fixed exportTables list (never user input), so the formatted
+// query is safe.
+func (h *SettingsHandler) dumpUserTable(ctx context.Context, table, userID string) ([]json.RawMessage, error) {
+	rows, err := h.db.Pool.Query(ctx, fmt.Sprintf(`SELECT row_to_json(t) FROM %s t WHERE user_id = $1`, table), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []json.RawMessage{}
+	for rows.Next() {
+		var raw json.RawMessage
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		out = append(out, raw)
+	}
+	return out, rows.Err()
 }
 
 // TelegramStatus returns the status of the Telegram bot.

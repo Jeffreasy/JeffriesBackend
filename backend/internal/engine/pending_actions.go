@@ -10,6 +10,7 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,6 +45,9 @@ func (e *ConfirmingExecutor) Execute(ctx context.Context, toolName string, argsJ
 	}
 	if ai.IsMutatingTool(toolName) && ai.RequiresConfirmation(toolName) {
 		summary := summarizePendingTool(toolName, argsJSON)
+		if toolName == "laventecareBetaalverzoekMaken" {
+			summary = e.enrichPaymentRequestSummary(ctx, argsJSON, summary)
+		}
 		action, err := e.pending.Create(ctx, e.userID, e.agentID, toolName, argsJSON, summary)
 		if err != nil {
 			return fmt.Sprintf(`{"error":"Bevestigingsactie aanmaken mislukt: %s"}`, err.Error())
@@ -138,6 +142,31 @@ func toolResultError(result string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+// enrichPaymentRequestSummary turns the opaque invoice UUID in a bunq
+// payment-request confirmation into the human-meaningful invoice number, amount
+// and customer, so the user confirms a clear action rather than a UUID.
+func (e *ConfirmingExecutor) enrichPaymentRequestSummary(ctx context.Context, argsJSON, fallback string) string {
+	var args struct {
+		InvoiceID string `json:"invoice_id"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fallback
+	}
+	id, err := uuid.Parse(strings.TrimSpace(args.InvoiceID))
+	if err != nil {
+		return fallback
+	}
+	inv, err := store.NewLaventeCareStore(&store.DB{Pool: e.pool}).GetInvoice(ctx, e.userID, id)
+	if err != nil || inv == nil {
+		return fallback
+	}
+	who := ""
+	if inv.CompanyName != nil && strings.TrimSpace(*inv.CompanyName) != "" {
+		who = " aan " + strings.TrimSpace(*inv.CompanyName)
+	}
+	return fmt.Sprintf("Betaalverzoek factuur %s (€%.2f)%s", inv.InvoiceNumber, float64(inv.TotalCents)/100, who)
 }
 
 func summarizePendingTool(toolName, argsJSON string) string {
