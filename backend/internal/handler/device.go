@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 
@@ -15,6 +16,31 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/wiz"
 )
+
+// validDeviceIP requires a concrete private LAN IP literal before the address is
+// ever dialed over UDP: it rejects hostnames (which would do DNS per command),
+// host:port forms, loopback/multicast/broadcast/unspecified, and any public IP —
+// a WiZ lamp always lives on the local network.
+func validDeviceIP(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
 
 // DeviceHandler handles device operations (PostgreSQL + WiZ UDP).
 type DeviceHandler struct {
@@ -140,6 +166,10 @@ func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusBadRequest, "ip_address cannot be empty")
 			return
 		}
+		if !validDeviceIP(newIP) {
+			Error(w, http.StatusBadRequest, "ip_address moet een geldig privaat LAN-adres zijn (geen hostnaam/publiek IP)")
+			return
+		}
 		if !h.queueLightCommands() {
 			if _, err := h.wiz.GetState(newIP); err != nil {
 				Error(w, http.StatusBadGateway, "WiZ lamp op "+newIP+" niet bereikbaar.")
@@ -233,6 +263,10 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.IPAddress == "" || input.Name == "" {
 		Error(w, http.StatusBadRequest, "ip_address and name are required")
+		return
+	}
+	if !validDeviceIP(input.IPAddress) {
+		Error(w, http.StatusBadRequest, "ip_address moet een geldig privaat LAN-adres zijn (geen hostnaam/publiek IP)")
 		return
 	}
 
@@ -353,11 +387,14 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		statePatch["on"] = *cmd.On
 	}
 	if cmd.Brightness != nil {
-		opts.Brightness = cmd.Brightness
-		statePatch["brightness"] = *cmd.Brightness
+		// Clamp to the lamp's own range so the optimistic DB copy can't display a
+		// value (e.g. 5) the bulb will never actually sit at (it floors to 10).
+		b := clampInt(*cmd.Brightness, 10, 100)
+		opts.Brightness = &b
+		statePatch["brightness"] = b
 	}
 	if cmd.ColorTempMireds != nil {
-		kelvin := int(math.Round(1_000_000.0 / float64(*cmd.ColorTempMireds)))
+		kelvin := clampInt(int(math.Round(1_000_000.0/float64(*cmd.ColorTempMireds))), 2200, 6500)
 		opts.ColorTemp = &kelvin
 		statePatch["color_temp"] = kelvin
 	}
@@ -371,9 +408,9 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		statePatch["g"] = gv
 		statePatch["b"] = bv
 	} else if cmd.R != nil || cmd.G != nil || cmd.B != nil {
-		rv := derefOr(cmd.R, 0)
-		gv := derefOr(cmd.G, 0)
-		bv := derefOr(cmd.B, 0)
+		rv := clampInt(derefOr(cmd.R, 0), 0, 255)
+		gv := clampInt(derefOr(cmd.G, 0), 0, 255)
+		bv := clampInt(derefOr(cmd.B, 0), 0, 255)
 		opts.R = &rv
 		opts.G = &gv
 		opts.B = &bv

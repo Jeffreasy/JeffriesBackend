@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -212,9 +213,9 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			on := true
+			on := sceneActionOn(a)
 			opts := wiz.StateOpts{On: &on}
-			statePatch := map[string]any{"on": true}
+			statePatch := map[string]any{"on": on}
 
 			if v, ok := a.TargetState["brightness"]; ok {
 				if b, ok := toIntVal(v); ok {
@@ -222,11 +223,9 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 					statePatch["brightness"] = b
 				}
 			}
-			if v, ok := a.TargetState["color_temp"]; ok {
-				if ct, ok := toIntVal(v); ok {
-					opts.ColorTemp = &ct
-					statePatch["color_temp"] = ct
-				}
+			if ct, ok := sceneActionColorTemp(a); ok {
+				opts.ColorTemp = &ct
+				statePatch["color_temp"] = ct
 			}
 			if rv, ok := a.TargetState["r"]; ok {
 				if r, ok := toIntVal(rv); ok {
@@ -270,9 +269,35 @@ func (h *SceneHandler) queueLightCommands() bool {
 	return strings.EqualFold(h.commandMode, "queue")
 }
 
+// sceneActionOn resolves the on/off target for a scene action, defaulting to on
+// only when the action doesn't specify — so a scene CAN turn a device off.
+func sceneActionOn(a model.SceneAction) bool {
+	if v, ok := a.TargetState["on"]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return true
+}
+
+// sceneActionColorTemp returns the target colour temperature in kelvin, accepting
+// either color_temp (kelvin) or color_temp_mireds (the unit the rest of the app uses).
+func sceneActionColorTemp(a model.SceneAction) (int, bool) {
+	if v, ok := a.TargetState["color_temp_mireds"]; ok {
+		if m, ok := toIntVal(v); ok && m > 0 {
+			return int(math.Round(1_000_000.0 / float64(m))), true
+		}
+	}
+	if v, ok := a.TargetState["color_temp"]; ok {
+		return toIntVal(v)
+	}
+	return 0, false
+}
+
 func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any) {
-	command := map[string]any{"on": true}
-	statePatch := map[string]any{"on": true}
+	on := sceneActionOn(a)
+	command := map[string]any{"on": on}
+	statePatch := map[string]any{"on": on}
 
 	if v, ok := a.TargetState["brightness"]; ok {
 		if b, ok := toIntVal(v); ok {
@@ -280,11 +305,9 @@ func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any
 			statePatch["brightness"] = b
 		}
 	}
-	if v, ok := a.TargetState["color_temp"]; ok {
-		if ct, ok := toIntVal(v); ok {
-			command["color_temp"] = ct
-			statePatch["color_temp"] = ct
-		}
+	if ct, ok := sceneActionColorTemp(a); ok {
+		command["color_temp"] = ct
+		statePatch["color_temp"] = ct
 	}
 	if rv, ok := a.TargetState["r"]; ok {
 		if r, ok := toIntVal(rv); ok {
