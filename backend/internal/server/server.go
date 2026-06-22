@@ -168,6 +168,28 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 	}
 }
 
+// bridgeKeyMiddleware accepts the X-API-Key if it matches EITHER the bridge key
+// or the app secret. This keeps the bridge trust-boundary separation available
+// (you can set a distinct BRIDGE_API_KEY on both sides) while never stranding a
+// bridge that is still sending the app secret — so wiring /bridge/* to validate
+// BRIDGE_API_KEY can't take the lights down when the two sides drift.
+func bridgeKeyMiddleware(bridgeKey, appKey string) func(http.Handler) http.Handler {
+	bridge := []byte(bridgeKey)
+	app := []byte(appKey)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := []byte(r.Header.Get("X-API-Key"))
+			// Compare against both (constant-time, no short-circuit); 1 if either matches.
+			if subtle.ConstantTimeCompare(key, bridge)|subtle.ConstantTimeCompare(key, app) != 1 {
+				handler.Error(w, http.StatusForbidden,
+					"Ongeldige of ontbrekende API key. Stuur X-API-Key header.")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // apiKeyMiddleware validates the X-API-Key header.
 func apiKeyMiddleware(secretKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

@@ -35,10 +35,10 @@ func registerRoutes(
 	focusH *handler.FocusHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
-	// The local LAN bridge authenticates with its OWN key, which falls back to
-	// APP_SECRET_KEY when unset (config). Validating BridgeAPIKey here is what makes
-	// setting a distinct BRIDGE_API_KEY correct instead of a 403 storm.
-	bridgeMw := apiKeyMiddleware(cfg.BridgeAPIKey)
+	// The local LAN bridge authenticates with its own key, but we accept the app
+	// secret too so a key drift between cloud and bridge can't take the lights
+	// down (setting a distinct BRIDGE_API_KEY on both sides still works).
+	bridgeMw := bridgeKeyMiddleware(cfg.BridgeAPIKey, cfg.AppSecretKey)
 
 	r.Get("/", health.Check)
 	r.Head("/", health.Check)
