@@ -686,6 +686,15 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 	var duur float64
 	if !isAllDay {
 		duur = math.Round(eindDt.Sub(startDt).Hours()*100) / 100
+	} else {
+		// All-day events carry no explicit hours; assume a standard 8h shift per
+		// day spanned so an all-day care shift isn't counted as 0h in the salary
+		// total. (The end is inclusive, so end−start ≈ 24h per day.)
+		days := int(math.Round(eindDt.Sub(startDt).Hours() / 24))
+		if days < 1 {
+			days = 1
+		}
+		duur = float64(days) * 8.0
 	}
 
 	eventID := calendarEventStableID(ev)
@@ -845,6 +854,8 @@ func getTeam(locatie string) string {
 }
 
 func weeknr(d time.Time) string {
-	_, week := d.ISOWeek()
-	return fmt.Sprintf("%d-W%02d", d.Year(), week)
+	// Use the ISO year (not the calendar Year()) so the year-week is correct at
+	// year boundaries — e.g. 2025-12-29 is ISO 2026-W01, not 2025-W01.
+	isoYear, week := d.ISOWeek()
+	return fmt.Sprintf("%d-W%02d", isoYear, week)
 }
