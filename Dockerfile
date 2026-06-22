@@ -1,7 +1,9 @@
 # ─── Homeapp API — Multi-stage Go build ───────────────────────────────────────
 # Produces a ~15MB Alpine image with a single static binary.
 
-FROM golang:alpine AS builder
+# Pinned to the Go minor that matches go.mod (go 1.25.x) so the toolchain can't
+# silently jump a major version on a floating `golang:alpine` rebuild.
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /src
 
