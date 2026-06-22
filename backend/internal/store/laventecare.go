@@ -32,8 +32,47 @@ var (
 	ErrQuoteNotAccepted             = errors.New("quote must be accepted before invoice conversion")
 	ErrQuoteHasNoLines              = errors.New("quote has no lines to invoice")
 	ErrInvalidDossierAdviceTarget   = errors.New("choose exactly one dossier context")
+	ErrInvalidStatus                = errors.New("unknown status")
+	ErrInvalidStatusTransition      = errors.New("illegal status transition for a finalized record")
 	dossierAdviceResponseSampleSize = 25
 )
+
+// Allowed lifecycle states. A paid invoice and an accepted/declined quote are
+// treated as financially final and may not be silently reverted or re-amounted.
+var (
+	invoiceStatuses = map[string]bool{"concept": true, "verstuurd": true, "betaald": true, "geannuleerd": true}
+	quoteStatuses   = map[string]bool{"concept": true, "verstuurd": true, "geaccepteerd": true, "afgewezen": true, "verlopen": true}
+)
+
+// validateInvoiceStatusTransition rejects unknown statuses, reverting a paid
+// invoice back to concept/verstuurd, and re-amounting paid_cents on an
+// already-paid invoice (legally-final VAT records).
+func validateInvoiceStatusTransition(current, next string, newPaidCents *int, currentPaidCents int) error {
+	if !invoiceStatuses[next] {
+		return ErrInvalidStatus
+	}
+	if current == "betaald" {
+		if next == "concept" || next == "verstuurd" {
+			return ErrInvalidStatusTransition
+		}
+		if newPaidCents != nil && *newPaidCents != currentPaidCents {
+			return ErrInvalidStatusTransition
+		}
+	}
+	return nil
+}
+
+// validateQuoteStatusTransition rejects unknown statuses and un-accepting a quote
+// that was already accepted (it may have been converted to an invoice).
+func validateQuoteStatusTransition(current, next string) error {
+	if !quoteStatuses[next] {
+		return ErrInvalidStatus
+	}
+	if current == "geaccepteerd" && (next == "concept" || next == "verstuurd") {
+		return ErrInvalidStatusTransition
+	}
+	return nil
+}
 
 // NewLaventeCareStore creates a new LaventeCareStore.
 func NewLaventeCareStore(db *DB) *LaventeCareStore {
@@ -209,6 +248,31 @@ func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id 
 		return pgx.ErrNoRows
 	}
 	return nil
+}
+
+// DeleteCompany erases a customer and their personal data (GDPR Art.17). It
+// removes the company's contacts (PII) explicitly, then deletes the company —
+// which cascades the access credentials and the activity timeline. Leads,
+// projects and documents are retained but their company/contact references are
+// nulled by FK, so no orphaned PII remains.
+func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id uuid.UUID) error {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM lc_contacts WHERE user_id = $1 AND company_id = $2`, userID, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM lc_companies WHERE user_id = $1 AND id = $2`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *LaventeCareStore) ListContacts(ctx context.Context, userID string, companyID *uuid.UUID, limit int) ([]model.LCContact, error) {
@@ -604,6 +668,34 @@ func (s *LaventeCareStore) GetLead(ctx context.Context, userID string, id uuid.U
 	return &leads[0], nil
 }
 
+// GetLeadBySource returns an existing lead matching (user, bron, source_id), or
+// (nil, nil) when none exists. It de-duplicates signal→lead conversion so
+// converting the same signal twice doesn't create duplicate leads.
+func (s *LaventeCareStore) GetLeadBySource(ctx context.Context, userID, bron, sourceID string) (*model.LCLead, error) {
+	if strings.TrimSpace(sourceID) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
+		        fit_score, pijnpunt, prioriteit, volgende_stap, volgende_actie_datum,
+		        created_at, updated_at
+		 FROM lc_leads WHERE user_id = $1 AND bron = $2 AND source_id = $3
+		 ORDER BY created_at DESC
+		 LIMIT 1`, userID, bron, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	leads, err := pgx.CollectRows(rows, scanLead)
+	if err != nil {
+		return nil, err
+	}
+	if len(leads) == 0 {
+		return nil, nil
+	}
+	return &leads[0], nil
+}
+
 func (s *LaventeCareStore) ListLeads(ctx context.Context, userID string, limit int) ([]model.LCLead, error) {
 	query := `SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
 		        fit_score, pijnpunt, prioriteit, volgende_stap, volgende_actie_datum,
@@ -780,12 +872,6 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 	if err != nil {
 		return nil, err
 	}
-	// Mark lead as won
-	won := "gewonnen"
-	if err := s.UpdateLead(ctx, userID, input.LeadID, model.LCLeadUpdate{Status: &won}); err != nil {
-		return nil, err
-	}
-
 	fase := "intake"
 	if input.Fase != nil {
 		fase = *input.Fase
@@ -795,14 +881,38 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 		status = *input.Status
 	}
 
-	return s.CreateProject(ctx, userID, model.LCProject{
-		CompanyID:    lead.CompanyID,
-		LeadID:       &input.LeadID,
-		Naam:         input.Naam,
-		Fase:         fase,
-		Status:       status,
-		Samenvatting: input.Samenvatting,
-	})
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Mark the lead won and create the project atomically, so a failure can't
+	// strand a 'gewonnen' lead with no project or duplicate the project on retry.
+	if _, err := tx.Exec(ctx,
+		`UPDATE lc_leads SET status = 'gewonnen', updated_at = now() WHERE user_id = $1 AND id = $2`,
+		userID, input.LeadID); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	proj := model.LCProject{
+		ID: uuid.New(), UserID: userID, CompanyID: lead.CompanyID, LeadID: &input.LeadID,
+		Naam: input.Naam, Fase: fase, Status: status, Samenvatting: input.Samenvatting,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO lc_projects (id, user_id, company_id, lead_id, naam, fase, status,
+		        waarde_indicatie, start_datum, deadline, samenvatting, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
+		proj.ID, proj.UserID, proj.CompanyID, proj.LeadID, proj.Naam, proj.Fase, proj.Status,
+		proj.WaardeIndicatie, proj.StartDatum, proj.Deadline, proj.Samenvatting, proj.CreatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &proj, nil
 }
 
 // ─── Workstreams / Opdrachten ───────────────────────────────────────────────
@@ -2598,10 +2708,6 @@ func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input
 	}
 	vat := vatCents(subtotal, vatRate)
 	total := subtotal + vat
-	number, err := s.nextLCNumber(ctx, userID, "lc_quotes", "quote_number", "LC-OFF")
-	if err != nil {
-		return nil, err
-	}
 	id := uuid.New()
 
 	tx, err := s.db.Pool.Begin(ctx)
@@ -2609,6 +2715,12 @@ func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Allocate the quote number inside the tx so concurrent creates can't collide.
+	number, err := s.nextLCNumber(ctx, tx, userID, "lc_quotes", "quote_number", "LC-OFF")
+	if err != nil {
+		return nil, err
+	}
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO lc_quotes (id, user_id, company_id, project_id, workstream_id,
@@ -2673,6 +2785,13 @@ func (s *LaventeCareStore) UpdateQuoteStatus(ctx context.Context, userID string,
 	status = cleanStatus(status, "")
 	if status == "" {
 		return pgx.ErrNoRows
+	}
+	quote, err := s.GetQuote(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := validateQuoteStatusTransition(quote.Status, status); err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	var acceptedAt *time.Time
@@ -2910,17 +3029,19 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 	if input.VatRateBps != nil {
 		vatRate = *input.VatRateBps
 	}
+	// VAT is summed per line (each line may carry its own rate) so a mixed-rate
+	// invoice gets a correct header VAT/total instead of one rate over the subtotal.
 	subtotal := 0
+	vat := 0
 	for _, line := range lines {
 		subtotal += line.TotalCents
+		lineRate := vatRate
+		if line.VatRateBps != nil {
+			lineRate = *line.VatRateBps
+		}
+		vat += vatCents(line.TotalCents, lineRate)
 	}
-	vat := vatCents(subtotal, vatRate)
 	total := subtotal + vat
-	number, err := s.nextLCNumber(ctx, userID, "lc_invoices", "invoice_number", "LC-FAC")
-	if err != nil {
-		return nil, err
-	}
-	merchantReference := number
 	id := uuid.New()
 
 	tx, err := s.db.Pool.Begin(ctx)
@@ -2928,6 +3049,13 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Allocate the invoice number inside the tx so concurrent creates can't collide.
+	number, err := s.nextLCNumber(ctx, tx, userID, "lc_invoices", "invoice_number", "LC-FAC")
+	if err != nil {
+		return nil, err
+	}
+	merchantReference := number
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO lc_invoices (id, user_id, company_id, project_id, workstream_id, quote_id,
@@ -3111,6 +3239,9 @@ func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID strin
 	status := cleanStatus(input.Status, "")
 	if status == "" {
 		return pgx.ErrNoRows
+	}
+	if err := validateInvoiceStatusTransition(invoice.Status, status, input.PaidCents, invoice.PaidCents); err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	paidAt := parseDateTimePtr(input.PaidAt)
@@ -3618,18 +3749,50 @@ func (s *LaventeCareStore) validateBillingTarget(ctx context.Context, userID str
 	return nil
 }
 
-func (s *LaventeCareStore) nextLCNumber(ctx context.Context, userID, table, column, prefix string) (string, error) {
+// nextLCNumber allocates the next sequential document number for (user, prefix,
+// year). It MUST run inside the caller's transaction: a per-scope advisory lock
+// serializes concurrent allocations until the tx ends, and it derives the number
+// from MAX(existing)+1 — not COUNT(*)+1 — so a later deletion can never make a
+// new number collide with an existing one (which would 500 on the UNIQUE
+// constraint and jam invoice/quote creation).
+func (s *LaventeCareStore) nextLCNumber(ctx context.Context, tx pgx.Tx, userID, table, column, prefix string) (string, error) {
 	year := time.Now().UTC().Format("2006")
 	needle := prefix + "-" + year + "-%"
-	query := fmt.Sprintf(`SELECT COUNT(*)::int FROM %s WHERE user_id = $1 AND %s LIKE $2`, table, column)
-	var count int
-	if err := s.db.Pool.QueryRow(ctx, query, userID, needle).Scan(&count); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, userID+"|"+table+"|"+year); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s-%s-%04d", prefix, year, count+1), nil
+	query := fmt.Sprintf(
+		`SELECT COALESCE(MAX(NULLIF(regexp_replace(%s, '^.*-', ''), '')::int), 0)
+		   FROM %s WHERE user_id = $1 AND %s LIKE $2`, column, table, column)
+	var maxNum int
+	if err := tx.QueryRow(ctx, query, userID, needle).Scan(&maxNum); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s-%04d", prefix, year, maxNum+1), nil
 }
 
 // ─── Cockpit (aggregated dashboard) ──────────────────────────────────────────
+
+// cockpitEntityCounts returns true totals (in one round-trip) for the cockpit
+// summary, so the headline metrics stay correct once a list outgrows its display
+// cap instead of reporting len() of a 30/8-capped slice.
+type cockpitCounts struct {
+	companies, contacts, leads, projects, workstreams, documents, actions int
+}
+
+func (s *LaventeCareStore) cockpitEntityCounts(ctx context.Context, userID string) (cockpitCounts, error) {
+	var c cockpitCounts
+	err := s.db.Pool.QueryRow(ctx, `
+SELECT (SELECT COUNT(*) FROM lc_companies     WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_contacts      WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_leads         WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_projects      WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_workstreams   WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_documents     WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_action_items  WHERE user_id = $1)`, userID).
+		Scan(&c.companies, &c.contacts, &c.leads, &c.projects, &c.workstreams, &c.documents, &c.actions)
+	return c, err
+}
 
 func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*model.LCCockpit, error) {
 	companies, err := s.ListCompanies(ctx, userID, 30, "")
@@ -3684,6 +3847,10 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	counts, err := s.cockpitEntityCounts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	_ = s.SeedDefaultMailTemplates(ctx, userID)
 	mailTemplates, _ := s.ListMailTemplates(ctx, userID, 80)
 	mailboxSummary, _ := s.GetMailboxSummary(ctx, userID, mailTemplates, laventeCareMailConfiguredFromEnv(), strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")))
@@ -3704,26 +3871,26 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 
 	return &model.LCCockpit{
 		Summary: model.LCCockpitSummary{
-			Companies:         len(companies),
-			Contacts:          len(contacts),
+			Companies:         counts.companies,
+			Contacts:          counts.contacts,
 			AccessCredentials: accessCredentialCount,
-			Leads:             len(leads),
+			Leads:             counts.leads,
 			ActiveLeads:       len(activeLeads),
-			Workstreams:       len(workstreams),
+			Workstreams:       counts.workstreams,
 			ActiveWorkstreams: len(activeWorkstreams),
-			Projects:          len(projects),
+			Projects:          counts.projects,
 			ActiveProjects:    len(activeProjects),
-			Documents:         len(documents),
+			Documents:         counts.documents,
 			OpenIncidents:     len(incidents),
 			OpenChanges:       len(changes),
 			Decisions:         len(decisions),
-			ActionItems:       len(actions),
+			ActionItems:       counts.actions,
 			DossierDocuments:  dossierDocumentCount,
 			ActivityEvents:    activityEventCount,
 			MailTemplates:     mailboxSummary.ActiveTemplates,
 			MailOutbox:        mailboxSummary.Outbox,
 			MailConfigured:    mailboxSummary.Configured,
-			DocumentsSeeded:   len(documents) > 0,
+			DocumentsSeeded:   counts.documents > 0,
 			BusinessSignals:   len(signals),
 			FollowUps:         len(followUps),
 		},
@@ -4569,9 +4736,14 @@ func cleanInvoiceLines(lines []model.LCInvoiceLineCreate) []model.LCInvoiceLineC
 			minutes = 0
 		}
 		unit := maxInt(line.UnitAmountCents, 0)
+		// A time-based line's total is derived from minutes x hourly rate and must
+		// never be trusted from the client; only a flat-fee line (no minutes/rate)
+		// may carry an explicit total.
 		total := line.TotalCents
-		if total <= 0 {
+		if minutes > 0 && unit > 0 {
 			total = centsFromMinutes(minutes, unit)
+		} else if total < 0 {
+			total = 0
 		}
 		result = append(result, model.LCInvoiceLineCreate{
 			SourceTimeEntryID: line.SourceTimeEntryID,

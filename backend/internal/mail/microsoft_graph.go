@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	netmail "net/mail"
 	"net/url"
 	"strings"
 	"sync"
@@ -282,6 +283,10 @@ func normalizeAddresses(values []string) []string {
 	for _, value := range values {
 		address := strings.ToLower(strings.TrimSpace(value))
 		if address == "" || seen[address] {
+			continue
+		}
+		// Validate the address format so a malformed recipient never reaches Graph.
+		if _, err := netmail.ParseAddress(address); err != nil {
 			continue
 		}
 		seen[address] = true

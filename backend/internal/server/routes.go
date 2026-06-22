@@ -193,6 +193,7 @@ func registerRoutes(
 				r.Get("/companies", lcH.ListCompanies)
 				r.With(authMw).Post("/companies", lcH.CreateCompany)
 				r.With(authMw).Patch("/companies/{id}", lcH.UpdateCompany)
+				r.With(authMw).Delete("/companies/{id}", lcH.DeleteCompany)
 				r.Get("/contacts", lcH.ListContacts)
 				r.With(authMw).Post("/contacts", lcH.CreateContact)
 				r.With(authMw).Patch("/contacts/{id}", lcH.UpdateContact)

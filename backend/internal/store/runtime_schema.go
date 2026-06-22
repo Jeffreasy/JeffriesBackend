@@ -8,6 +8,14 @@ import (
 // EnsureRuntimeSchema applies narrowly scoped, idempotent schema repairs that
 // the API needs before it can safely accept runtime work on Render.
 func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
+	// Base tables first. These were historically created only by migrations/ (now
+	// dead code) and merely ALTERed/referenced at runtime, so a fresh or restored
+	// DB boot-looped on "relation does not exist". Creating them here (idempotent)
+	// makes an empty DB self-bootable; the ensure* repairs below then layer on
+	// later columns/indexes. Verified by TestEnsureRuntimeSchema_FreshDB.
+	if err := ensureBaseTables(ctx, db); err != nil {
+		return fmt.Errorf("ensure base tables: %w", err)
+	}
 	if err := ensureDeviceCommandSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure device command schema: %w", err)
 	}
@@ -333,6 +341,130 @@ CREATE INDEX IF NOT EXISTS idx_lc_contacts_user
 
 CREATE INDEX IF NOT EXISTS idx_lc_contacts_company
     ON lc_contacts (company_id);
+
+-- Base pipeline tables. These historically lived only in migrations/006 and were
+-- merely ALTERed (never CREATEd) at runtime, so a fresh/restored DB boot-looped
+-- on "relation does not exist". Mirror migrations/006 here (idempotent) so an
+-- empty DB is self-bootable; the ALTERs below then add later columns.
+CREATE TABLE IF NOT EXISTS lc_leads (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id              TEXT NOT NULL,
+    company_id           UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    contact_id           UUID REFERENCES lc_contacts(id) ON DELETE SET NULL,
+    titel                TEXT NOT NULL,
+    bron                 TEXT NOT NULL DEFAULT 'cockpit',
+    source_id            TEXT,
+    status               TEXT NOT NULL DEFAULT 'nieuw',
+    fit_score            INTEGER,
+    pijnpunt             TEXT,
+    prioriteit           TEXT DEFAULT 'normaal',
+    volgende_stap        TEXT,
+    volgende_actie_datum TEXT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_projects (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          TEXT NOT NULL,
+    company_id       UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    lead_id          UUID REFERENCES lc_leads(id) ON DELETE SET NULL,
+    naam             TEXT NOT NULL,
+    fase             TEXT NOT NULL DEFAULT 'intake',
+    status           TEXT NOT NULL DEFAULT 'actief',
+    waarde_indicatie INTEGER,
+    start_datum      TEXT,
+    deadline         TEXT,
+    samenvatting     TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_action_items (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           TEXT NOT NULL,
+    source            TEXT NOT NULL DEFAULT 'handmatig',
+    source_id         TEXT,
+    title             TEXT NOT NULL,
+    summary           TEXT,
+    action_type       TEXT NOT NULL DEFAULT 'opvolgen',
+    status            TEXT NOT NULL DEFAULT 'open',
+    priority          TEXT NOT NULL DEFAULT 'normaal',
+    due_date          TEXT,
+    linked_lead_id    UUID REFERENCES lc_leads(id) ON DELETE SET NULL,
+    linked_project_id UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lc_leads_user ON lc_leads (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_user_status ON lc_leads (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_user_source ON lc_leads (user_id, bron, source_id);
+CREATE INDEX IF NOT EXISTS idx_lc_projects_user ON lc_projects (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_projects_user_fase ON lc_projects (user_id, fase);
+CREATE INDEX IF NOT EXISTS idx_lc_projects_company ON lc_projects (company_id);
+CREATE INDEX IF NOT EXISTS idx_lc_actions_user ON lc_action_items (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_actions_user_status ON lc_action_items (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_lc_actions_user_due ON lc_action_items (user_id, due_date);
+CREATE INDEX IF NOT EXISTS idx_lc_actions_user_source ON lc_action_items (user_id, source, source_id);
+
+-- Dependent pipeline tables (also migrations/006-only). lc_decisions /
+-- lc_change_requests / lc_sla_incidents FK lc_projects, so they must follow it.
+CREATE TABLE IF NOT EXISTS lc_documents (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      TEXT NOT NULL,
+    document_key TEXT NOT NULL,
+    titel        TEXT NOT NULL,
+    categorie    TEXT NOT NULL,
+    fase         TEXT,
+    versie       TEXT NOT NULL DEFAULT '2026-04',
+    source_path  TEXT,
+    samenvatting TEXT NOT NULL,
+    tags         TEXT[],
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_decisions (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    TEXT NOT NULL,
+    project_id UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    titel      TEXT NOT NULL,
+    besluit    TEXT NOT NULL,
+    reden      TEXT NOT NULL,
+    impact     TEXT,
+    status     TEXT NOT NULL DEFAULT 'genomen',
+    datum      TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_change_requests (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         TEXT NOT NULL,
+    project_id      UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    titel           TEXT NOT NULL,
+    impact          TEXT NOT NULL,
+    planning_impact TEXT,
+    budget_impact   TEXT,
+    status          TEXT NOT NULL DEFAULT 'nieuw',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS lc_sla_incidents (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          TEXT NOT NULL,
+    project_id       UUID REFERENCES lc_projects(id) ON DELETE SET NULL,
+    titel            TEXT NOT NULL,
+    prioriteit       TEXT NOT NULL DEFAULT 'P3',
+    status           TEXT NOT NULL DEFAULT 'open',
+    kanaal           TEXT NOT NULL DEFAULT 'telegram',
+    gemeld_op        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reactie_deadline TIMESTAMPTZ,
+    samenvatting     TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 ALTER TABLE lc_leads
     ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
