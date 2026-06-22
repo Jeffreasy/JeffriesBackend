@@ -49,7 +49,11 @@ services:
       - key: APP_SECRET_KEY
         sync: false
       # SECURITY: give these their own values so a leaked APP_SECRET_KEY does not
-      # span three trust boundaries (they currently default to APP_SECRET_KEY).
+      # span three trust boundaries (they default to APP_SECRET_KEY when unset).
+      # BRIDGE_API_KEY: if you set a distinct value here, set the SAME value on the
+      # LOCAL bridge machine's env too — the /bridge/* routes validate this key, so
+      # a cloud/bridge mismatch 403s every command. (Equal values = no separation
+      # but always works; distinct-on-both = separated.)
       - key: BRIDGE_API_KEY
         sync: false
       - key: LAVENTECARE_SECRET_KEY

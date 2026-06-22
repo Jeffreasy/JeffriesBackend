@@ -153,9 +153,9 @@ func (c *Client) SetState(ip string, opts StateOpts) error {
 		params["temp"] = clamp(*opts.ColorTemp, 2200, 6500)
 	}
 	if opts.R != nil && opts.G != nil && opts.B != nil {
-		params["r"] = *opts.R
-		params["g"] = *opts.G
-		params["b"] = *opts.B
+		params["r"] = clamp(*opts.R, 0, 255)
+		params["g"] = clamp(*opts.G, 0, 255)
+		params["b"] = clamp(*opts.B, 0, 255)
 	}
 
 	if len(params) == 0 {

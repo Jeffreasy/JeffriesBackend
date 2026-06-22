@@ -56,7 +56,7 @@ Aanbevolen lokale bridge env op je pc:
 
 ```bash
 BRIDGE_API_URL=https://jeffriesbackend.onrender.com/api/v1
-BRIDGE_API_KEY=<zelfde waarde als APP_SECRET_KEY op Render>
+BRIDGE_API_KEY=<moet exact matchen met BRIDGE_API_KEY op Render; leeg laten = valt terug op APP_SECRET_KEY>
 BRIDGE_STATUS_POLL_ENABLED=true
 ENGINE_CRONS_ENABLED=false
 ENGINE_AUTOMATIONS_ENABLED=false
