@@ -40,6 +40,9 @@ func TestTaskArgsSyncFormat(t *testing.T) {
 	if cl := itemClose("task9"); cl.Type != "item_close" || cl.Args["id"] != "task9" {
 		t.Fatalf("item_close = %+v", cl)
 	}
+	if del := itemDelete("task9"); del.Type != "item_delete" || del.Args["id"] != "task9" {
+		t.Fatalf("item_delete = %+v", del)
+	}
 
 	// All-day → due {date}, no duration.
 	ad := c.taskArgs(Dienst{Locatie: "x", Heledag: true, StartDatum: "2026-06-22"})

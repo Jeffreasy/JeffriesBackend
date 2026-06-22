@@ -342,7 +342,7 @@ func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Todoist sync mislukt: "+err.Error())
 		return
 	}
-	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed, "failed": res.Failed})
+	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed, "deleted": res.Deleted, "failed": res.Failed})
 }
 
 // pushTodoist re-pushes the stored schedule to Todoist, shared by SyncTodoist and

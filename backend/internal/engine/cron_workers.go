@@ -345,7 +345,7 @@ func cronScheduleSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) 
 			if res, terr := pushScheduleToTodoist(ctx, db, cfg); terr != nil {
 				slog.Warn("sync-schedule: todoist push failed (non-fatal)", "error", terr)
 			} else if res != nil {
-				slog.Info("sync-schedule: todoist pushed", "updated", res.Updated, "created", res.Created, "closed", res.Closed, "failed", res.Failed)
+				slog.Info("sync-schedule: todoist pushed", "updated", res.Updated, "created", res.Created, "closed", res.Closed, "deleted", res.Deleted, "failed", res.Failed)
 			}
 		}
 

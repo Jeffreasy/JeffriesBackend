@@ -65,6 +65,7 @@ type SyncResult struct {
 	Created int `json:"created"`
 	Updated int `json:"updated"`
 	Closed  int `json:"closed"`
+	Deleted int `json:"deleted"`
 	Failed  int `json:"failed"`
 }
 
@@ -140,7 +141,9 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 		}
 	}
 
-	// Close expired tasks (still mapped = not in the upcoming set).
+	// Tasks still mapped here matched no upcoming shift — either the shift already
+	// happened (past → mark complete) or it was deleted/cancelled in Google
+	// (future → remove the task so a cancelled shift doesn't linger as a reminder).
 	for _, t := range taskByEID {
 		if t.Due == nil {
 			continue
@@ -149,11 +152,16 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 		if dueStr == "" {
 			dueStr = t.Due.Date
 		}
-		if dueStr == "" || dueStr[:10] >= today {
+		if dueStr == "" {
 			continue
 		}
-		commands = append(commands, itemClose(t.ID))
-		result.Closed++
+		if dueStr[:10] < today {
+			commands = append(commands, itemClose(t.ID))
+			result.Closed++
+		} else {
+			commands = append(commands, itemDelete(t.ID))
+			result.Deleted++
+		}
 	}
 
 	if len(commands) == 0 {
@@ -167,7 +175,7 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 		return result, err
 	}
 	result.Failed = failed
-	slog.Info("✅ todoist sync done", "created", result.Created, "updated", result.Updated, "closed", result.Closed, "failed", failed)
+	slog.Info("✅ todoist sync done", "created", result.Created, "updated", result.Updated, "closed", result.Closed, "deleted", result.Deleted, "failed", failed)
 	return result, nil
 }
 
@@ -224,6 +232,10 @@ func (c *Client) itemUpdate(taskID string, d Dienst) syncCommand {
 
 func itemClose(taskID string) syncCommand {
 	return syncCommand{Type: "item_close", UUID: uuid.New().String(), Args: map[string]any{"id": taskID}}
+}
+
+func itemDelete(taskID string) syncCommand {
+	return syncCommand{Type: "item_delete", UUID: uuid.New().String(), Args: map[string]any{"id": taskID}}
 }
 
 // runSyncBatch posts the commands to POST /sync in chunks of 100, returning how
