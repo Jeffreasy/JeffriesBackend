@@ -267,9 +267,11 @@ func (c *Client) fetchAllTasks(ctx context.Context) ([]Task, error) {
 	cursor := ""
 
 	for {
-		endpoint := "tasks"
+		// Scope to our own "Rooster" label so the sync only ever reads/closes the
+		// shift tasks it manages — never the user's other Todoist tasks.
+		endpoint := "tasks?label=Rooster"
 		if cursor != "" {
-			endpoint += "?cursor=" + cursor
+			endpoint += "&cursor=" + url.QueryEscape(cursor)
 		}
 
 		body, err := c.doRequestRaw(ctx, "GET", endpoint, nil)

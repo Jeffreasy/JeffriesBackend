@@ -339,6 +339,16 @@ func cronScheduleSync(client *google.OAuthClient, db *store.DB, cfg CronConfig) 
 		}
 		_ = schedStore.UpsertMeta(ctx, cfg.UserID, "Google Calendar Sync", len(items))
 
+		// Push to Todoist immediately (best-effort) so a shift change lands now
+		// instead of waiting up to a day for the separate daily todoist cron.
+		if cfg.TodoistEnabled && cfg.TodoistAPIToken != "" {
+			if res, terr := pushScheduleToTodoist(ctx, db, cfg); terr != nil {
+				slog.Warn("sync-schedule: todoist push failed (non-fatal)", "error", terr)
+			} else if res != nil {
+				slog.Info("sync-schedule: todoist pushed", "updated", res.Updated, "created", res.Created, "closed", res.Closed, "failed", res.Failed)
+			}
+		}
+
 		slog.Info("📅 sync-schedule: done", "parsed", len(diensten), "upserted", count, "pruned", pruned)
 		return nil
 	}
@@ -520,36 +530,30 @@ func (e *Engine) alertPendingCalendarFailures(ctx context.Context, count int) {
 func cronTodoistSync(db *store.DB, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		slog.Info("✅ sync-todoist: starting")
-
-		// Fetch schedule from PG
-		schedStore := store.NewScheduleStore(db)
-		rows, err := schedStore.List(ctx, cfg.UserID)
-		if err != nil {
-			return err
-		}
-
-		var diensten []todoist.Dienst
-		for _, r := range rows {
-			diensten = append(diensten, todoist.Dienst{
-				EventID:    r.EventID,
-				Titel:      r.Titel,
-				StartDatum: r.StartDatum,
-				StartTijd:  r.StartTijd,
-				EindTijd:   r.EindTijd,
-				Locatie:    r.Locatie,
-				ShiftType:  r.ShiftType,
-				Duur:       r.Duur,
-				Heledag:    r.Heledag,
-				Status:     r.Status,
-			})
-		}
-
-		client := todoist.NewClient(cfg.TodoistAPIToken, cfg.TodoistProjectID)
-		// Pass today's date via context
-		ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
-		_, err = client.SyncDiensten(ctx, diensten)
+		_, err := pushScheduleToTodoist(ctx, db, cfg)
 		return err
 	}
+}
+
+// pushScheduleToTodoist pushes the stored schedule to Todoist. Shared by the
+// daily cron, the schedule sync (so changes land immediately), and the
+// /sync/todoist handler.
+func pushScheduleToTodoist(ctx context.Context, db *store.DB, cfg CronConfig) (*todoist.SyncResult, error) {
+	rows, err := store.NewScheduleStore(db).List(ctx, cfg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	diensten := make([]todoist.Dienst, 0, len(rows))
+	for _, r := range rows {
+		diensten = append(diensten, todoist.Dienst{
+			EventID: r.EventID, Titel: r.Titel, StartDatum: r.StartDatum,
+			StartTijd: r.StartTijd, EindTijd: r.EindTijd, Locatie: r.Locatie,
+			ShiftType: r.ShiftType, Duur: r.Duur, Heledag: r.Heledag, Status: r.Status,
+		})
+	}
+	client := todoist.NewClient(cfg.TodoistAPIToken, cfg.TodoistProjectID)
+	ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
+	return client.SyncDiensten(ctx, diensten)
 }
 
 // ── Telegram cron implementations ────────────────────────────────────────────

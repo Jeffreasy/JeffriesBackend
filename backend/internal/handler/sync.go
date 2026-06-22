@@ -110,6 +110,13 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 	if scheduleWriteErr == nil {
 		_ = scheduleStore.UpsertMeta(ctx, userID, "Google Calendar Sync", len(scheduleImports))
+		// Push the refreshed schedule to Todoist (best-effort) so a shift change
+		// lands now instead of waiting for the daily todoist cron.
+		if h.cfg.TodoistAPIToken != "" {
+			if _, terr := h.pushTodoist(ctx, userID); terr != nil {
+				slog.Warn("calendar sync: todoist push failed (non-fatal)", "error", terr)
+			}
+		}
 	}
 
 	calendarIDs := []string{"primary"}
@@ -330,10 +337,20 @@ func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	res, err := h.pushTodoist(ctx, userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Todoist sync mislukt: "+err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed, "failed": res.Failed})
+}
+
+// pushTodoist re-pushes the stored schedule to Todoist, shared by SyncTodoist and
+// a best-effort call from SyncCalendar so shift changes reach Todoist immediately.
+func (h *SyncHandler) pushTodoist(ctx context.Context, userID string) (*todoist.SyncResult, error) {
 	rows, err := store.NewScheduleStore(h.db).List(ctx, userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	diensten := make([]todoist.Dienst, 0, len(rows))
 	for _, rd := range rows {
@@ -345,12 +362,7 @@ func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 	}
 	client := todoist.NewClient(h.cfg.TodoistAPIToken, h.cfg.TodoistProjectID)
 	ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
-	res, err := client.SyncDiensten(ctx, diensten)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "Todoist sync mislukt: "+err.Error())
-		return
-	}
-	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed})
+	return client.SyncDiensten(ctx, diensten)
 }
 
 func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
