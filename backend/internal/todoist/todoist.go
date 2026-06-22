@@ -8,8 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 const baseURL = "https://api.todoist.com/api/v1/"
@@ -60,6 +65,19 @@ type SyncResult struct {
 	Created int `json:"created"`
 	Updated int `json:"updated"`
 	Closed  int `json:"closed"`
+	Failed  int `json:"failed"`
+}
+
+// syncCommand is one Todoist Sync API command (item_add/item_update/item_close).
+type syncCommand struct {
+	Type   string         `json:"type"`
+	TempID string         `json:"temp_id,omitempty"`
+	UUID   string         `json:"uuid"`
+	Args   map[string]any `json:"args"`
+}
+
+type syncResponse struct {
+	SyncStatus map[string]json.RawMessage `json:"sync_status"`
 }
 
 var eidRegex = regexp.MustCompile(`\[EID:(.*?)\]`)
@@ -105,26 +123,24 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 	}
 
 	result := &SyncResult{}
+	var commands []syncCommand
 
 	for _, d := range aankomend {
 		hash := makeHash(d)
-		payload := c.buildPayload(d)
 		existing, exists := taskByEID[d.EventID]
-
 		if exists {
-			existingHash := extractHash(existing.Description)
-			if existingHash != hash {
-				_ = c.doRequest(ctx, "POST", "tasks/"+existing.ID, payload)
+			if extractHash(existing.Description) != hash {
+				commands = append(commands, c.itemUpdate(existing.ID, d))
 				result.Updated++
 			}
 			delete(taskByEID, d.EventID)
 		} else {
-			_ = c.doRequest(ctx, "POST", "tasks", payload)
+			commands = append(commands, c.itemAdd(d))
 			result.Created++
 		}
 	}
 
-	// Close expired tasks
+	// Close expired tasks (still mapped = not in the upcoming set).
 	for _, t := range taskByEID {
 		if t.Due == nil {
 			continue
@@ -136,12 +152,113 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 		if dueStr == "" || dueStr[:10] >= today {
 			continue
 		}
-		_ = c.doRequest(ctx, "POST", "tasks/"+t.ID+"/close", nil)
+		commands = append(commands, itemClose(t.ID))
 		result.Closed++
 	}
 
-	slog.Info("✅ todoist sync done", "created", result.Created, "updated", result.Updated, "closed", result.Closed)
+	if len(commands) == 0 {
+		return result, nil
+	}
+
+	// Batch every change through the Sync API (up to 100 commands per request)
+	// instead of one REST call per task.
+	failed, err := c.runSyncBatch(ctx, commands)
+	if err != nil {
+		return result, err
+	}
+	result.Failed = failed
+	slog.Info("✅ todoist sync done", "created", result.Created, "updated", result.Updated, "closed", result.Closed, "failed", failed)
 	return result, nil
+}
+
+// taskArgs builds the Sync API args for a shift task (content/description/due/
+// duration/labels), shared by item_add and item_update.
+func (c *Client) taskArgs(d Dienst) map[string]any {
+	team := getTeam(d.Locatie)
+	title := fmt.Sprintf("Dienst (%s)", d.Titel)
+	if team != "?" {
+		title = fmt.Sprintf("%s %s", team, d.ShiftType)
+	}
+	desc := fmt.Sprintf("Locatie: %s\nDuur: %.1f uur\nHash: %s\n\n[EID:%s]",
+		d.Locatie, d.Duur, makeHash(d), d.EventID)
+
+	args := map[string]any{
+		"content":     title,
+		"description": desc,
+		"labels":      []string{"Rooster"},
+	}
+	if d.Heledag {
+		args["due"] = map[string]any{"date": d.StartDatum}
+	} else {
+		startTijd := d.StartTijd
+		if startTijd == "" {
+			startTijd = "09:00"
+		}
+		args["due"] = map[string]any{
+			"datetime": d.StartDatum + "T" + startTijd + ":00",
+			"timezone": "Europe/Amsterdam",
+		}
+		durationMin := int(d.Duur * 60)
+		if durationMin < 15 {
+			durationMin = 15
+		}
+		args["duration"] = map[string]any{"amount": durationMin, "unit": "minute"}
+	}
+	return args
+}
+
+func (c *Client) itemAdd(d Dienst) syncCommand {
+	args := c.taskArgs(d)
+	if c.projectID != "" {
+		args["project_id"] = c.projectID
+	}
+	return syncCommand{Type: "item_add", TempID: uuid.New().String(), UUID: uuid.New().String(), Args: args}
+}
+
+func (c *Client) itemUpdate(taskID string, d Dienst) syncCommand {
+	args := c.taskArgs(d) // no project_id — item_update would move the task
+	args["id"] = taskID
+	return syncCommand{Type: "item_update", UUID: uuid.New().String(), Args: args}
+}
+
+func itemClose(taskID string) syncCommand {
+	return syncCommand{Type: "item_close", UUID: uuid.New().String(), Args: map[string]any{"id": taskID}}
+}
+
+// runSyncBatch posts the commands to POST /sync in chunks of 100, returning how
+// many commands failed (per-command sync_status is parsed and logged).
+func (c *Client) runSyncBatch(ctx context.Context, commands []syncCommand) (failed int, err error) {
+	const maxPerBatch = 100
+	for start := 0; start < len(commands); start += maxPerBatch {
+		end := start + maxPerBatch
+		if end > len(commands) {
+			end = len(commands)
+		}
+		cmdJSON, mErr := json.Marshal(commands[start:end])
+		if mErr != nil {
+			return failed, mErr
+		}
+		form := url.Values{}
+		form.Set("commands", string(cmdJSON))
+
+		body, rErr := c.doForm(ctx, "sync", form)
+		if rErr != nil {
+			return failed, rErr
+		}
+		var sr syncResponse
+		if uErr := json.Unmarshal(body, &sr); uErr != nil {
+			return failed, fmt.Errorf("parse sync response: %w", uErr)
+		}
+		for cmdUUID, status := range sr.SyncStatus {
+			var ok string
+			if json.Unmarshal(status, &ok) == nil && ok == "ok" {
+				continue
+			}
+			failed++
+			slog.Warn("todoist sync command failed", "uuid", cmdUUID, "status", string(status))
+		}
+	}
+	return failed, nil
 }
 
 func (c *Client) fetchAllTasks(ctx context.Context) ([]Task, error) {
@@ -212,45 +329,50 @@ func (c *Client) doRequestRaw(ctx context.Context, method, endpoint string, payl
 	return respBody, nil
 }
 
-func (c *Client) buildPayload(d Dienst) map[string]any {
-	team := getTeam(d.Locatie)
-	title := fmt.Sprintf("Dienst (%s)", d.Titel)
-	if team != "?" {
-		title = fmt.Sprintf("%s %s", team, d.ShiftType)
-	}
-
-	durationMin := int(d.Duur * 60)
-	if durationMin < 15 {
-		durationMin = 15
-	}
-
-	hash := makeHash(d)
-	desc := fmt.Sprintf("Locatie: %s\nDuur: %.1f uur\nHash: %s\n\n[EID:%s]",
-		d.Locatie, d.Duur, hash, d.EventID)
-
-	payload := map[string]any{
-		"content":     title,
-		"description": desc,
-		"labels":      []string{"Rooster"},
-	}
-
-	if c.projectID != "" {
-		payload["project_id"] = c.projectID
-	}
-
-	if d.Heledag {
-		payload["due_date"] = d.StartDatum
-	} else {
-		startTijd := d.StartTijd
-		if startTijd == "" {
-			startTijd = "09:00"
+// doForm posts an application/x-www-form-urlencoded body (the Sync API), with a
+// small Retry-After-aware backoff on 429 so a burst of commands doesn't fail.
+func (c *Client) doForm(ctx context.Context, endpoint string, form url.Values) ([]byte, error) {
+	const maxAttempts = 3
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+endpoint, strings.NewReader(form.Encode()))
+		if err != nil {
+			return nil, err
 		}
-		payload["due_datetime"] = d.StartDatum + "T" + startTijd + ":00"
-		payload["duration"] = durationMin
-		payload["duration_unit"] = "minute"
-	}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	return payload
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxAttempts {
+			wait := todoistRetryAfter(resp.Header.Get("Retry-After"), time.Duration(attempt)*2*time.Second)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("todoist POST %s: HTTP %d — %s", endpoint, resp.StatusCode, string(respBody))
+		}
+		return respBody, nil
+	}
+}
+
+// todoistRetryAfter parses a Retry-After header (seconds), capped, else the fallback.
+func todoistRetryAfter(header string, fallback time.Duration) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		if d := time.Duration(secs) * time.Second; d < 60*time.Second {
+			return d
+		}
+		return 60 * time.Second
+	}
+	return fallback
 }
 
 func makeHash(d Dienst) string {
