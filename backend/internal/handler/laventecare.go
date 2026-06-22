@@ -479,11 +479,16 @@ func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err := h.store.UpdateQuoteStatus(r.Context(), h.userID, id, input.Status); err != nil {
-		if err == pgx.ErrNoRows {
+		switch err {
+		case pgx.ErrNoRows:
 			Error(w, http.StatusNotFound, "Offerte niet gevonden")
-			return
+		case store.ErrInvalidStatus:
+			Error(w, http.StatusBadRequest, "Onbekende status")
+		case store.ErrInvalidStatusTransition:
+			Error(w, http.StatusConflict, "Een geaccepteerde offerte kan niet worden teruggezet")
+		default:
+			Error(w, http.StatusInternalServerError, err.Error())
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -620,11 +625,16 @@ func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	if err := h.store.UpdateInvoiceStatus(r.Context(), h.userID, id, input); err != nil {
-		if err == pgx.ErrNoRows {
+		switch err {
+		case pgx.ErrNoRows:
 			Error(w, http.StatusNotFound, "Factuur niet gevonden")
-			return
+		case store.ErrInvalidStatus:
+			Error(w, http.StatusBadRequest, "Onbekende status")
+		case store.ErrInvalidStatusTransition:
+			Error(w, http.StatusConflict, "Een betaalde factuur kan niet worden teruggezet of geherwaardeerd")
+		default:
+			Error(w, http.StatusInternalServerError, err.Error())
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})

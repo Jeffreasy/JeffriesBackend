@@ -32,8 +32,47 @@ var (
 	ErrQuoteNotAccepted             = errors.New("quote must be accepted before invoice conversion")
 	ErrQuoteHasNoLines              = errors.New("quote has no lines to invoice")
 	ErrInvalidDossierAdviceTarget   = errors.New("choose exactly one dossier context")
+	ErrInvalidStatus                = errors.New("unknown status")
+	ErrInvalidStatusTransition      = errors.New("illegal status transition for a finalized record")
 	dossierAdviceResponseSampleSize = 25
 )
+
+// Allowed lifecycle states. A paid invoice and an accepted/declined quote are
+// treated as financially final and may not be silently reverted or re-amounted.
+var (
+	invoiceStatuses = map[string]bool{"concept": true, "verstuurd": true, "betaald": true, "geannuleerd": true}
+	quoteStatuses   = map[string]bool{"concept": true, "verstuurd": true, "geaccepteerd": true, "afgewezen": true, "verlopen": true}
+)
+
+// validateInvoiceStatusTransition rejects unknown statuses, reverting a paid
+// invoice back to concept/verstuurd, and re-amounting paid_cents on an
+// already-paid invoice (legally-final VAT records).
+func validateInvoiceStatusTransition(current, next string, newPaidCents *int, currentPaidCents int) error {
+	if !invoiceStatuses[next] {
+		return ErrInvalidStatus
+	}
+	if current == "betaald" {
+		if next == "concept" || next == "verstuurd" {
+			return ErrInvalidStatusTransition
+		}
+		if newPaidCents != nil && *newPaidCents != currentPaidCents {
+			return ErrInvalidStatusTransition
+		}
+	}
+	return nil
+}
+
+// validateQuoteStatusTransition rejects unknown statuses and un-accepting a quote
+// that was already accepted (it may have been converted to an invoice).
+func validateQuoteStatusTransition(current, next string) error {
+	if !quoteStatuses[next] {
+		return ErrInvalidStatus
+	}
+	if current == "geaccepteerd" && (next == "concept" || next == "verstuurd") {
+		return ErrInvalidStatusTransition
+	}
+	return nil
+}
 
 // NewLaventeCareStore creates a new LaventeCareStore.
 func NewLaventeCareStore(db *DB) *LaventeCareStore {
@@ -2598,10 +2637,6 @@ func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input
 	}
 	vat := vatCents(subtotal, vatRate)
 	total := subtotal + vat
-	number, err := s.nextLCNumber(ctx, userID, "lc_quotes", "quote_number", "LC-OFF")
-	if err != nil {
-		return nil, err
-	}
 	id := uuid.New()
 
 	tx, err := s.db.Pool.Begin(ctx)
@@ -2609,6 +2644,12 @@ func (s *LaventeCareStore) CreateQuote(ctx context.Context, userID string, input
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Allocate the quote number inside the tx so concurrent creates can't collide.
+	number, err := s.nextLCNumber(ctx, tx, userID, "lc_quotes", "quote_number", "LC-OFF")
+	if err != nil {
+		return nil, err
+	}
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO lc_quotes (id, user_id, company_id, project_id, workstream_id,
@@ -2673,6 +2714,13 @@ func (s *LaventeCareStore) UpdateQuoteStatus(ctx context.Context, userID string,
 	status = cleanStatus(status, "")
 	if status == "" {
 		return pgx.ErrNoRows
+	}
+	quote, err := s.GetQuote(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := validateQuoteStatusTransition(quote.Status, status); err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	var acceptedAt *time.Time
@@ -2910,17 +2958,19 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 	if input.VatRateBps != nil {
 		vatRate = *input.VatRateBps
 	}
+	// VAT is summed per line (each line may carry its own rate) so a mixed-rate
+	// invoice gets a correct header VAT/total instead of one rate over the subtotal.
 	subtotal := 0
+	vat := 0
 	for _, line := range lines {
 		subtotal += line.TotalCents
+		lineRate := vatRate
+		if line.VatRateBps != nil {
+			lineRate = *line.VatRateBps
+		}
+		vat += vatCents(line.TotalCents, lineRate)
 	}
-	vat := vatCents(subtotal, vatRate)
 	total := subtotal + vat
-	number, err := s.nextLCNumber(ctx, userID, "lc_invoices", "invoice_number", "LC-FAC")
-	if err != nil {
-		return nil, err
-	}
-	merchantReference := number
 	id := uuid.New()
 
 	tx, err := s.db.Pool.Begin(ctx)
@@ -2928,6 +2978,13 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Allocate the invoice number inside the tx so concurrent creates can't collide.
+	number, err := s.nextLCNumber(ctx, tx, userID, "lc_invoices", "invoice_number", "LC-FAC")
+	if err != nil {
+		return nil, err
+	}
+	merchantReference := number
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO lc_invoices (id, user_id, company_id, project_id, workstream_id, quote_id,
@@ -3111,6 +3168,9 @@ func (s *LaventeCareStore) UpdateInvoiceStatus(ctx context.Context, userID strin
 	status := cleanStatus(input.Status, "")
 	if status == "" {
 		return pgx.ErrNoRows
+	}
+	if err := validateInvoiceStatusTransition(invoice.Status, status, input.PaidCents, invoice.PaidCents); err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	paidAt := parseDateTimePtr(input.PaidAt)
@@ -3618,15 +3678,26 @@ func (s *LaventeCareStore) validateBillingTarget(ctx context.Context, userID str
 	return nil
 }
 
-func (s *LaventeCareStore) nextLCNumber(ctx context.Context, userID, table, column, prefix string) (string, error) {
+// nextLCNumber allocates the next sequential document number for (user, prefix,
+// year). It MUST run inside the caller's transaction: a per-scope advisory lock
+// serializes concurrent allocations until the tx ends, and it derives the number
+// from MAX(existing)+1 — not COUNT(*)+1 — so a later deletion can never make a
+// new number collide with an existing one (which would 500 on the UNIQUE
+// constraint and jam invoice/quote creation).
+func (s *LaventeCareStore) nextLCNumber(ctx context.Context, tx pgx.Tx, userID, table, column, prefix string) (string, error) {
 	year := time.Now().UTC().Format("2006")
 	needle := prefix + "-" + year + "-%"
-	query := fmt.Sprintf(`SELECT COUNT(*)::int FROM %s WHERE user_id = $1 AND %s LIKE $2`, table, column)
-	var count int
-	if err := s.db.Pool.QueryRow(ctx, query, userID, needle).Scan(&count); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, userID+"|"+table+"|"+year); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s-%s-%04d", prefix, year, count+1), nil
+	query := fmt.Sprintf(
+		`SELECT COALESCE(MAX(NULLIF(regexp_replace(%s, '^.*-', ''), '')::int), 0)
+		   FROM %s WHERE user_id = $1 AND %s LIKE $2`, column, table, column)
+	var maxNum int
+	if err := tx.QueryRow(ctx, query, userID, needle).Scan(&maxNum); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s-%04d", prefix, year, maxNum+1), nil
 }
 
 // ─── Cockpit (aggregated dashboard) ──────────────────────────────────────────
@@ -4569,9 +4640,14 @@ func cleanInvoiceLines(lines []model.LCInvoiceLineCreate) []model.LCInvoiceLineC
 			minutes = 0
 		}
 		unit := maxInt(line.UnitAmountCents, 0)
+		// A time-based line's total is derived from minutes x hourly rate and must
+		// never be trusted from the client; only a flat-fee line (no minutes/rate)
+		// may carry an explicit total.
 		total := line.TotalCents
-		if total <= 0 {
+		if minutes > 0 && unit > 0 {
 			total = centsFromMinutes(minutes, unit)
+		} else if total < 0 {
+			total = 0
 		}
 		result = append(result, model.LCInvoiceLineCreate{
 			SourceTimeEntryID: line.SourceTimeEntryID,
