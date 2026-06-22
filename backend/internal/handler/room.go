@@ -183,5 +183,11 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	if _, err := fmt.Sscan(v, &n); err != nil {
 		return fallback
 	}
+	// Cap LIMIT/OFFSET-style params so an abusive value (e.g. limit=2000000000)
+	// can't force a huge scan/allocation. 10000 is far above any real list page.
+	const maxQueryInt = 10000
+	if n > maxQueryInt {
+		return maxQueryInt
+	}
 	return n
 }

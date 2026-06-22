@@ -2558,6 +2558,12 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 	// ── LAVENTECARE ──────────────────────────────────────────────────
 	case "laventecareCockpit":
 		cockpit, err := e.laventeCareStore.GetCockpit(ctx, e.userID)
+		if cockpit != nil {
+			// Don't ship raw access credentials (login URLs, usernames, secret
+			// hints) to the external model — summary.accessCredentials keeps the
+			// count for context without leaking the access metadata.
+			cockpit.AccessCredentials = nil
+		}
 		return e.jsonResponse(map[string]any{
 			"scope":       "laventecare cockpit",
 			"cockpit":     cockpit,
