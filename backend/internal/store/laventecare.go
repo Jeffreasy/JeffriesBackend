@@ -247,6 +247,23 @@ func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id 
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
+	// Keep the denormalized business_context_title on notes/personal-events in
+	// sync when the company is renamed, so reads don't show the old name.
+	if input.Naam != nil {
+		if newName := strings.TrimSpace(*input.Naam); newName != "" {
+			idStr := id.String()
+			if _, err := s.db.Pool.Exec(ctx, `
+				UPDATE notes SET business_context_title = $3
+				 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr, newName); err != nil {
+				return err
+			}
+			if _, err := s.db.Pool.Exec(ctx, `
+				UPDATE personal_events SET business_context_title = $3
+				 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr, newName); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -263,6 +280,20 @@ func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id 
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, `DELETE FROM lc_contacts WHERE user_id = $1 AND company_id = $2`, userID, id); err != nil {
+		return err
+	}
+	// Notes/personal-events carry a denormalized business_context pointing at this
+	// company by id (free TEXT, no FK). Clear it in the same tx so a deleted
+	// company can't leave a dangling id + stale cached title behind.
+	idStr := id.String()
+	if _, err := tx.Exec(ctx, `
+		UPDATE notes SET business_context_id = NULL, business_context_type = NULL, business_context_title = NULL
+		 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE personal_events SET business_context_id = NULL, business_context_type = NULL, business_context_title = NULL
+		 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM lc_companies WHERE user_id = $1 AND id = $2`, userID, id)

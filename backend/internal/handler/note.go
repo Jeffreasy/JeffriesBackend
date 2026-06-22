@@ -185,6 +185,10 @@ type noteUpdateBody struct {
 	BusinessContextType  *string  `json:"businessContextType"`
 	BusinessContextID    *string  `json:"businessContextId"`
 	BusinessContextTitle *string  `json:"businessContextTitle"`
+	// ExpectedGewijzigd, when set, enables optimistic-concurrency: the update is
+	// rejected (409) if the note was changed since this timestamp. Sent by the
+	// content-overwriting surfaces (editor save, card checkbox toggle).
+	ExpectedGewijzigd *string `json:"expectedGewijzigd"`
 }
 
 // Update patches a note.
@@ -295,8 +299,24 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if body.ExpectedGewijzigd != nil {
+		if raw := strings.TrimSpace(*body.ExpectedGewijzigd); raw != "" {
+			ts, perr := time.Parse(time.RFC3339Nano, raw)
+			if perr != nil {
+				ts, perr = time.Parse(time.RFC3339, raw)
+			}
+			if perr == nil {
+				fields["expected_gewijzigd"] = ts
+			}
+		}
+	}
+
 	updated, err := h.store.UpdateForUser(r.Context(), userID, id, fields)
 	if err != nil {
+		if errors.Is(err, store.ErrNoteConflict) {
+			Error(w, http.StatusConflict, "note modified elsewhere")
+			return
+		}
 		if errors.Is(err, store.ErrNoteNotFound) {
 			Error(w, http.StatusNotFound, "note not found")
 			return

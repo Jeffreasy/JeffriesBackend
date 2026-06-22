@@ -26,6 +26,35 @@ var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 var ErrNoteNotFound = pgx.ErrNoRows
 var ErrLinkedEventNotFound = errors.New("linked event not found")
 
+// ErrNoteConflict is returned when an update carries an optimistic-concurrency
+// token (expected_gewijzigd) that no longer matches the stored note — i.e. the
+// note was changed by another write since the caller last read it.
+var ErrNoteConflict = errors.New("note modified by another write")
+
+// normalizeNoteTags trims, drops blanks, and de-duplicates tags
+// (case-insensitive, first spelling wins). Applied centrally on every write so
+// no caller (handler, AI executor, restore) can store duplicate/empty tags.
+func normalizeNoteTags(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		key := strings.ToLower(t)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, t)
+	}
+	return out
+}
+
 const noteCols = `id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived, is_completed, completed_at,
 	deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
 	business_context_title, triage_flag, aangemaakt, gewijzigd`
@@ -99,6 +128,7 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 	now := time.Now()
 	n.Aangemaakt = now
 	n.Gewijzigd = now
+	n.Tags = normalizeNoteTags(n.Tags)
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -168,13 +198,38 @@ func (s *NoteStore) UpdateForUser(ctx context.Context, userID string, id uuid.UU
 }
 
 func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fields map[string]any) (model.Note, error) {
+	// Optional optimistic-concurrency token: when the caller passes the
+	// gewijzigd timestamp it last saw, a concurrent write that already bumped
+	// gewijzigd makes this update fail loudly (ErrNoteConflict) instead of
+	// silently clobbering the other change. Absent token = no guard (back-compat).
+	var expected *time.Time
+	if raw, ok := fields["expected_gewijzigd"]; ok {
+		delete(fields, "expected_gewijzigd")
+		if t, ok := optionalTimeValue(raw); ok {
+			expected = t
+		}
+	}
+	// Normalize tags centrally so every write path stores trimmed/de-duped tags.
+	if raw, ok := fields["tags"]; ok {
+		if tags, ok := tagsValue(raw); ok {
+			fields["tags"] = normalizeNoteTags(tags)
+		}
+	}
+	if len(fields) == 0 {
+		// Only a token was sent — nothing to write; return the note as-is.
+		if userID != "" {
+			return s.GetForUser(ctx, userID, id)
+		}
+		return s.Get(ctx, id)
+	}
+
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
 		return model.Note{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	if shouldCheckNoteRevision(fields) {
+	if expected != nil || shouldCheckNoteRevision(fields) {
 		selectWhere := "id = $1"
 		selectArgs := []any{id}
 		if userID != "" {
@@ -182,12 +237,15 @@ func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fie
 			selectArgs = append(selectArgs, userID)
 		}
 		current, err := scanNote(tx.QueryRow(ctx, fmt.Sprintf(`
-			SELECT %s FROM notes WHERE %s
+			SELECT %s FROM notes WHERE %s FOR UPDATE
 		`, noteCols, selectWhere), selectArgs...))
 		if err != nil {
 			return current, err
 		}
-		if noteRevisionFieldsChanged(current, fields) {
+		if expected != nil && !sameOptionalTime(&current.Gewijzigd, expected) {
+			return current, ErrNoteConflict
+		}
+		if shouldCheckNoteRevision(fields) && noteRevisionFieldsChanged(current, fields) {
 			if err := insertNoteRevision(ctx, tx, current); err != nil {
 				return model.Note{}, err
 			}
@@ -402,16 +460,32 @@ func insertNoteRevision(ctx context.Context, tx pgx.Tx, n model.Note) error {
 	if tags == nil {
 		tags = []string{}
 	}
-	_, err := tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO note_revisions (note_id, user_id, titel, inhoud, tags, kleur,
 			deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
 			business_context_title)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`, n.ID, n.UserID, n.Titel, n.Inhoud, tags, n.Kleur,
 		n.Deadline, n.LinkedEventID, n.Prioriteit, n.Symbol, n.BusinessContextType, n.BusinessContextID,
-		n.BusinessContextTitle)
+		n.BusinessContextTitle); err != nil {
+		return err
+	}
+	// Cap revision history per note so it can't grow unbounded over a note's life.
+	_, err := tx.Exec(ctx, `
+		DELETE FROM note_revisions
+		 WHERE note_id = $1
+		   AND id NOT IN (
+			   SELECT id FROM note_revisions
+			    WHERE note_id = $1
+			    ORDER BY aangemaakt DESC
+			    LIMIT $2
+		   )
+	`, n.ID, noteRevisionRetention)
 	return err
 }
+
+// noteRevisionRetention caps how many saved versions are kept per note.
+const noteRevisionRetention = 50
 
 // ListRevisions returns recent saved versions for a note.
 func (s *NoteStore) ListRevisions(ctx context.Context, userID string, noteID uuid.UUID, limit int) ([]model.NoteRevision, error) {
@@ -505,13 +579,26 @@ func (s *NoteStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-// DeleteForUser removes a note only when it belongs to the given user.
+// DeleteForUser removes a note only when it belongs to the given user, and
+// removes any links touching it so no dangling note_links row survives.
 func (s *NoteStore) DeleteForUser(ctx context.Context, userID string, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM notes WHERE id = $1 AND user_id = $2`, id, userID)
-	if err == nil && tag.RowsAffected() == 0 {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM note_links WHERE source_id = $1 OR target_id = $1`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM notes WHERE id = $1 AND user_id = $2`, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return err
+	return tx.Commit(ctx)
 }
 
 // Search performs full-text search across notes.
@@ -522,22 +609,25 @@ func (s *NoteStore) Search(ctx context.Context, userID, query string, limit int)
 	rows, err := s.db.Pool.Query(ctx, fmt.Sprintf(`
 		WITH q AS (
 			SELECT plainto_tsquery('dutch', $2) AS tsq,
-			       '%%' || lower($2) || '%%' AS likeq
+			       -- Escape LIKE wildcards (\ %% _) in the user's term so a literal
+			       -- '%%' or '_' matches itself instead of acting as a wildcard.
+			       '%%' || replace(replace(replace(lower($2), '\', '\\'), '%%', '\%%'), '_', '\_') || '%%' AS likeq
 		)
 		SELECT %s FROM notes, q
 		WHERE user_id = $1
 		  AND NOT is_archived
 		  AND (
 			  to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud) @@ q.tsq
-			  OR lower(COALESCE(prioriteit,'')) LIKE q.likeq
-			  OR lower(COALESCE(symbol,'')) LIKE q.likeq
+			  OR lower(COALESCE(prioriteit,'')) LIKE q.likeq ESCAPE '\'
+			  OR lower(COALESCE(symbol,'')) LIKE q.likeq ESCAPE '\'
 			  OR EXISTS (
 				  SELECT 1
 				  FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag
-				  WHERE lower(tag) LIKE q.likeq
+				  WHERE lower(tag) LIKE q.likeq ESCAPE '\'
 			  )
 		  )
-		ORDER BY is_pinned DESC, gewijzigd DESC
+		ORDER BY ts_rank(to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud), q.tsq) DESC,
+		         is_pinned DESC, gewijzigd DESC
 		LIMIT $3
 	`, noteCols), userID, query, limit)
 	if err != nil {
@@ -568,7 +658,8 @@ func (s *NoteStore) GetLinks(ctx context.Context, noteID uuid.UUID) ([]model.Not
 	})
 }
 
-// AddLink creates a bi-directional link between two notes.
+// AddLink creates a directed link source → target (idempotent). Backlinks are
+// derived by querying the reverse direction, so this intentionally stores one row.
 func (s *NoteStore) AddLink(ctx context.Context, userID string, sourceID, targetID uuid.UUID) error {
 	_, err := s.db.Pool.Exec(ctx, `
 		INSERT INTO note_links (user_id, source_id, target_id)
@@ -608,7 +699,7 @@ func (s *NoteStore) SyncLinksFromContent(ctx context.Context, userID string, sou
 			WHERE user_id = $1
 			  AND id <> $2
 			  AND lower(COALESCE(NULLIF(titel, ''), left(split_part(inhoud, E'\n', 1), 50))) = lower($3)
-			ORDER BY gewijzigd DESC
+			ORDER BY aangemaakt ASC, id ASC
 			LIMIT 1
 		`, userID, sourceID, title).Scan(&targetID)
 		if err == pgx.ErrNoRows {
