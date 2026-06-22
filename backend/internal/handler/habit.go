@@ -17,6 +17,21 @@ type HabitHandler struct{ store *store.HabitStore }
 
 func NewHabitHandler(s *store.HabitStore) *HabitHandler { return &HabitHandler{store: s} }
 
+var amsterdamLoc = func() *time.Location {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}()
+
+// todayAmsterdam returns today's date (YYYY-MM-DD) in Europe/Amsterdam, matching
+// the store layer — so a completion logged late at night (00:00–02:00 CET/CEST on
+// a UTC server) isn't stamped on the previous calendar day and breaking the streak.
+func todayAmsterdam() string {
+	return time.Now().In(amsterdamLoc).Format("2006-01-02")
+}
+
 // List returns all active habits for a user.
 // @Summary List habits
 // @Description Returns all active habits for the user
@@ -265,7 +280,7 @@ func (h *HabitHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 	}
 	datum := body.Datum
 	if datum == "" {
-		datum = time.Now().Format("2006-01-02")
+		datum = todayAmsterdam()
 	}
 
 	userID := r.URL.Query().Get("userId")
@@ -327,7 +342,7 @@ func (h *HabitHandler) Incident(w http.ResponseWriter, r *http.Request) {
 	log := model.HabitLog{
 		UserID:     userID,
 		HabitID:    habitID,
-		Datum:      time.Now().Format("2006-01-02"),
+		Datum:      todayAmsterdam(),
 		IsIncident: true,
 		TriggerCat: body.Trigger,
 		Notitie:    body.Notitie,
@@ -441,7 +456,7 @@ func (h *HabitHandler) ForDate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if datum == "" {
-		datum = time.Now().Format("2006-01-02")
+		datum = todayAmsterdam()
 	}
 
 	habits, err := h.store.ListDueForDate(r.Context(), userID, datum)
