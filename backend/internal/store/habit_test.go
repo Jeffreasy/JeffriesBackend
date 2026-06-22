@@ -55,9 +55,31 @@ func TestCalculatePositiveHabitProgress(t *testing.T) {
 		{Datum: "2026-06-04", Voltooid: true, XPVerdiend: 10},
 	}
 
-	current, longest, total, xp := calculateHabitProgress(habit, logs, "2026-06-04")
+	alwaysDue := func(string) bool { return true }
+	current, longest, total, xp := calculateHabitProgress(habit, logs, "2026-06-04", alwaysDue)
 	if current != 1 || longest != 2 || total != 3 || xp != 30 {
 		t.Fatalf("progress = current %d longest %d total %d xp %d, want 1/2/3/30", current, longest, total, xp)
+	}
+}
+
+func TestCalculatePositiveHabitProgressSkipsNonDueDays(t *testing.T) {
+	// A weekend-only habit completed two consecutive weekends; the weekdays between
+	// are not due and must NOT break the streak.
+	habit := model.Habit{Type: "positief", Frequentie: "weekenddagen"}
+	logs := []habitProgressLog{
+		{Datum: "2026-06-06", Voltooid: true}, // Sat
+		{Datum: "2026-06-07", Voltooid: true}, // Sun
+		{Datum: "2026-06-13", Voltooid: true}, // next Sat
+		{Datum: "2026-06-14", Voltooid: true}, // next Sun
+	}
+	isDue := func(date string) bool {
+		d, _ := time.Parse("2006-01-02", date)
+		wd := d.Weekday()
+		return wd == time.Saturday || wd == time.Sunday
+	}
+	current, longest, _, _ := calculateHabitProgress(habit, logs, "2026-06-14", isDue)
+	if current != 4 || longest != 4 {
+		t.Fatalf("weekend streak current %d longest %d, want 4/4 (weekdays must not break it)", current, longest)
 	}
 }
 
@@ -80,7 +102,7 @@ func TestCalculateNegativeHabitProgress(t *testing.T) {
 	habit := model.Habit{Type: "negatief", Aangemaakt: created}
 	logs := []habitProgressLog{{Datum: "2026-06-03", IsIncident: true}}
 
-	current, longest, total, xp := calculateHabitProgress(habit, logs, "2026-06-05")
+	current, longest, total, xp := calculateHabitProgress(habit, logs, "2026-06-05", func(string) bool { return true })
 	if current != 2 || longest != 2 || total != 4 || xp != 0 {
 		t.Fatalf("progress = current %d longest %d total %d xp %d, want 2/2/4/0", current, longest, total, xp)
 	}

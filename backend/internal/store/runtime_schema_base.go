@@ -400,6 +400,18 @@ CREATE TABLE IF NOT EXISTS ai_pending_actions (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Unique indexes that the ON CONFLICT upserts depend on. These lived ONLY in
+-- migrations/ as separate CREATE UNIQUE INDEX statements (not inline), so a
+-- fresh/restored DB had the tables but not the constraints — every upsert then
+-- raised 42P10 and rolled back, silently leaving schedule/events/transactions/
+-- salary/loonstroken empty. (The live prod DB has them via the dead migrations.)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_user_event ON schedule (user_id, event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pe_user_event ON personal_events (user_id, event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trx_user_rek_volgnr ON transactions (user_id, rekening_iban, volgnr);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_user_periode ON salary (user_id, periode);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_loon_user_jr_per ON loonstroken (user_id, jaar, periode);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_user_source ON sync_status (user_id, source);
 `)
 	return err
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -117,7 +118,7 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		return created, err
 	}
 	if err := s.SyncLinksFromContent(ctx, userID, created.ID, created.Inhoud); err != nil {
-		return created, err
+		slog.Warn("note link-sync failed after create", "note", created.ID, "error", err)
 	}
 	return created, nil
 }
@@ -227,8 +228,10 @@ func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fie
 		return updated, err
 	}
 	if _, changed := fields["inhoud"]; changed {
+		// The note is already committed; backlink sync is best-effort and
+		// self-heals on the next edit, so its failure must not 500 a saved write.
 		if err := s.SyncLinksFromContent(ctx, updated.UserID, updated.ID, updated.Inhoud); err != nil {
-			return updated, err
+			slog.Warn("note link-sync failed after commit", "note", updated.ID, "error", err)
 		}
 	}
 	return updated, nil
@@ -491,7 +494,7 @@ func (s *NoteStore) RestoreRevision(ctx context.Context, userID string, noteID, 
 		return updated, err
 	}
 	if err := s.SyncLinksFromContent(ctx, updated.UserID, updated.ID, updated.Inhoud); err != nil {
-		return updated, err
+		slog.Warn("note link-sync failed after restore", "note", updated.ID, "error", err)
 	}
 	return updated, nil
 }

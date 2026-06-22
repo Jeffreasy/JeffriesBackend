@@ -119,6 +119,15 @@ func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "user_id en event_id verplicht")
 		return
 	}
+	if e.StartDatum != "" && e.EindDatum != "" && e.EindDatum < e.StartDatum {
+		Error(w, http.StatusBadRequest, "einddatum ligt vóór startdatum")
+		return
+	}
+	if !e.Heledag && e.StartDatum == e.EindDatum && e.StartTijd != nil && e.EindTijd != nil &&
+		*e.StartTijd != "" && *e.EindTijd != "" && *e.EindTijd < *e.StartTijd {
+		Error(w, http.StatusBadRequest, "eindtijd ligt vóór starttijd")
+		return
+	}
 	if err := h.store.Upsert(r.Context(), e); err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return

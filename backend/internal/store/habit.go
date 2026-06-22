@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,19 @@ import (
 )
 
 type HabitStore struct{ db *DB }
+
+// habitUpdatableColumns is the allowlist of columns a client may PATCH. Computed
+// fields (streak/xp/totals) and identity/timestamps are excluded, and any other
+// key is ignored — without this, raw JSON keys were interpolated into the SQL SET
+// clause (mass-assignment + SQL injection).
+var habitUpdatableColumns = map[string]bool{
+	"naam": true, "emoji": true, "type": true, "beschrijving": true,
+	"frequentie": true, "aangepaste_dagen": true, "doel_aantal": true,
+	"rooster_filter": true, "is_kwantitatief": true, "doel_waarde": true,
+	"eenheid": true, "doel_tijd": true, "xp_per_voltooiing": true,
+	"moeilijkheid": true, "financie_categorie": true, "kleur": true,
+	"volgorde": true, "is_actief": true, "is_pauze": true, "gepauzeer_om": true,
+}
 
 func NewHabitStore(db *DB) *HabitStore { return &HabitStore{db: db} }
 
@@ -135,9 +149,15 @@ func (s *HabitStore) Update(ctx context.Context, id uuid.UUID, fields map[string
 	args := []any{}
 	i := 1
 	for col, val := range fields {
+		if !habitUpdatableColumns[col] {
+			continue // ignore unknown/computed/injection keys
+		}
 		sets = append(sets, col+" = $"+strconv.Itoa(i))
 		args = append(args, val)
 		i++
+	}
+	if len(sets) == 0 {
+		return model.Habit{}, fmt.Errorf("geen geldige velden om bij te werken")
 	}
 	sets = append(sets, "gewijzigd = $"+strconv.Itoa(i))
 	args = append(args, time.Now())
@@ -433,7 +453,31 @@ func (s *HabitStore) RefreshHabitProgress(ctx context.Context, habitID uuid.UUID
 		return err
 	}
 
-	current, longest, total, xp := calculateHabitProgress(habit, logs, todayAmsterdam())
+	today := todayAmsterdam()
+	// Build the due-day predicate so the streak skips off days (weekend/aangepast/
+	// rooster-filter habits) instead of breaking the run on them. Fetch the
+	// schedule context across the active range for rooster-filtered habits.
+	earliest := today
+	for _, log := range logs {
+		if log.Voltooid && log.Datum < earliest {
+			earliest = log.Datum
+		}
+	}
+	schedCtx, scErr := s.scheduleContextsRange(ctx, habit.UserID, earliest, today)
+	if scErr != nil {
+		schedCtx = map[string]habitScheduleContext{}
+	}
+	isDue := func(date string) bool {
+		parsed, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			return false
+		}
+		if !habitFrequencyDueOnDate(habit, parsed) {
+			return false
+		}
+		return habitMatchesRoosterFilter(habit.RoosterFilter, schedCtx[date])
+	}
+	current, longest, total, xp := calculateHabitProgress(habit, logs, today, isDue)
 	if longest < habit.LangsteStreak {
 		longest = habit.LangsteStreak
 	}
@@ -451,20 +495,64 @@ func (s *HabitStore) RefreshHabitProgress(ctx context.Context, habitID uuid.UUID
 	return s.awardHabitBadges(ctx, habit.UserID, habitID, current, longest, total)
 }
 
-func calculateHabitProgress(habit model.Habit, logs []habitProgressLog, today string) (current, longest, total, xp int) {
+func calculateHabitProgress(habit model.Habit, logs []habitProgressLog, today string, isDue func(string) bool) (current, longest, total, xp int) {
 	if habit.Type == "negatief" {
 		return calculateNegativeHabitProgress(habit, logs, today)
 	}
 	completed := make(map[string]bool)
+	earliest := today
 	for _, log := range logs {
 		if log.Voltooid {
 			completed[log.Datum] = true
 			total++
 			xp += log.XPVerdiend
+			if log.Datum < earliest {
+				earliest = log.Datum
+			}
 		}
 	}
-	longest = longestDateRun(completed)
-	current = currentDateRun(completed, today)
+	if len(completed) == 0 {
+		return 0, habit.LangsteStreak, total, xp
+	}
+	startD, err1 := time.Parse("2006-01-02", earliest)
+	endD, err2 := time.Parse("2006-01-02", today)
+	if err1 != nil || err2 != nil {
+		return 0, habit.LangsteStreak, total, xp
+	}
+	// A streak is consecutive DUE dates that are all completed. Non-due days (off
+	// days for weekend/aangepast/rooster-filter habits) are skipped, not counted
+	// as misses — so they no longer break the run.
+	var dueSeq []string
+	for d := startD; !d.After(endD); d = d.AddDate(0, 0, 1) {
+		k := d.Format("2006-01-02")
+		if isDue(k) {
+			dueSeq = append(dueSeq, k)
+		}
+	}
+	run := 0
+	for _, k := range dueSeq {
+		if completed[k] {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	// Current run: trailing consecutive completed due-dates. If the last due date
+	// is today and not yet completed, today is still in progress — don't break on it.
+	i := len(dueSeq) - 1
+	if i >= 0 && dueSeq[i] == today && !completed[today] {
+		i--
+	}
+	for ; i >= 0; i-- {
+		if completed[dueSeq[i]] {
+			current++
+		} else {
+			break
+		}
+	}
 	return current, longest, total, xp
 }
 
@@ -502,48 +590,6 @@ func calculateNegativeHabitProgress(habit model.Habit, logs []habitProgressLog, 
 	}
 	current = run
 	return current, longest, total, 0
-}
-
-func longestDateRun(completed map[string]bool) int {
-	if len(completed) == 0 {
-		return 0
-	}
-	longest := 0
-	for date := range completed {
-		day, err := time.Parse("2006-01-02", date)
-		if err != nil {
-			continue
-		}
-		prev := day.AddDate(0, 0, -1).Format("2006-01-02")
-		if completed[prev] {
-			continue
-		}
-		run := 0
-		for completed[day.Format("2006-01-02")] {
-			run++
-			day = day.AddDate(0, 0, 1)
-		}
-		if run > longest {
-			longest = run
-		}
-	}
-	return longest
-}
-
-func currentDateRun(completed map[string]bool, today string) int {
-	day, err := time.Parse("2006-01-02", today)
-	if err != nil {
-		return 0
-	}
-	if !completed[today] {
-		day = day.AddDate(0, 0, -1)
-	}
-	run := 0
-	for completed[day.Format("2006-01-02")] {
-		run++
-		day = day.AddDate(0, 0, -1)
-	}
-	return run
 }
 
 func habitLogByID(logs []model.HabitLog) map[uuid.UUID]model.HabitLog {
@@ -701,7 +747,8 @@ func (s *HabitStore) HeatmapData(ctx context.Context, userID string, days int) (
 func (s *HabitStore) Stats(ctx context.Context, userID string) (HabitStats, error) {
 	var stats HabitStats
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(totaal_xp), 0),
+		SELECT COALESCE(SUM(totaal_xp), 0)
+		         + COALESCE((SELECT SUM(xp_bonus) FROM habit_badges WHERE user_id = $1), 0),
 		       COALESCE(SUM(totaal_voltooid), 0),
 		       COUNT(*),
 		       COALESCE(MAX(huidige_streak), 0),

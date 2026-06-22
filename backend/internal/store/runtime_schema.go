@@ -424,6 +424,8 @@ CREATE TABLE IF NOT EXISTS lc_documents (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Required by SeedDocuments' ON CONFLICT (user_id, document_key) upsert.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lc_documents_user_key ON lc_documents (user_id, document_key);
 
 CREATE TABLE IF NOT EXISTS lc_decisions (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
