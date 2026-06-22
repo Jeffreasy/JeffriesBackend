@@ -1343,6 +1343,34 @@ func (h *LaventeCareHandler) UpdateCompany(w http.ResponseWriter, r *http.Reques
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// DeleteCompany erases a customer and their personal data (GDPR right-to-erasure).
+// @Summary Delete Company
+// @Description Deletes a customer, cascading their contacts, access credentials and activity timeline
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Company ID (UUID)"
+// @Success 200 {object} map[string]string "status deleted"
+// @Failure 404 {string} string "Company not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/companies/{id} [delete]
+func (h *LaventeCareHandler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid company ID")
+		return
+	}
+	if err := h.store.DeleteCompany(r.Context(), h.userID, id); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Klant niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 // ListContacts returns LaventeCare contacts.
 // @Summary List Contacts
 // @Description Returns contacts, optionally filtered by company
@@ -2252,9 +2280,20 @@ func (h *LaventeCareHandler) ConvertSignalToLead(w http.ResponseWriter, r *http.
 	pijnpunt := input.Subtitle + "\n" + input.ActionHint
 	prioriteit := input.Urgency
 
+	bron := input.Source
+	if bron == "" {
+		bron = "cockpit"
+	}
+	// De-duplicate: if this signal was already converted, return the existing lead
+	// instead of creating a duplicate (the signal can be triggered twice).
+	if existing, err := h.store.GetLeadBySource(r.Context(), h.userID, bron, input.SourceID); err == nil && existing != nil {
+		JSON(w, http.StatusOK, map[string]any{"lead": existing, "reused": true})
+		return
+	}
+
 	lead, err := h.store.CreateLead(r.Context(), h.userID, model.LCLeadCreate{
 		Titel:      input.Title,
-		Bron:       input.Source,
+		Bron:       bron,
 		SourceID:   &input.SourceID,
 		Pijnpunt:   &pijnpunt,
 		Prioriteit: &prioriteit,

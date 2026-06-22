@@ -745,9 +745,19 @@ func (s *LaventeCareStore) MarkMailOutboxSending(ctx context.Context, userID str
 func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string, id uuid.UUID, providerMessageID string) error {
 	now := time.Now().UTC()
 	msgID := cleanStringPtr(&providerMessageID)
+	// Once delivered, redact any embedded pilot password from the stored bodies so
+	// plaintext secrets don't linger in lc_mail_outbox indefinitely. The recipient
+	// already received the real password; this only scrubs the at-rest copy. The
+	// text pattern is per-line (n flag); the HTML pattern is anchored on the exact
+	// monospace "secret" span style so it can't touch other content.
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_mail_outbox
-		    SET status = 'sent', provider_message_id = $3, error_message = NULL, sent_at = $4, updated_at = $4
+		    SET status = 'sent', provider_message_id = $3, error_message = NULL, sent_at = $4, updated_at = $4,
+		        body_text = regexp_replace(COALESCE(body_text, ''),
+		                    'Wachtwoord:.*', 'Wachtwoord: ••• (verwijderd na verzending)', 'gn'),
+		        body_html = regexp_replace(COALESCE(body_html, ''),
+		                    '(background:#e2e8f0;border:1px solid #cbd5e1;border-radius:8px;padding:7px 9px;font-family:ui-monospace[^>]*>)[^<]*(</span>)',
+		                    '\1••• (verwijderd na verzending)\2', 'g')
 		  WHERE user_id = $1 AND id = $2`,
 		userID, id, msgID, now)
 	if err != nil {

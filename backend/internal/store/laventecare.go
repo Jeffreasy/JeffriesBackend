@@ -250,6 +250,31 @@ func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id 
 	return nil
 }
 
+// DeleteCompany erases a customer and their personal data (GDPR Art.17). It
+// removes the company's contacts (PII) explicitly, then deletes the company —
+// which cascades the access credentials and the activity timeline. Leads,
+// projects and documents are retained but their company/contact references are
+// nulled by FK, so no orphaned PII remains.
+func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id uuid.UUID) error {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM lc_contacts WHERE user_id = $1 AND company_id = $2`, userID, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM lc_companies WHERE user_id = $1 AND id = $2`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *LaventeCareStore) ListContacts(ctx context.Context, userID string, companyID *uuid.UUID, limit int) ([]model.LCContact, error) {
 	if limit <= 0 {
 		limit = 30
@@ -639,6 +664,34 @@ func (s *LaventeCareStore) GetLead(ctx context.Context, userID string, id uuid.U
 	}
 	if len(leads) == 0 {
 		return nil, pgx.ErrNoRows
+	}
+	return &leads[0], nil
+}
+
+// GetLeadBySource returns an existing lead matching (user, bron, source_id), or
+// (nil, nil) when none exists. It de-duplicates signal→lead conversion so
+// converting the same signal twice doesn't create duplicate leads.
+func (s *LaventeCareStore) GetLeadBySource(ctx context.Context, userID, bron, sourceID string) (*model.LCLead, error) {
+	if strings.TrimSpace(sourceID) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
+		        fit_score, pijnpunt, prioriteit, volgende_stap, volgende_actie_datum,
+		        created_at, updated_at
+		 FROM lc_leads WHERE user_id = $1 AND bron = $2 AND source_id = $3
+		 ORDER BY created_at DESC
+		 LIMIT 1`, userID, bron, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	leads, err := pgx.CollectRows(rows, scanLead)
+	if err != nil {
+		return nil, err
+	}
+	if len(leads) == 0 {
+		return nil, nil
 	}
 	return &leads[0], nil
 }
