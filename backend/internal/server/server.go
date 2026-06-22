@@ -43,6 +43,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(customMiddleware.RateLimiter(cfg.TrustedProxyCount))
+	r.Use(customMiddleware.MaxBytes(customMiddleware.DefaultMaxRequestBytes))
 
 	// Handlers
 	wizClient := wiz.NewClient()

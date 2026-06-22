@@ -1,0 +1,132 @@
+# ─── Jeffries Backend — Render Blueprint (infra-as-code) ──────────────────────
+#
+# This documents the deploy + full env-var contract so the service config no
+# longer lives only in the Render dashboard. It is NOT yet the active deploy
+# method — the service is currently dashboard-managed. To adopt it, review the
+# values marked "VERIFY" against your dashboard, then connect the repo as a
+# Blueprint (Render → New → Blueprint).
+#
+# No secrets live in this file: every secret / environment-specific value is
+# `sync: false`, so Render prompts for it (or keeps the existing dashboard value)
+# instead of committing it to git. Only fixed, non-sensitive settings carry a
+# literal value.
+
+databases:
+  - name: jeffries-db            # VERIFY: match your existing Postgres instance name
+    plan: starter                # VERIFY
+    postgresMajorVersion: "16"   # VERIFY
+    region: frankfurt            # VERIFY
+
+services:
+  - type: web
+    name: jeffriesbackend        # VERIFY: must match the existing service for env reuse
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter                # VERIFY
+    region: frankfurt            # VERIFY
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # ── Wiring ──────────────────────────────────────────────────────────────
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jeffries-db
+          property: connectionString
+      - key: PORT
+        value: "8000"
+
+      # ── Fixed, non-secret settings ──────────────────────────────────────────
+      - key: APP_ENV
+        value: production
+      - key: START_BACKGROUND_ENGINE
+        value: "true"            # this image runs the api + the engine in-process
+      - key: TRUSTED_PROXY_COUNT
+        value: "1"               # Render terminates TLS at one proxy hop
+      - key: LOG_LEVEL
+        value: info
+
+      # ── Secrets — set in the dashboard; never commit (sync: false) ──────────
+      - key: APP_SECRET_KEY
+        sync: false
+      # SECURITY: give these their own values so a leaked APP_SECRET_KEY does not
+      # span three trust boundaries (they currently default to APP_SECRET_KEY).
+      - key: BRIDGE_API_KEY
+        sync: false
+      - key: LAVENTECARE_SECRET_KEY
+        sync: false
+      - key: TELEGRAM_BRIDGE_SECRET
+        sync: false
+      - key: HOMEAPP_GAS_SECRET
+        sync: false
+      # Google (Gmail + Calendar)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      # bunq (production banking — rotate if ever exposed)
+      - key: BUNQ_API_KEY
+        sync: false
+      - key: BUNQ_CALLBACK_SECRET
+        sync: false
+      # AI
+      - key: GROK_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Microsoft Graph mail
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_TENANT_ID
+        sync: false
+      # Telegram
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # Todoist
+      - key: TODOIST_API_TOKEN
+        sync: false
+
+      # ── Environment-specific config (values live in the dashboard) ──────────
+      - key: CORS_ORIGINS
+        sync: false              # the frontend origin(s)
+      - key: HOMEAPP_USER_ID
+        sync: false
+      - key: APP_HOST
+        sync: false
+      - key: BRIDGE_API_URL
+        sync: false
+      - key: WIZ_DEVICE_IPS
+        sync: false
+      - key: LIGHT_COMMAND_MODE
+        sync: false
+      - key: GROK_MODEL
+        sync: false
+      - key: GROK_REASONING_EFFORT
+        sync: false
+      - key: BUNQ_ENVIRONMENT
+        sync: false
+      - key: BUNQ_DEVICE_DESCRIPTION
+        sync: false
+      - key: BUNQ_USER_ID
+        sync: false
+      - key: BUNQ_MONETARY_ACCOUNT_ID
+        sync: false
+      - key: GOOGLE_PERSONAL_CALENDAR_IDS
+        sync: false
+      - key: SDB_CALENDAR_ID
+        sync: false
+      - key: MICROSOFT_SENDER_EMAIL
+        sync: false
+      - key: LAVENTECARE_MAIL_PROVIDER
+        sync: false
+      - key: LAVENTECARE_MAIL_FROM_NAME
+        sync: false
+      - key: TELEGRAM_WEBAPP_URL
+        sync: false
+      - key: TODOIST_PROJECT_ID
+        sync: false

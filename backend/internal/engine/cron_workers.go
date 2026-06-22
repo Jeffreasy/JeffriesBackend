@@ -665,8 +665,71 @@ func cronTelegramHealthAlert(e *Engine, cfg CronConfig) func(ctx context.Context
 			}
 		}
 
+		// ── Bridge liveness ──────────────────────────────────────────────────
+		// The local bridge touches its heartbeat on every /bridge/* call. If it
+		// was alive before but has gone quiet, WiZ lights + local automations are
+		// likely dead — surface it instead of the user noticing by hand. Only a
+		// previously-seen (non-zero) bridge alerts, so a never-deployed bridge
+		// doesn't nag.
+		if e.cmdStore != nil {
+			if lastSeen, lsErr := e.cmdStore.BridgeLastSeen(ctx); lsErr == nil && !lastSeen.IsZero() {
+				stale := time.Since(lastSeen)
+				if stale > 15*time.Minute && e.shouldFireAlert("bridge-stale", 6*time.Hour) {
+					msg := fmt.Sprintf("🔌 Bridge offline\n\nDe lokale bridge heeft zich %s niet gemeld (laatste teken van leven: %s). WiZ-lampen en lokale automations reageren waarschijnlijk niet.\n\nControleer of het bridge-proces nog draait.",
+						humanizeDuration(stale), lastSeen.In(amsterdam).Format("02-01 15:04"))
+					if sendErr := e.SendProactiveNotification(ctx, msg); sendErr != nil {
+						slog.Warn("cronTelegramHealthAlert: bridge-stale alert failed", "error", sendErr)
+					}
+				}
+			}
+		}
+
+		// ── Sync health ──────────────────────────────────────────────────────
+		// Alert on a streak of consecutive sync failures using the sync_runs data
+		// already collected. invalid_grant/reauth streaks are skipped here because
+		// the dedicated Google re-auth alert already covers them.
+		if failures, fsErr := store.NewSyncRunStore(e.db).FailingSources(ctx, 3, 2*time.Hour); fsErr == nil {
+			for _, f := range failures {
+				le := strings.ToLower(f.LastError)
+				if strings.Contains(le, "invalid_grant") || strings.Contains(le, "reauth") {
+					continue
+				}
+				if !e.shouldFireAlert("sync-streak:"+f.Source, 6*time.Hour) {
+					continue
+				}
+				msg := fmt.Sprintf("⚠️ Sync hapert: %s\n\nDe laatste %d runs faalden achter elkaar. Laatste fout:\n%s\n\nBekijk /sync/status voor details.",
+					f.Source, f.Streak, truncateErr(f.LastError))
+				if sendErr := e.SendProactiveNotification(ctx, msg); sendErr != nil {
+					slog.Warn("cronTelegramHealthAlert: sync-streak alert failed", "source", f.Source, "error", sendErr)
+				}
+			}
+		}
+
 		return nil
 	}
+}
+
+// humanizeDuration renders a duration as a compact Dutch "Nu Nm" / "Nm" string.
+func humanizeDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%du %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+// truncateErr bounds an error string for inclusion in a Telegram message.
+func truncateErr(s string) string {
+	if s == "" {
+		return "(geen details)"
+	}
+	const max = 200
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
 
 // recordSyncRun persists one sync-run audit row (best-effort, detached ctx so it
