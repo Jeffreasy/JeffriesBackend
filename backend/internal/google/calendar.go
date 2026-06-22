@@ -687,14 +687,17 @@ func parseScheduleEvent(ev calendarEvent, userID string, now time.Time) *Schedul
 	if !isAllDay {
 		duur = math.Round(eindDt.Sub(startDt).Hours()*100) / 100
 	} else {
-		// All-day events carry no explicit hours; assume a standard 8h shift per
-		// day spanned so an all-day care shift isn't counted as 0h in the salary
-		// total. (The end is inclusive, so end−start ≈ 24h per day.)
+		// All-day events carry no explicit hours; assume a standard shift per day
+		// spanned so one isn't counted as 0h in the contract-hours total. 7.5h is
+		// the median of the owner's real shifts (Vroeg ~7.75h, Laat ~7.25h). In
+		// practice all-day shifts don't occur, so this is an edge-case default.
+		// (The end is inclusive, so end−start ≈ 24h per day.)
+		const standardShiftHours = 7.5
 		days := int(math.Round(eindDt.Sub(startDt).Hours() / 24))
 		if days < 1 {
 			days = 1
 		}
-		duur = float64(days) * 8.0
+		duur = float64(days) * standardShiftHours
 	}
 
 	eventID := calendarEventStableID(ev)
