@@ -277,6 +277,7 @@ func registerRoutes(
 				r.Get("/status", syncH.GetSyncStatus)
 				r.With(authMw).Post("/calendar", syncH.SyncCalendar)
 				r.With(authMw).Post("/gmail", syncH.SyncGmail)
+				r.With(authMw).Post("/todoist", syncH.SyncTodoist)
 			})
 		})
 	})

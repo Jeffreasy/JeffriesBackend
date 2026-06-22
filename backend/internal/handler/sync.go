@@ -13,6 +13,7 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/google"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+	"github.com/Jeffreasy/JeffriesBackend/internal/todoist"
 )
 
 type SyncHandler struct {
@@ -306,6 +307,52 @@ func resolvedPersonalEventStatus(event model.PersonalEvent) string {
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "userId required"
 // @Router /sync/gmail [post]
+// SyncTodoist re-pushes the current schedule to Todoist on demand (the cron is
+// daily). Useful right after a shift-type correction so the tasks refresh now
+// instead of waiting a day. Mirrors cronTodoistSync.
+// @Summary Trigger Todoist sync
+// @Tags Sync
+// @Produce json
+// @Security ApiKeyAuth
+// @Param userId query string true "User ID"
+// @Success 200 {object} map[string]int
+// @Router /sync/todoist [post]
+func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	if h.cfg.TodoistAPIToken == "" {
+		Error(w, http.StatusBadRequest, "Todoist niet geconfigureerd")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	rows, err := store.NewScheduleStore(h.db).List(ctx, userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	diensten := make([]todoist.Dienst, 0, len(rows))
+	for _, rd := range rows {
+		diensten = append(diensten, todoist.Dienst{
+			EventID: rd.EventID, Titel: rd.Titel, StartDatum: rd.StartDatum,
+			StartTijd: rd.StartTijd, EindTijd: rd.EindTijd, Locatie: rd.Locatie,
+			ShiftType: rd.ShiftType, Duur: rd.Duur, Heledag: rd.Heledag, Status: rd.Status,
+		})
+	}
+	client := todoist.NewClient(h.cfg.TodoistAPIToken, h.cfg.TodoistProjectID)
+	ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
+	res, err := client.SyncDiensten(ctx, diensten)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Todoist sync mislukt: "+err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed})
+}
+
 func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
