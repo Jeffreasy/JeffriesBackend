@@ -872,12 +872,6 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 	if err != nil {
 		return nil, err
 	}
-	// Mark lead as won
-	won := "gewonnen"
-	if err := s.UpdateLead(ctx, userID, input.LeadID, model.LCLeadUpdate{Status: &won}); err != nil {
-		return nil, err
-	}
-
 	fase := "intake"
 	if input.Fase != nil {
 		fase = *input.Fase
@@ -887,14 +881,38 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 		status = *input.Status
 	}
 
-	return s.CreateProject(ctx, userID, model.LCProject{
-		CompanyID:    lead.CompanyID,
-		LeadID:       &input.LeadID,
-		Naam:         input.Naam,
-		Fase:         fase,
-		Status:       status,
-		Samenvatting: input.Samenvatting,
-	})
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Mark the lead won and create the project atomically, so a failure can't
+	// strand a 'gewonnen' lead with no project or duplicate the project on retry.
+	if _, err := tx.Exec(ctx,
+		`UPDATE lc_leads SET status = 'gewonnen', updated_at = now() WHERE user_id = $1 AND id = $2`,
+		userID, input.LeadID); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	proj := model.LCProject{
+		ID: uuid.New(), UserID: userID, CompanyID: lead.CompanyID, LeadID: &input.LeadID,
+		Naam: input.Naam, Fase: fase, Status: status, Samenvatting: input.Samenvatting,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO lc_projects (id, user_id, company_id, lead_id, naam, fase, status,
+		        waarde_indicatie, start_datum, deadline, samenvatting, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
+		proj.ID, proj.UserID, proj.CompanyID, proj.LeadID, proj.Naam, proj.Fase, proj.Status,
+		proj.WaardeIndicatie, proj.StartDatum, proj.Deadline, proj.Samenvatting, proj.CreatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &proj, nil
 }
 
 // ─── Workstreams / Opdrachten ───────────────────────────────────────────────
@@ -3755,6 +3773,27 @@ func (s *LaventeCareStore) nextLCNumber(ctx context.Context, tx pgx.Tx, userID, 
 
 // ─── Cockpit (aggregated dashboard) ──────────────────────────────────────────
 
+// cockpitEntityCounts returns true totals (in one round-trip) for the cockpit
+// summary, so the headline metrics stay correct once a list outgrows its display
+// cap instead of reporting len() of a 30/8-capped slice.
+type cockpitCounts struct {
+	companies, contacts, leads, projects, workstreams, documents, actions int
+}
+
+func (s *LaventeCareStore) cockpitEntityCounts(ctx context.Context, userID string) (cockpitCounts, error) {
+	var c cockpitCounts
+	err := s.db.Pool.QueryRow(ctx, `
+SELECT (SELECT COUNT(*) FROM lc_companies     WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_contacts      WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_leads         WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_projects      WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_workstreams   WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_documents     WHERE user_id = $1),
+       (SELECT COUNT(*) FROM lc_action_items  WHERE user_id = $1)`, userID).
+		Scan(&c.companies, &c.contacts, &c.leads, &c.projects, &c.workstreams, &c.documents, &c.actions)
+	return c, err
+}
+
 func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*model.LCCockpit, error) {
 	companies, err := s.ListCompanies(ctx, userID, 30, "")
 	if err != nil {
@@ -3808,6 +3847,10 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
+	counts, err := s.cockpitEntityCounts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	_ = s.SeedDefaultMailTemplates(ctx, userID)
 	mailTemplates, _ := s.ListMailTemplates(ctx, userID, 80)
 	mailboxSummary, _ := s.GetMailboxSummary(ctx, userID, mailTemplates, laventeCareMailConfiguredFromEnv(), strings.TrimSpace(os.Getenv("MICROSOFT_SENDER_EMAIL")))
@@ -3828,26 +3871,26 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 
 	return &model.LCCockpit{
 		Summary: model.LCCockpitSummary{
-			Companies:         len(companies),
-			Contacts:          len(contacts),
+			Companies:         counts.companies,
+			Contacts:          counts.contacts,
 			AccessCredentials: accessCredentialCount,
-			Leads:             len(leads),
+			Leads:             counts.leads,
 			ActiveLeads:       len(activeLeads),
-			Workstreams:       len(workstreams),
+			Workstreams:       counts.workstreams,
 			ActiveWorkstreams: len(activeWorkstreams),
-			Projects:          len(projects),
+			Projects:          counts.projects,
 			ActiveProjects:    len(activeProjects),
-			Documents:         len(documents),
+			Documents:         counts.documents,
 			OpenIncidents:     len(incidents),
 			OpenChanges:       len(changes),
 			Decisions:         len(decisions),
-			ActionItems:       len(actions),
+			ActionItems:       counts.actions,
 			DossierDocuments:  dossierDocumentCount,
 			ActivityEvents:    activityEventCount,
 			MailTemplates:     mailboxSummary.ActiveTemplates,
 			MailOutbox:        mailboxSummary.Outbox,
 			MailConfigured:    mailboxSummary.Configured,
-			DocumentsSeeded:   len(documents) > 0,
+			DocumentsSeeded:   counts.documents > 0,
 			BusinessSignals:   len(signals),
 			FollowUps:         len(followUps),
 		},
