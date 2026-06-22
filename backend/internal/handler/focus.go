@@ -176,8 +176,8 @@ func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, errors *[
 func (h *FocusHandler) focusCounts(ctx context.Context, userID, today string, errors *[]string) FocusCounts {
 	counts := FocusCounts{}
 	counts.ScheduleTotal = h.count(ctx, errors, "schedule.total", `SELECT COUNT(*) FROM schedule WHERE user_id = $1`, userID)
-	counts.ScheduleUpcoming = h.count(ctx, errors, "schedule.upcoming", `SELECT COUNT(*) FROM schedule WHERE user_id = $1 AND start_datum >= CURRENT_DATE AND UPPER(COALESCE(status, '')) <> 'VERWIJDERD'`, userID)
-	counts.PersonalUpcoming = h.count(ctx, errors, "personal.upcoming", `SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND eind_datum >= CURRENT_DATE AND status NOT IN ('VERWIJDERD', 'cancelled', 'PendingDelete')`, userID)
+	counts.ScheduleUpcoming = h.count(ctx, errors, "schedule.upcoming", `SELECT COUNT(*) FROM schedule WHERE user_id = $1 AND start_datum >= $2::date AND UPPER(COALESCE(status, '')) <> 'VERWIJDERD'`, userID, today)
+	counts.PersonalUpcoming = h.count(ctx, errors, "personal.upcoming", `SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND eind_datum >= $2::date AND status NOT IN ('VERWIJDERD', 'cancelled', 'PendingDelete')`, userID, today)
 	counts.PersonalPending = h.count(ctx, errors, "personal.pending", `SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND status IN ('PendingCreate', 'PendingUpdate', 'PendingDelete')`, userID)
 	counts.UnreadEmails = h.count(ctx, errors, "emails.unread", `SELECT COUNT(*) FROM emails WHERE user_id = $1 AND NOT is_gelezen AND NOT is_verwijderd`, userID)
 	counts.NotesActive = h.count(ctx, errors, "notes.active", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed`, userID)
