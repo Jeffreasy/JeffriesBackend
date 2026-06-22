@@ -68,10 +68,10 @@ func (s *AutomationStore) Update(ctx context.Context, id uuid.UUID, a model.Auto
 	var out model.AutomationRow
 	err := s.db.Pool.QueryRow(ctx, `
 		UPDATE automations
-		SET name = $2, trigger_config = $3, action_config = $4
+		SET name = $2, enabled = $3, group_name = $4, trigger_config = $5, action_config = $6
 		WHERE id = $1
 		RETURNING `+autoCols,
-		id, a.Name, a.TriggerConfig, a.ActionConfig,
+		id, a.Name, a.Enabled, a.GroupName, a.TriggerConfig, a.ActionConfig,
 	).Scan(&out.ID, &out.UserID, &out.Name, &out.Enabled, &out.CreatedAt,
 		&out.LastFiredAt, &out.GroupName, &out.TriggerConfig, &out.ActionConfig)
 	return out, err

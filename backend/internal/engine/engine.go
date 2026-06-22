@@ -274,7 +274,16 @@ func (e *Engine) loopAutomations(ctx context.Context) {
 	}
 }
 
-func (e *Engine) tick(ctx context.Context) error {
+func (e *Engine) tick(ctx context.Context) (err error) {
+	// Recover so a panic (e.g. a malformed automation config in ShouldFire /
+	// executeAction) becomes a logged tick error instead of killing the whole
+	// automation loop — symmetric with the command poller's recover.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("automation tick panicked: %v", r)
+		}
+	}()
+
 	now := time.Now().In(amsterdam)
 	today := now.Format("2006-01-02")
 
@@ -320,6 +329,11 @@ func (e *Engine) tick(ctx context.Context) error {
 		last, exists := e.firedAt[autoID]
 		e.firedMu.Unlock()
 		if exists && now.Sub(last).Seconds() < MinFireInterval {
+			continue
+		}
+		// The in-memory firedAt is lost on restart; fall back to the persisted
+		// last_fired_at so a process restart inside the window can't double-fire.
+		if !exists && auto.LastFiredAt != nil && now.Sub(*auto.LastFiredAt).Seconds() < MinFireInterval {
 			continue
 		}
 

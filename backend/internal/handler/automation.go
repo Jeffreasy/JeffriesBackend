@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
@@ -68,6 +69,12 @@ func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	body.UserID = userID
 	created, err := h.store.Create(r.Context(), body)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			// The store returns ErrNoRows for a duplicate name — surface it as a
+			// 409 conflict, not a misleading 500.
+			Error(w, http.StatusConflict, "Er bestaat al een automatisering met deze naam")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
