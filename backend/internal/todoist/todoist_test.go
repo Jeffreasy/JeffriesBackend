@@ -16,8 +16,9 @@ func TestTaskArgsSyncFormat(t *testing.T) {
 	if args["content"] != "R. Laat" {
 		t.Fatalf("content = %v, want \"R. Laat\"", args["content"])
 	}
+	// Sync API: due uses the `date` field for a datetime (verified by live test).
 	due, ok := args["due"].(map[string]any)
-	if !ok || due["datetime"] != "2026-06-22T14:30:00" || due["timezone"] != "Europe/Amsterdam" {
+	if !ok || due["date"] != "2026-06-22T14:30:00" {
 		t.Fatalf("due = %v", args["due"])
 	}
 	dur, ok := args["duration"].(map[string]any)

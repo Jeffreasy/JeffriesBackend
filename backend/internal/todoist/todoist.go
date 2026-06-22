@@ -187,6 +187,10 @@ func (c *Client) taskArgs(d Dienst) map[string]any {
 		"description": desc,
 		"labels":      []string{"Rooster"},
 	}
+	// The Sync API's due object uses the `date` field for BOTH a date and a
+	// datetime (a floating local time when no timezone is given) — `datetime` is
+	// ignored here, verified by a live round-trip test. Getting this wrong sets
+	// due=null and silently strips the shift's date.
 	if d.Heledag {
 		args["due"] = map[string]any{"date": d.StartDatum}
 	} else {
@@ -194,10 +198,7 @@ func (c *Client) taskArgs(d Dienst) map[string]any {
 		if startTijd == "" {
 			startTijd = "09:00"
 		}
-		args["due"] = map[string]any{
-			"datetime": d.StartDatum + "T" + startTijd + ":00",
-			"timezone": "Europe/Amsterdam",
-		}
+		args["due"] = map[string]any{"date": d.StartDatum + "T" + startTijd + ":00"}
 		durationMin := int(d.Duur * 60)
 		if durationMin < 15 {
 			durationMin = 15
