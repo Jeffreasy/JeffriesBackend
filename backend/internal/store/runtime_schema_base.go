@@ -53,17 +53,21 @@ CREATE TABLE IF NOT EXISTS scene_actions (
     transition_ms   INTEGER NOT NULL DEFAULT 1000
 );
 
+-- Columns must match the live AutomationStore (model.AutomationRow), NOT the
+-- deprecated Convex-era model.Automation — otherwise a fresh/restored DB has the
+-- wrong columns and every automation query errors with "column does not exist".
 CREATE TABLE IF NOT EXISTS automations (
-    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name             VARCHAR(150) NOT NULL,
-    description      TEXT,
-    is_enabled       BOOLEAN NOT NULL DEFAULT true,
-    trigger_config   JSONB NOT NULL,
-    condition_config JSONB NOT NULL DEFAULT '[]',
-    action_config    JSONB NOT NULL,
-    last_triggered   TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    enabled        BOOLEAN NOT NULL DEFAULT true,
+    group_name     TEXT,
+    trigger_config JSONB NOT NULL DEFAULT '{}',
+    action_config  JSONB NOT NULL DEFAULT '{}',
+    last_fired_at  TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_automations_user ON automations (user_id);
 
 CREATE TABLE IF NOT EXISTS device_events (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),

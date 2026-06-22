@@ -28,7 +28,7 @@ Week 1 (recovery + incident close, mostly non-code, do first): rotate bunq+Googl
 - Add a free UptimeRobot/healthchecks.io check on /health (5-min) so an api crash-loop stops being silent
 - Bridge-death Telegram alert: ~20-line cron comparing BridgeLastSeen() to now() through the existing de-duped shouldFireAlert
 - Sync-failure-streak alert from the sync_runs table you already populate — pure wiring in cronTelegramHealthAlert
-- Set dedicated BRIDGE_API_KEY and LAVENTECARE_SECRET_KEY in Render so they stop defaulting to APP_SECRET_KEY (config.go:129)
+- Set dedicated BRIDGE_API_KEY and LAVENTECARE_SECRET_KEY in Render so they stop defaulting to APP_SECRET_KEY (config.go:129). NOTE (corrected 2026-06-22): /bridge/* now validates BRIDGE_API_KEY (was AppSecretKey); a distinct BRIDGE_API_KEY must be set to the SAME value on BOTH Render and the local bridge machine, or every command 403s.
 - Pin the Dockerfile builder to golang:1.25-alpine to match CI and stop non-reproducible rebuilds
 - Add one MaxBytesReader body-size-limit middleware across the JSON handlers
 

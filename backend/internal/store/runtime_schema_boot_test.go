@@ -35,4 +35,11 @@ func TestEnsureRuntimeSchema_FreshDB(t *testing.T) {
 	if err := EnsureRuntimeSchema(ctx, db); err != nil {
 		t.Fatalf("EnsureRuntimeSchema second run failed (not idempotent): %v", err)
 	}
+
+	// Smoke-test live store reads against the fresh schema so column drift between
+	// the base CREATEs and what the stores actually query is caught here, not in
+	// production after a DR rebuild.
+	if _, err := NewAutomationStore(db).List(ctx, "boot-test-user"); err != nil {
+		t.Fatalf("AutomationStore.List on fresh schema (column drift?): %v", err)
+	}
 }

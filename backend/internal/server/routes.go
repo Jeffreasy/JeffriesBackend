@@ -35,6 +35,10 @@ func registerRoutes(
 	focusH *handler.FocusHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
+	// The local LAN bridge authenticates with its OWN key, which falls back to
+	// APP_SECRET_KEY when unset (config). Validating BridgeAPIKey here is what makes
+	// setting a distinct BRIDGE_API_KEY correct instead of a 403 storm.
+	bridgeMw := apiKeyMiddleware(cfg.BridgeAPIKey)
 
 	r.Get("/", health.Check)
 	r.Head("/", health.Check)
@@ -47,6 +51,18 @@ func registerRoutes(
 
 		// Health
 		r.Get("/health", health.Check)
+
+		// Local LAN bridge (Render queue -> local WiZ UDP). Authenticated with the
+		// bridge's own key (bridgeMw), NOT the app secret, so the trust-boundary
+		// separation the docs promise actually exists.
+		r.Group(func(r chi.Router) {
+			r.Use(bridgeMw)
+			r.Route("/bridge", func(r chi.Router) {
+				r.Post("/commands/claim", bridgeH.ClaimCommands)
+				r.Post("/commands/{commandID}/complete", bridgeH.CompleteCommand)
+				r.Post("/devices/{deviceID}/status", bridgeH.UpdateDeviceStatus)
+			})
+		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(authMw)
@@ -68,13 +84,6 @@ func registerRoutes(
 				r.With(authMw).Post("/{deviceID}/command", devices.Command)
 				r.With(authMw).Patch("/{deviceID}", devices.Update)
 				r.With(authMw).Delete("/{deviceID}", devices.Delete)
-			})
-
-			// Local LAN bridge (Render queue -> local WiZ UDP).
-			r.Route("/bridge", func(r chi.Router) {
-				r.With(authMw).Post("/commands/claim", bridgeH.ClaimCommands)
-				r.With(authMw).Post("/commands/{commandID}/complete", bridgeH.CompleteCommand)
-				r.With(authMw).Post("/devices/{deviceID}/status", bridgeH.UpdateDeviceStatus)
 			})
 
 			// Scenes (PostgreSQL + WiZ UDP)
