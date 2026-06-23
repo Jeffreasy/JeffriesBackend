@@ -742,9 +742,10 @@ func (s *LaventeCareStore) MarkMailOutboxSending(ctx context.Context, userID str
 	return nil
 }
 
-func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string, id uuid.UUID, providerMessageID string) error {
+func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string, id uuid.UUID, providerMessageID, conversationID string) error {
 	now := time.Now().UTC()
 	msgID := cleanStringPtr(&providerMessageID)
+	convID := cleanStringPtr(&conversationID)
 	// Once delivered, redact any embedded pilot password from the stored bodies so
 	// plaintext secrets don't linger in lc_mail_outbox indefinitely. The recipient
 	// already received the real password; this only scrubs the at-rest copy. The
@@ -752,14 +753,15 @@ func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string
 	// monospace "secret" span style so it can't touch other content.
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_mail_outbox
-		    SET status = 'sent', provider_message_id = $3, error_message = NULL, sent_at = $4, updated_at = $4,
+		    SET status = 'sent', provider_message_id = $3, conversation_id = COALESCE($5, conversation_id),
+		        error_message = NULL, sent_at = $4, updated_at = $4,
 		        body_text = regexp_replace(COALESCE(body_text, ''),
 		                    'Wachtwoord:.*', 'Wachtwoord: ••• (verwijderd na verzending)', 'gn'),
 		        body_html = regexp_replace(COALESCE(body_html, ''),
 		                    '(background:#e2e8f0;border:1px solid #cbd5e1;border-radius:8px;padding:7px 9px;font-family:ui-monospace[^>]*>)[^<]*(</span>)',
 		                    '\1••• (verwijderd na verzending)\2', 'g')
 		  WHERE user_id = $1 AND id = $2`,
-		userID, id, msgID, now)
+		userID, id, msgID, now, convID)
 	if err != nil {
 		return err
 	}
@@ -877,6 +879,21 @@ func (s *LaventeCareStore) LatestInboxReceivedAt(ctx context.Context, userID str
 		return time.Time{}, nil
 	}
 	return *t, nil
+}
+
+// MarkInboxRead flips a received message to read in-app (the Graph sync also reconciles
+// is_read, but this lets the owner clear it without leaving the app).
+func (s *LaventeCareStore) MarkInboxRead(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_mail_inbox SET is_read = TRUE, updated_at = now() WHERE user_id = $1 AND id = $2`,
+		userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest, templateKey string) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
@@ -2285,7 +2302,7 @@ func mailOutboxSelectSQL() string {
 	return `SELECT m.id, m.user_id, m.template_id, m.company_id, m.contact_id, m.project_id,
 		        m.workstream_id, m.quote_id, m.invoice_id, m.to_email, m.to_name, m.cc, m.bcc,
 		        m.subject, m.body_html, m.body_text, m.status, m.provider, m.provider_message_id,
-		        m.error_message, m.sent_at, m.created_at, m.updated_at,
+		        m.conversation_id, m.error_message, m.sent_at, m.created_at, m.updated_at,
 		        t.name, c.naam, ct.naam
 		   FROM lc_mail_outbox m
 		   LEFT JOIN lc_mail_templates t ON t.id = m.template_id AND t.user_id = m.user_id
@@ -2306,7 +2323,7 @@ func scanMailOutboxItem(row pgx.CollectableRow) (model.LCMailOutboxItem, error) 
 	err := row.Scan(&m.ID, &m.UserID, &m.TemplateID, &m.CompanyID, &m.ContactID,
 		&m.ProjectID, &m.WorkstreamID, &m.QuoteID, &m.InvoiceID, &m.ToEmail,
 		&m.ToName, &m.CC, &m.BCC, &m.Subject, &m.BodyHTML, &m.BodyText,
-		&m.Status, &m.Provider, &m.ProviderMessageID, &m.ErrorMessage,
+		&m.Status, &m.Provider, &m.ProviderMessageID, &m.ConversationID, &m.ErrorMessage,
 		&m.SentAt, &m.CreatedAt, &m.UpdatedAt, &m.TemplateName,
 		&m.CompanyName, &m.ContactName)
 	return m, err

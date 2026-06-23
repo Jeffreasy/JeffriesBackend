@@ -190,6 +190,23 @@ func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"synced": synced, "ok": true})
 }
 
+func (h *LaventeCareHandler) MarkInboxRead(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid message ID")
+		return
+	}
+	if err := h.store.MarkInboxRead(r.Context(), h.userID, id); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Bericht niet gevonden")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.Request) {
 	var input model.LCMailTemplateCreate
 	if err := DecodeJSON(r, &input); err != nil {
@@ -390,7 +407,7 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID); err != nil {
+	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID, result.ConversationID); err != nil {
 		item.Status = "sent_unconfirmed"
 		message := "Mail is door Microsoft Graph geaccepteerd, maar de lokale outbox-status kon niet worden bijgewerkt: " + err.Error()
 		item.ErrorMessage = &message

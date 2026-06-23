@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS lc_mail_outbox (
     status              TEXT NOT NULL DEFAULT 'concept',
     provider            TEXT NOT NULL DEFAULT 'microsoft_graph',
     provider_message_id TEXT,
+    conversation_id     TEXT,
     error_message       TEXT,
     sent_at             TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -269,9 +270,17 @@ CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_user_created
 CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_user_status
     ON lc_mail_outbox (user_id, status, created_at DESC);
 
+-- conversation_id added after the initial outbox release; threads a sent mail to its
+-- replies (shared with lc_mail_inbox.conversation_id). Idempotent for existing DBs.
+ALTER TABLE lc_mail_outbox ADD COLUMN IF NOT EXISTS conversation_id TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_company
     ON lc_mail_outbox (company_id, created_at DESC)
     WHERE company_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_conversation
+    ON lc_mail_outbox (user_id, conversation_id)
+    WHERE conversation_id IS NOT NULL;
 
 -- Inbound mail (received via Microsoft Graph). Idempotent on the Graph message id;
 -- conversation_id threads a reply chain together with the outbox.

@@ -200,6 +200,7 @@ func registerRoutes(
 				r.With(authMw).Post("/mailbox/ai-suggest", lcH.SuggestMailContent)
 				r.With(authMw).Post("/mailbox/send-template", lcH.SendTemplatedMail)
 				r.With(authMw).Post("/mailbox/inbox-sync", lcH.SyncInbox)
+				r.With(authMw).Patch("/mailbox/inbox/{id}/read", lcH.MarkInboxRead)
 				r.Get("/companies", lcH.ListCompanies)
 				r.With(authMw).Post("/companies", lcH.CreateCompany)
 				r.With(authMw).Patch("/companies/{id}", lcH.UpdateCompany)

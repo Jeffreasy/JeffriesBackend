@@ -58,6 +58,9 @@ type Attachment struct {
 
 type SendResult struct {
 	ProviderMessageID string
+	// ConversationID is the Graph conversation id, stable across folders and shared
+	// with any client reply — the key that threads a sent mail to its responses.
+	ConversationID string
 }
 
 func NewSender(cfg *config.Config) *Sender {
@@ -120,17 +123,32 @@ func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error)
 		message["attachments"] = attachments
 	}
 
-	payload := map[string]any{
-		"message":         message,
-		"saveToSentItems": true,
+	// Create the message as a draft first: unlike the fire-and-forget sendMail action
+	// (which returns no body), POST /messages returns the real Graph id and the
+	// conversationId we need to thread the sent mail to any client reply. The draft is
+	// then dispatched with /send, which moves it to Sent Items automatically.
+	//
+	// Failure modes are safe: if create fails, nothing was sent; if /send fails, the
+	// message stays an unsent draft and the caller marks the outbox row failed (the
+	// recipient never received it), so a retry can't double-send to the client.
+	sender := url.PathEscape(s.cfg.MicrosoftSenderEmail)
+	var created struct {
+		ID             string `json:"id"`
+		ConversationID string `json:"conversationId"`
 	}
-
-	if err := s.graphRequest(ctx, "POST", fmt.Sprintf("/users/%s/sendMail", url.PathEscape(s.cfg.MicrosoftSenderEmail)), payload, nil); err != nil {
+	if err := s.graphRequest(ctx, "POST", fmt.Sprintf("/users/%s/messages", sender), message, &created); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		return nil, errors.New("microsoft graph did not return a message id for the draft")
+	}
+	if err := s.graphRequest(ctx, "POST", fmt.Sprintf("/users/%s/messages/%s/send", sender, url.PathEscape(created.ID)), nil, nil); err != nil {
 		return nil, err
 	}
 
 	return &SendResult{
-		ProviderMessageID: "graph-send-" + time.Now().UTC().Format("20060102T150405.000000000Z"),
+		ProviderMessageID: created.ID,
+		ConversationID:    strings.TrimSpace(created.ConversationID),
 	}, nil
 }
 

@@ -553,8 +553,9 @@ type LCMailbox struct {
 	Inbox     []LCMailInboxItem  `json:"inbox"`
 }
 
-// LCMailInboxItem is a received email (ingested from Microsoft Graph), threaded
-// to the outbox by conversation_id and linked to a company by sender address.
+// LCMailInboxItem is a received email (ingested from Microsoft Graph), linked to a
+// company by sender address. Its conversation_id is shared with the outbox row it
+// replies to (both sides now capture it), which is the key for threading a thread.
 type LCMailInboxItem struct {
 	ID             uuid.UUID  `json:"id" db:"id"`
 	UserID         string     `json:"user_id" db:"user_id"`
@@ -647,6 +648,7 @@ type LCMailOutboxItem struct {
 	Status            string     `json:"status" db:"status"`
 	Provider          string     `json:"provider" db:"provider"`
 	ProviderMessageID *string    `json:"provider_message_id" db:"provider_message_id"`
+	ConversationID    *string    `json:"conversation_id" db:"conversation_id"`
 	ErrorMessage      *string    `json:"error_message" db:"error_message"`
 	SentAt            *time.Time `json:"sent_at" db:"sent_at"`
 	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
