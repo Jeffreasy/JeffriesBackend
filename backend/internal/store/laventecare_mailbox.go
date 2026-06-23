@@ -686,7 +686,7 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 		return nil, err
 	}
 	subject := cleanupRenderedMailSubject(renderTemplate(template.SubjectTemplate, contextValues))
-	bodyHTML := cleanupRenderedMailHTML(renderTemplate(template.BodyHTML, contextValues))
+	bodyHTML := cleanupRenderedMailHTML(renderMailHTML(template.BodyHTML, contextValues))
 	bodyText := cleanStringPtr(template.BodyText)
 	if bodyText != nil {
 		rendered := renderTemplate(*bodyText, contextValues)
@@ -2467,6 +2467,35 @@ func renderTemplate(input string, values map[string]string) string {
 	for key, value := range values {
 		result = strings.ReplaceAll(result, "{{"+key+"}}", value)
 		result = strings.ReplaceAll(result, "{{ "+key+" }}", value)
+	}
+	return result
+}
+
+// rawMailHTMLKeys lists the substitution keys whose value is trusted, server-built
+// HTML and must NOT be escaped when rendered into a mail body. Everything else —
+// CRM fields, the free-text variable editor, AI/Grok drafts, PDF-extracted text —
+// is treated as untrusted plain text and HTML-escaped on render.
+var rawMailHTMLKeys = map[string]bool{
+	// Built server-side from per-field-escaped credential values (mailAccessFieldHTML);
+	// force-reset to "" before user/AI input is merged, so it can never carry injected markup.
+	"pilot.access_block_html": true,
+}
+
+// renderMailHTML substitutes {{key}} tokens into an HTML mail body, HTML-escaping
+// every value (so a company name like "Jansen & Zn", a "Scope <fase 2>" workstream,
+// or an AI/PDF-injected "<img onerror=...>" can never corrupt the layout or inject
+// markup into the email a real client receives). The only raw slot is the
+// server-built access block (rawMailHTMLKeys). Use renderTemplate (no escaping) for
+// the subject and plain-text body, which are not HTML.
+func renderMailHTML(input string, values map[string]string) string {
+	result := input
+	for key, value := range values {
+		rendered := value
+		if !rawMailHTMLKeys[key] {
+			rendered = escapeMailText(value)
+		}
+		result = strings.ReplaceAll(result, "{{"+key+"}}", rendered)
+		result = strings.ReplaceAll(result, "{{ "+key+" }}", rendered)
 	}
 	return result
 }
