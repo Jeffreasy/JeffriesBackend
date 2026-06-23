@@ -1616,6 +1616,10 @@ func (h *LaventeCareHandler) UpdateLead(w http.ResponseWriter, r *http.Request) 
 			Error(w, http.StatusNotFound, "Lead niet gevonden")
 			return
 		}
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1770,6 +1774,10 @@ func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Project niet gevonden")
 			return
 		}
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1858,6 +1866,10 @@ func (h *LaventeCareHandler) UpdateWorkstream(w http.ResponseWriter, r *http.Req
 	if err := h.store.UpdateWorkstream(r.Context(), h.userID, id, input); err != nil {
 		if err == pgx.ErrNoRows {
 			Error(w, http.StatusNotFound, "Opdracht niet gevonden")
+			return
+		}
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
 		Error(w, http.StatusInternalServerError, err.Error())

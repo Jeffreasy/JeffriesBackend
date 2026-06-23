@@ -93,10 +93,33 @@ func isOpenStatus(status string) bool {
 
 func isClosedStatus(status string) bool {
 	switch status {
-	case "afgerond", "done", "gesloten", "gearchiveerd", "omgezet_project":
+	case "afgerond", "done", "gesloten", "gearchiveerd", "omgezet_project",
+		"gewonnen", "verloren", "gediskwalificeerd", "geannuleerd":
 		return true
 	}
 	return false
+}
+
+// lcKnownStatus is the union of every recognised lead/project/workstream status
+// (the open + closed/terminal vocabularies). Update paths validate against it so
+// a typo'd status is rejected, without over-constraining the deliberately
+// flexible free-text status model (any genuinely-used value is in one of the two
+// predicates above).
+func lcKnownStatus(status string) bool {
+	return isOpenStatus(status) || isClosedStatus(status)
+}
+
+// validateLCStatus returns ErrInvalidStatus when an explicitly-set status is not
+// a recognised value. nil/empty means "unchanged" and always passes.
+func validateLCStatus(status *string) error {
+	if status == nil {
+		return nil
+	}
+	st := strings.TrimSpace(*status)
+	if st == "" || lcKnownStatus(st) {
+		return nil
+	}
+	return ErrInvalidStatus
 }
 
 // ─── Companies & contacts ───────────────────────────────────────────────────
@@ -787,6 +810,9 @@ func (s *LaventeCareStore) CreateLead(ctx context.Context, userID string, input 
 }
 
 func (s *LaventeCareStore) UpdateLead(ctx context.Context, userID string, id uuid.UUID, input model.LCLeadUpdate) error {
+	if err := validateLCStatus(input.Status); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_leads SET
@@ -878,6 +904,9 @@ func (s *LaventeCareStore) CreateProject(ctx context.Context, userID string, p m
 }
 
 func (s *LaventeCareStore) UpdateProject(ctx context.Context, userID string, id uuid.UUID, input model.LCProjectUpdate) error {
+	if err := validateLCStatus(input.Status); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_projects SET
@@ -1089,6 +1118,9 @@ func (s *LaventeCareStore) CreateWorkstream(ctx context.Context, userID string, 
 }
 
 func (s *LaventeCareStore) UpdateWorkstream(ctx context.Context, userID string, id uuid.UUID, input model.LCWorkstreamUpdate) error {
+	if err := validateLCStatus(input.Status); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	if input.ProjectID != nil {
 		project, err := s.GetProject(ctx, userID, *input.ProjectID)
