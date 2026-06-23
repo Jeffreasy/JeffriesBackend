@@ -785,6 +785,100 @@ func (s *LaventeCareStore) MarkMailOutboxFailed(ctx context.Context, userID stri
 	return nil
 }
 
+// ─── Inbound mail ────────────────────────────────────────────────────────────
+
+// UpsertInboxMessages idempotently stores received mail (keyed on the Graph
+// message id) and links each message to a company/contact by matching the sender
+// address against lc_contacts.email. Returns how many rows were inserted/updated.
+func (s *LaventeCareStore) UpsertInboxMessages(ctx context.Context, userID string, msgs []model.LCMailInboxItem) (int, error) {
+	if len(msgs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	count := 0
+	for _, m := range msgs {
+		if strings.TrimSpace(m.MessageID) == "" || strings.TrimSpace(m.FromEmail) == "" {
+			continue
+		}
+		received := m.ReceivedAt
+		if received.IsZero() {
+			received = time.Now().UTC()
+		}
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO lc_mail_inbox (user_id, message_id, conversation_id, from_email, from_name,
+				subject, body_preview, web_link, has_attachments, is_read, received_at,
+				company_id, contact_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+				(SELECT company_id FROM lc_contacts WHERE user_id = $1 AND lower(email) = lower($4) LIMIT 1),
+				(SELECT id FROM lc_contacts WHERE user_id = $1 AND lower(email) = lower($4) LIMIT 1))
+			ON CONFLICT (user_id, message_id) DO UPDATE SET
+				is_read         = EXCLUDED.is_read,
+				conversation_id = COALESCE(EXCLUDED.conversation_id, lc_mail_inbox.conversation_id),
+				updated_at      = now()
+		`, userID, m.MessageID, m.ConversationID, strings.ToLower(strings.TrimSpace(m.FromEmail)), m.FromName,
+			m.Subject, m.BodyPreview, m.WebLink, m.HasAttachments, m.IsRead, received)
+		if err != nil {
+			return count, err
+		}
+		count += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return count, err
+	}
+	return count, nil
+}
+
+// ListInbox returns recent received mail, newest first, with the linked company name.
+func (s *LaventeCareStore) ListInbox(ctx context.Context, userID string, limit int) ([]model.LCMailInboxItem, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT i.id, i.user_id, i.message_id, i.conversation_id, i.company_id, i.contact_id,
+			i.from_email, i.from_name, i.subject, i.body_preview, i.web_link,
+			i.has_attachments, i.is_read, i.received_at, i.created_at, i.updated_at, c.naam
+		FROM lc_mail_inbox i
+		LEFT JOIN lc_companies c ON c.id = i.company_id
+		WHERE i.user_id = $1
+		ORDER BY i.received_at DESC
+		LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []model.LCMailInboxItem{}
+	for rows.Next() {
+		var m model.LCMailInboxItem
+		if err := rows.Scan(&m.ID, &m.UserID, &m.MessageID, &m.ConversationID, &m.CompanyID, &m.ContactID,
+			&m.FromEmail, &m.FromName, &m.Subject, &m.BodyPreview, &m.WebLink,
+			&m.HasAttachments, &m.IsRead, &m.ReceivedAt, &m.CreatedAt, &m.UpdatedAt, &m.CompanyName); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// LatestInboxReceivedAt returns the most recent received_at (zero when empty),
+// used to fetch only newer messages on the next sync.
+func (s *LaventeCareStore) LatestInboxReceivedAt(ctx context.Context, userID string) (time.Time, error) {
+	var t *time.Time
+	if err := s.db.Pool.QueryRow(ctx, `SELECT max(received_at) FROM lc_mail_inbox WHERE user_id = $1`, userID).Scan(&t); err != nil {
+		return time.Time{}, err
+	}
+	if t == nil {
+		return time.Time{}, nil
+	}
+	return *t, nil
+}
+
 func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID string, input model.LCMailSendRequest, templateKey string) (map[string]string, *uuid.UUID, *uuid.UUID, string, *string, error) {
 	inputVars := safeStringMap(input.Variables)
 	values := map[string]string{

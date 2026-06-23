@@ -122,7 +122,72 @@ func (h *LaventeCareHandler) Mailbox(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Best-effort: attach received mail; a failure here never breaks the mailbox.
+	if inbox, ierr := h.store.ListInbox(r.Context(), h.userID, queryInt(r, "limit", 40)); ierr == nil {
+		mailbox.Inbox = inbox
+	}
 	JSON(w, http.StatusOK, mailbox)
+}
+
+// SyncInbox ingests recent received mail from the LaventeCare mailbox (Microsoft
+// Graph) into lc_mail_inbox, idempotently, linking each message to a company by
+// sender. Degrades gracefully (200 + reason) when the app lacks Mail.Read.
+// @Summary Sync inbound LaventeCare mail
+// @Tags LaventeCare
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]any
+// @Router /laventecare/mailbox/inbox-sync [post]
+func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
+	if !h.mailSender.Configured() {
+		Error(w, http.StatusBadRequest, "LaventeCare mailbox is niet geconfigureerd")
+		return
+	}
+	since, err := h.store.LatestInboxReceivedAt(r.Context(), h.userID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if since.IsZero() {
+		since = time.Now().AddDate(0, 0, -30) // first sync: last 30 days
+	}
+
+	messages, err := h.mailSender.ListInboxMessages(r.Context(), since, 50)
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "(403)") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "accessdenied") {
+			JSON(w, http.StatusOK, map[string]any{
+				"synced": 0,
+				"ok":     false,
+				"reason": "De mailbox-app mist de Mail.Read (application) permissie in Azure AD. Verleen die met admin-consent om inkomende mail op te halen.",
+			})
+			return
+		}
+		Error(w, http.StatusBadGateway, "Inbox ophalen mislukt: "+err.Error())
+		return
+	}
+
+	items := make([]model.LCMailInboxItem, 0, len(messages))
+	for _, m := range messages {
+		items = append(items, model.LCMailInboxItem{
+			MessageID:      m.MessageID,
+			ConversationID: cleanOptionalString(&m.ConversationID),
+			FromEmail:      m.FromEmail,
+			FromName:       cleanOptionalString(&m.FromName),
+			Subject:        cleanOptionalString(&m.Subject),
+			BodyPreview:    cleanOptionalString(&m.BodyPreview),
+			WebLink:        cleanOptionalString(&m.WebLink),
+			HasAttachments: m.HasAttachments,
+			IsRead:         m.IsRead,
+			ReceivedAt:     m.ReceivedAt,
+		})
+	}
+	synced, err := h.store.UpsertInboxMessages(r.Context(), h.userID, items)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"synced": synced, "ok": true})
 }
 
 func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.Request) {

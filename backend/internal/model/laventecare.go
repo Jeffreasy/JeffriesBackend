@@ -550,6 +550,29 @@ type LCMailbox struct {
 	Summary   LCMailboxSummary   `json:"summary"`
 	Templates []LCMailTemplate   `json:"templates"`
 	Outbox    []LCMailOutboxItem `json:"outbox"`
+	Inbox     []LCMailInboxItem  `json:"inbox"`
+}
+
+// LCMailInboxItem is a received email (ingested from Microsoft Graph), threaded
+// to the outbox by conversation_id and linked to a company by sender address.
+type LCMailInboxItem struct {
+	ID             uuid.UUID  `json:"id" db:"id"`
+	UserID         string     `json:"user_id" db:"user_id"`
+	MessageID      string     `json:"message_id" db:"message_id"`
+	ConversationID *string    `json:"conversation_id" db:"conversation_id"`
+	CompanyID      *uuid.UUID `json:"company_id" db:"company_id"`
+	ContactID      *uuid.UUID `json:"contact_id" db:"contact_id"`
+	FromEmail      string     `json:"from_email" db:"from_email"`
+	FromName       *string    `json:"from_name" db:"from_name"`
+	Subject        *string    `json:"subject" db:"subject"`
+	BodyPreview    *string    `json:"body_preview" db:"body_preview"`
+	WebLink        *string    `json:"web_link" db:"web_link"`
+	HasAttachments bool       `json:"has_attachments" db:"has_attachments"`
+	IsRead         bool       `json:"is_read" db:"is_read"`
+	ReceivedAt     time.Time  `json:"received_at" db:"received_at"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName    *string    `json:"company_name,omitempty"`
 }
 
 type LCMailboxSummary struct {

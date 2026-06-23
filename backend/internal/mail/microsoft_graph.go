@@ -339,3 +339,81 @@ func toRecipients(addresses []string) []map[string]map[string]string {
 	}
 	return recipients
 }
+
+// InboundMessage is a received email as read from Microsoft Graph.
+type InboundMessage struct {
+	MessageID      string
+	ConversationID string
+	FromEmail      string
+	FromName       string
+	Subject        string
+	BodyPreview    string
+	WebLink        string
+	HasAttachments bool
+	IsRead         bool
+	ReceivedAt     time.Time
+}
+
+// ListInboxMessages reads recent received mail from the LaventeCare mailbox.
+// Requires the app registration to hold the Mail.Read APPLICATION permission;
+// without it Graph returns 403 and this returns an error the caller logs + skips
+// (the rest of the mailbox keeps working).
+func (s *Sender) ListInboxMessages(ctx context.Context, since time.Time, top int) ([]InboundMessage, error) {
+	if !s.Configured() {
+		return nil, ErrNotConfigured
+	}
+	if top <= 0 || top > 100 {
+		top = 50
+	}
+	q := url.Values{}
+	q.Set("$select", "id,conversationId,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments,webLink")
+	q.Set("$top", strconv.Itoa(top))
+	q.Set("$orderby", "receivedDateTime desc")
+	if !since.IsZero() {
+		q.Set("$filter", "receivedDateTime ge "+since.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	path := fmt.Sprintf("/users/%s/mailFolders/inbox/messages?%s", url.PathEscape(s.cfg.MicrosoftSenderEmail), q.Encode())
+
+	var resp struct {
+		Value []struct {
+			ID               string `json:"id"`
+			ConversationID   string `json:"conversationId"`
+			Subject          string `json:"subject"`
+			BodyPreview      string `json:"bodyPreview"`
+			ReceivedDateTime string `json:"receivedDateTime"`
+			IsRead           bool   `json:"isRead"`
+			HasAttachments   bool   `json:"hasAttachments"`
+			WebLink          string `json:"webLink"`
+			From             struct {
+				EmailAddress struct {
+					Address string `json:"address"`
+					Name    string `json:"name"`
+				} `json:"emailAddress"`
+			} `json:"from"`
+		} `json:"value"`
+	}
+	if err := s.graphRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+
+	out := make([]InboundMessage, 0, len(resp.Value))
+	for _, m := range resp.Value {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		received, _ := time.Parse(time.RFC3339, m.ReceivedDateTime)
+		out = append(out, InboundMessage{
+			MessageID:      m.ID,
+			ConversationID: strings.TrimSpace(m.ConversationID),
+			FromEmail:      strings.ToLower(strings.TrimSpace(m.From.EmailAddress.Address)),
+			FromName:       strings.TrimSpace(m.From.EmailAddress.Name),
+			Subject:        m.Subject,
+			BodyPreview:    m.BodyPreview,
+			WebLink:        m.WebLink,
+			HasAttachments: m.HasAttachments,
+			IsRead:         m.IsRead,
+			ReceivedAt:     received,
+		})
+	}
+	return out, nil
+}

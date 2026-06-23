@@ -272,6 +272,40 @@ CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_user_status
 CREATE INDEX IF NOT EXISTS idx_lc_mail_outbox_company
     ON lc_mail_outbox (company_id, created_at DESC)
     WHERE company_id IS NOT NULL;
+
+-- Inbound mail (received via Microsoft Graph). Idempotent on the Graph message id;
+-- conversation_id threads a reply chain together with the outbox.
+CREATE TABLE IF NOT EXISTS lc_mail_inbox (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         TEXT NOT NULL,
+    message_id      TEXT NOT NULL,
+    conversation_id TEXT,
+    company_id      UUID REFERENCES lc_companies(id) ON DELETE SET NULL,
+    contact_id      UUID REFERENCES lc_contacts(id) ON DELETE SET NULL,
+    from_email      TEXT NOT NULL,
+    from_name       TEXT,
+    subject         TEXT,
+    body_preview    TEXT,
+    web_link        TEXT,
+    has_attachments BOOLEAN NOT NULL DEFAULT false,
+    is_read         BOOLEAN NOT NULL DEFAULT false,
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lc_mail_inbox_user_message
+    ON lc_mail_inbox (user_id, message_id);
+
+CREATE INDEX IF NOT EXISTS idx_lc_mail_inbox_user_received
+    ON lc_mail_inbox (user_id, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_lc_mail_inbox_conversation
+    ON lc_mail_inbox (user_id, conversation_id);
+
+CREATE INDEX IF NOT EXISTS idx_lc_mail_inbox_company
+    ON lc_mail_inbox (company_id, received_at DESC)
+    WHERE company_id IS NOT NULL;
 `)
 	return err
 }
