@@ -46,21 +46,50 @@ reviews:
   path_instructions:
     - path: "backend/internal/ai/**"
       instructions: |
-        This is the AI tool-calling layer (Grok/xAI). For every new or changed
-        tool case:
-        - Any tool that mutates data, sends external communication (email,
-          Telegram), or moves money MUST be registered in agents.go's Policies
-          map with Mutates:true and RequiresConfirmation:true, so it routes
-          through ConfirmingExecutor and requires /approve before executing.
-          Flag any new mutating tool case in executor.go that lacks a matching
-          policy entry.
+        This is the AI tool-catalog/policy layer (Grok/xAI). agents.go's
+        Policies map governs confirmation requirements; the actual tool-case
+        switch and ConfirmingExecutor dispatch live in
+        backend/internal/engine/executor.go and pending_actions.go (see the
+        engine/** instruction below) — flag missing/incorrect policy entries
+        here, not just in the engine package.
+        - Confirmation tiering is deliberately risk-based, not a blanket rule:
+          pure ADDITIVE record-keeping with no destructive/financial/external
+          effect (e.g. notitieAanmaken, habitAanmaken, and the LaventeCare
+          "log an event" tools laventecareBesluitMaken/
+          laventecareChangeRequestMaken/laventecareSlaIncidentMaken) are
+          intentionally RequiresConfirmation:false to keep low-risk logging
+          frictionless. Do NOT flag these three as missing confirmation — this
+          was a deliberate, reviewed decision. DO flag any tool that deletes,
+          edits existing records, sends external communication (email,
+          Telegram), or moves money (these must be Mutates:true AND
+          RequiresConfirmation:true).
         - Tool results returned to the model must never leak raw Go/pgx errors
           or English text — flag any fmt.Sprintf("...%v", err) style response
-          instead of a classified, Dutch, user-safe message (see
-          classifyStoreError/classifyUserFacingError for the established
-          pattern).
+          instead of a classified, Dutch, user-safe message. Note:
+          classifyStoreError must only rewrite recognized driver/pgx errors —
+          hand-written validation errors (e.g. fmt.Errorf("titel en
+          startDatum zijn verplicht")) must pass through unchanged so the
+          model gets actionable feedback to repair its tool call.
         - Every store call must be scoped to the executor's own e.userID —
           flag anything that accepts a caller-supplied user/owner id instead.
+
+    - path: "backend/internal/engine/**"
+      instructions: |
+        This package implements the tool-execution dispatch (executor.go),
+        the confirmation queue (pending_actions.go/ConfirmingExecutor), and
+        the Telegram bot orchestration (telegram_*.go). For every new or
+        changed tool-case branch in executor.go that mutates data, sends
+        external communication, or moves money, flag if there is no matching
+        Policies entry in backend/internal/ai/agents.go with Mutates:true and
+        RequiresConfirmation:true — EXCEPT pure additive log-only tools
+        (notitieAanmaken, habitAanmaken, laventecareBesluitMaken,
+        laventecareChangeRequestMaken, laventecareSlaIncidentMaken), which are
+        deliberately unconfirmed. Also flag: raw Go/pgx errors or English text
+        leaking into a tool result or into live prompt context
+        (ai.BuildSystemPrompt input) instead of a classified Dutch message;
+        chat history persistence treated inconsistently (some paths check
+        errors, some don't) in a way that could orphan a user turn with no
+        assistant reply.
 
     - path: "backend/internal/store/**"
       instructions: |

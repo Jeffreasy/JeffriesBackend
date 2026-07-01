@@ -76,6 +76,16 @@ func (e *Engine) googleOAuthClient() *google.OAuthClient {
 	return google.SharedOAuthClient(e.cfg.GoogleClientID, e.cfg.GoogleClientSecret, e.cfg.GoogleRefreshToken)
 }
 
+// liveSnapshotErrorPlaceholder logs the real error server-side and returns a
+// short Dutch-safe placeholder for the live prompt context. Everything under
+// "live" gets JSON-marshaled straight into ai.BuildSystemPrompt — a raw
+// err.Error() there (driver errors, English text) could otherwise be echoed
+// back to the user by the model.
+func liveSnapshotErrorPlaceholder(name string, err error) string {
+	slog.Warn("live context snapshot failed", "snapshot", name, "error", err)
+	return "Live " + name + " snapshot tijdelijk niet beschikbaar."
+}
+
 func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[string]any {
 	live := map[string]any{"status": "Go backend"}
 
@@ -86,7 +96,7 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 		if err == nil {
 			live["briefing"] = briefing
 		} else {
-			live["briefingError"] = err.Error()
+			live["briefingError"] = liveSnapshotErrorPlaceholder("briefing", err)
 		}
 	case "laventecare":
 		briefing, err := NewHomeBotExecutorWithGoogle(e.db.Pool, e.cfg.HomeappUserID, e.googleOAuthClient()).
@@ -94,7 +104,7 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 		if err == nil {
 			live["businessBriefing"] = briefing
 		} else {
-			live["businessBriefingError"] = err.Error()
+			live["businessBriefingError"] = liveSnapshotErrorPlaceholder("businessBriefing", err)
 		}
 	}
 
@@ -103,7 +113,7 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 		if snapshot, err := e.buildNotesAISnapshot(ctx, 8); err == nil {
 			live["notes"] = snapshot
 		} else {
-			live["notesError"] = err.Error()
+			live["notesError"] = liveSnapshotErrorPlaceholder("notes", err)
 		}
 	}
 
@@ -117,25 +127,25 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 		if snapshot, err := e.buildRoosterAISnapshot(ctx); err == nil {
 			live["rooster"] = snapshot
 		} else {
-			live["roosterError"] = err.Error()
+			live["roosterError"] = liveSnapshotErrorPlaceholder("rooster", err)
 		}
 	case "agenda":
 		if snapshot, err := e.buildAgendaAISnapshot(ctx); err == nil {
 			live["agenda"] = snapshot
 		} else {
-			live["agendaError"] = err.Error()
+			live["agendaError"] = liveSnapshotErrorPlaceholder("agenda", err)
 		}
 	case "finance":
 		if snapshot, err := e.buildFinanceAISnapshot(ctx); err == nil {
 			live["finance"] = snapshot
 		} else {
-			live["financeError"] = err.Error()
+			live["financeError"] = liveSnapshotErrorPlaceholder("finance", err)
 		}
 	case "habits":
 		if snapshot, err := e.buildHabitsAISnapshot(ctx); err == nil {
 			live["habits"] = snapshot
 		} else {
-			live["habitsError"] = err.Error()
+			live["habitsError"] = liveSnapshotErrorPlaceholder("habits", err)
 		}
 	}
 
@@ -145,11 +155,19 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 // buildRoosterAISnapshot gives the rooster agent the next couple of shifts
 // and their combined hours without a mandatory dienstenOpvragen round-trip.
 func (e *Engine) buildRoosterAISnapshot(ctx context.Context) (map[string]any, error) {
-	events, err := store.NewScheduleStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, 2)
+	const want = 2
+	// Fetch a buffer BEFORE filtering: ListUpcoming can return hidden/
+	// deleted shifts that visibleSchedules then drops, so limiting to `want`
+	// up front could leave fewer than `want` (or zero) visible items even
+	// when more real upcoming shifts exist.
+	events, err := store.NewScheduleStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, want*5)
 	if err != nil {
 		return nil, err
 	}
 	events = visibleSchedules(events)
+	if len(events) > want {
+		events = events[:want]
+	}
 	var totaalUur float64
 	for _, ev := range events {
 		totaalUur += ev.Duur
@@ -166,11 +184,18 @@ func (e *Engine) buildRoosterAISnapshot(ctx context.Context) (map[string]any, er
 // buildAgendaAISnapshot gives the agenda agent the next few appointments
 // without a mandatory afsprakenOpvragen round-trip.
 func (e *Engine) buildAgendaAISnapshot(ctx context.Context) (map[string]any, error) {
-	events, err := store.NewPersonalEventStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, 3)
+	const want = 3
+	// Same fetch-before-filter reasoning as buildRoosterAISnapshot: pending/
+	// hidden personal events would otherwise consume slots before
+	// visiblePersonalEvents filters them out.
+	events, err := store.NewPersonalEventStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, want*5)
 	if err != nil {
 		return nil, err
 	}
 	events = visiblePersonalEvents(events)
+	if len(events) > want {
+		events = events[:want]
+	}
 	return map[string]any{
 		"source":          "server-side live agenda snapshot",
 		"aantalAfspraken": len(events),
@@ -389,6 +414,19 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		agentID = "brain"
 	}
 
+	// Preflight before touching history: if we can't actually call Grok,
+	// bail out before saving the user's turn, so we never leave an orphaned
+	// user message in history with no assistant reply beside it.
+	grokKey := e.cfg.GrokAPIKey
+	if grokKey == "" {
+		err := fmt.Errorf("GROK_API_KEY niet geconfigureerd")
+		reply := "❌ " + classifyUserFacingError(err.Error())
+		_ = client.SendMessage(chatID, reply)
+		_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
+		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+		return "", err
+	}
+
 	// Load PRIOR history, then persist the current turn — in that order, so
 	// the current turn is never in the result set and there is nothing to
 	// drop positionally. (Callers no longer save the user message themselves.)
@@ -401,13 +439,6 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		}
 	}
 	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
-
-	grokKey := e.cfg.GrokAPIKey
-	if grokKey == "" {
-		err := fmt.Errorf("GROK_API_KEY niet geconfigureerd")
-		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
-		return "", err
-	}
 
 	grokClient := e.grok()
 

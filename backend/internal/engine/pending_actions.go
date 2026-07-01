@@ -67,7 +67,7 @@ func (e *ConfirmingExecutor) Execute(ctx context.Context, toolName string, argsJ
 		case "laventecareBetaalverzoekMaken":
 			summary = e.enrichPaymentRequestSummary(ctx, argsJSON, summary)
 		case "afspraakMaken", "afspraakBewerken":
-			summary = e.enrichAppointmentSummary(ctx, argsJSON, summary)
+			summary = e.enrichAppointmentSummary(ctx, toolName, argsJSON, summary)
 		}
 		action, err := e.pending.Create(ctx, e.userID, e.agentID, toolName, argsJSON, summary)
 		if err != nil {
@@ -194,8 +194,10 @@ func (e *ConfirmingExecutor) enrichPaymentRequestSummary(ctx context.Context, ar
 // the confirmation summary shown BEFORE the user approves — not just to the
 // eventual DB record — so a double-booking is visible at the moment they
 // decide, not only discoverable afterward in the executed result.
-func (e *ConfirmingExecutor) enrichAppointmentSummary(ctx context.Context, argsJSON, fallback string) string {
+func (e *ConfirmingExecutor) enrichAppointmentSummary(ctx context.Context, toolName, argsJSON, fallback string) string {
 	var args struct {
+		EventID      string `json:"eventId"`
+		EventIDDB    string `json:"event_id"`
 		StartDatum   string `json:"startDatum"`
 		StartDatumDB string `json:"start_datum"`
 		StartIso     string `json:"startIso"`
@@ -213,10 +215,47 @@ func (e *ConfirmingExecutor) enrichAppointmentSummary(ctx context.Context, argsJ
 		return fallback
 	}
 	startDatum := firstNonEmpty(args.StartDatum, args.StartDatumDB, args.StartIso)
-	eindDatum := firstNonEmpty(args.EindDatum, args.EindDatumDB, args.EindIso, startDatum)
+	eindDatum := firstNonEmpty(args.EindDatum, args.EindDatumDB, args.EindIso)
 	startTijd := firstNonEmpty(args.StartTijd, args.StartTijdDB)
 	eindTijd := firstNonEmpty(args.EindTijd, args.EindTijdDB)
-	heledag := (args.Heledag != nil && *args.Heledag) || (args.AllDay != nil && *args.AllDay)
+	var heledag bool
+	heledagSet := args.Heledag != nil || args.AllDay != nil
+	if heledagSet {
+		heledag = (args.Heledag != nil && *args.Heledag) || (args.AllDay != nil && *args.AllDay)
+	}
+
+	// afspraakBewerken supports partial edits — argsJSON only carries the
+	// fields the model actually wants to change. Without merging in the
+	// existing event, a time-only-untouched edit (e.g. only changing
+	// locatie) would run the conflict check against empty start/end and
+	// silently skip the pre-approval warning even though execution later
+	// (against the merged record) would have caught it.
+	if toolName == "afspraakBewerken" {
+		eventID := firstNonEmpty(args.EventID, args.EventIDDB)
+		if eventID != "" {
+			eventStore := store.NewPersonalEventStore(&store.DB{Pool: e.pool})
+			if existing, err := eventStore.GetByUserEventID(ctx, e.userID, eventID); err == nil {
+				if startDatum == "" {
+					startDatum = existing.StartDatum
+				}
+				if eindDatum == "" {
+					eindDatum = existing.EindDatum
+				}
+				if startTijd == "" {
+					startTijd = optionalPtrValue(existing.StartTijd)
+				}
+				if eindTijd == "" {
+					eindTijd = optionalPtrValue(existing.EindTijd)
+				}
+				if !heledagSet {
+					heledag = existing.Heledag
+				}
+			}
+		}
+	}
+	if eindDatum == "" {
+		eindDatum = startDatum
+	}
 
 	scheduleStore := store.NewScheduleStore(&store.DB{Pool: e.pool})
 	conflict := findDienstConflict(ctx, scheduleStore, e.userID, startDatum, startTijd, eindDatum, eindTijd, heledag)

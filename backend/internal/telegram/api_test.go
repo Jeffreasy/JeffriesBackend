@@ -13,16 +13,16 @@ func TestSplitForTelegramShortTextUnchanged(t *testing.T) {
 }
 
 func TestSplitForTelegramLongTextSplitsAtNewline(t *testing.T) {
-	// Build a message well over telegramChunkTarget, with a newline placed
-	// so the first break should land there rather than mid-word.
-	para := strings.Repeat("a", telegramChunkTarget-10) + "\n" + strings.Repeat("b", telegramChunkTarget)
+	// Build a message well over telegramChunkByteTarget, with a newline
+	// placed so the first break should land there rather than mid-word.
+	para := strings.Repeat("a", telegramChunkByteTarget-10) + "\n" + strings.Repeat("b", telegramChunkByteTarget)
 	chunks := splitForTelegram(para)
 	if len(chunks) < 2 {
 		t.Fatalf("expected at least 2 chunks, got %d", len(chunks))
 	}
 	for i, c := range chunks {
-		if len([]rune(c)) > telegramChunkTarget {
-			t.Fatalf("chunk %d exceeds target size: %d runes", i, len([]rune(c)))
+		if escapedByteLen(c) > telegramChunkByteTarget {
+			t.Fatalf("chunk %d exceeds target size: %d escaped bytes", i, escapedByteLen(c))
 		}
 	}
 	if strings.Contains(chunks[0], "b") {
@@ -30,29 +30,59 @@ func TestSplitForTelegramLongTextSplitsAtNewline(t *testing.T) {
 	}
 }
 
-func TestSplitForTelegramNoGoodBoundaryHardCutsRuneSafe(t *testing.T) {
-	// No newlines at all: must still split into rune-safe chunks under the target.
-	text := strings.Repeat("€", telegramChunkTarget*2) // multi-byte rune, stresses byte-vs-rune handling
+// TestSplitForTelegramMultiByteRunesStayUnderByteBudget pins down the actual
+// production bug: chunking by RUNE count let a chunk full of multi-byte
+// runes (€=3 bytes each) balloon to ~3x telegramChunkByteTarget in bytes,
+// which escapeAndCapForTelegram then silently truncated at send time —
+// reintroducing the exact data loss this rework exists to prevent.
+func TestSplitForTelegramMultiByteRunesStayUnderByteBudget(t *testing.T) {
+	// No newlines at all: must still split into byte-safe chunks under the target.
+	text := strings.Repeat("€", telegramChunkByteTarget) // 3 bytes/rune — old rune-based target would blow this 3x over budget
 	chunks := splitForTelegram(text)
 	if len(chunks) < 2 {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
-	var total int
-	for _, c := range chunks {
-		total += len([]rune(c))
-		if len([]rune(c)) > telegramChunkTarget {
-			t.Fatalf("chunk exceeds target size: %d runes", len([]rune(c)))
+	var totalRunes int
+	for i, c := range chunks {
+		if escapedByteLen(c) > telegramChunkByteTarget {
+			t.Fatalf("chunk %d exceeds byte budget: %d escaped bytes", i, escapedByteLen(c))
 		}
+		totalRunes += len([]rune(c))
 	}
-	if total != telegramChunkTarget*2 {
-		t.Fatalf("expected no runes lost/duplicated across chunks, got %d want %d", total, telegramChunkTarget*2)
+	if want := len([]rune(text)); totalRunes != want {
+		t.Fatalf("expected no runes lost/duplicated across chunks, got %d want %d", totalRunes, want)
+	}
+}
+
+// TestSplitForTelegramChunksSurviveEscapeAndCap is the regression test for
+// the actual SendMessage path: every chunk splitForTelegram produces must
+// pass through escapeAndCapForTelegram (as SendMessage does) WITHOUT being
+// truncated. A rune-budgeted splitter can pass this file's other tests while
+// still losing content at send time on multi-byte-heavy input — this test
+// is what would have caught that.
+func TestSplitForTelegramChunksSurviveEscapeAndCap(t *testing.T) {
+	inputs := []string{
+		strings.Repeat("€", 20000),                                   // dense multi-byte, no boundaries
+		strings.Repeat("Saldo: €1.234,56 op rekening NL00INGB\n", 800), // realistic dense finance-report shape
+		strings.Repeat("&", 10000),                                   // heaviest HTML-escape expansion (5 bytes each)
+	}
+	for _, text := range inputs {
+		for i, chunk := range splitForTelegram(text) {
+			// A chunk that already fits within telegramHardLimit before
+			// escaping never needs escapeAndCapForTelegram's fallback
+			// truncation — assert that directly, which is exactly what a
+			// rune-budgeted (instead of byte-budgeted) splitter would fail.
+			if got := len(escapeHTML(chunk)); got > telegramHardLimit {
+				t.Fatalf("chunk %d of input len=%d needs truncation at send time: escaped %d bytes > hard limit %d", i, len(text), got, telegramHardLimit)
+			}
+		}
 	}
 }
 
 func TestEscapeAndCapForTelegramNeverExceedsHardLimit(t *testing.T) {
-	// Pathological input: every character expands 4x on escape (&amp;).
+	// Pathological input: every character expands 5x on escape (&amp;).
 	// Old behavior (truncate raw, then escape) could push this over 4096.
-	raw := strings.Repeat("&", telegramChunkTarget)
+	raw := strings.Repeat("&", telegramChunkByteTarget)
 	got := escapeAndCapForTelegram(raw)
 	if len(got) > telegramHardLimit {
 		t.Fatalf("escaped+capped text exceeds telegramHardLimit: %d bytes", len(got))

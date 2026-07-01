@@ -17,10 +17,15 @@ const tgBase = "https://api.telegram.org/bot"
 const (
 	// telegramHardLimit is Telegram's actual max message length (post-escaping).
 	telegramHardLimit = 4096
-	// telegramChunkTarget is the raw (pre-escaping) chunk size splitForTelegram
-	// aims for, leaving headroom so HTML-entity expansion (&/</>) can't push a
-	// chunk over telegramHardLimit.
-	telegramChunkTarget = 3500
+	// telegramChunkByteTarget is the ESCAPED-byte budget splitForTelegram aims
+	// for per chunk, safely under telegramHardLimit. This MUST be a byte
+	// budget, not a rune count: Dutch text is full of multi-byte UTF-8 (€=3
+	// bytes, é/ë=2 bytes, emoji=4 bytes), so a fixed rune count can produce a
+	// chunk many times larger than intended in bytes — a message dense with
+	// € (the finance/cockpit replies) would blow straight past
+	// telegramHardLimit and get silently truncated at send time regardless
+	// of chunking, exactly the bug this rework exists to prevent.
+	telegramChunkByteTarget = 3500
 )
 
 // Client wraps the Telegram Bot API.
@@ -356,34 +361,65 @@ func safeTruncateBytes(s string, maxBytes int) string {
 	return b
 }
 
-// splitForTelegram splits text into rune-safe chunks around telegramChunkTarget
-// runes, preferring to break at the last newline within the window so a
-// chunk doesn't cut off mid-sentence any more than necessary. Leading/
-// trailing blank lines at a break point are trimmed.
+// splitForTelegram splits text into chunks bounded by telegramChunkByteTarget
+// ESCAPED bytes (not runes), preferring to break at the last newline within
+// the window so a chunk doesn't cut off mid-sentence any more than
+// necessary. Leading/trailing blank lines at a break point are trimmed.
+// Budgeting by escaped bytes (via escapedRuneByteLen) rather than a rune
+// count is the whole point: it's the only way to guarantee every chunk
+// actually stays under Telegram's byte-based hard limit regardless of how
+// many multi-byte runes (€, é, ë, emoji) it contains.
 func splitForTelegram(text string) []string {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return []string{""}
 	}
-	if len(runes) <= telegramChunkTarget {
+	if escapedByteLen(text) <= telegramChunkByteTarget {
 		return []string{text}
 	}
 
 	var chunks []string
-	for len(runes) > telegramChunkTarget {
-		window := runes[:telegramChunkTarget]
-		breakAt := lastIndexRune(window, '\n')
-		if breakAt < telegramChunkTarget/2 {
-			breakAt = telegramChunkTarget // no good boundary nearby — hard (but rune-safe) cut
+	start := 0
+	for start < len(runes) {
+		byteLen := 0
+		lastNewline := -1
+		end := start
+		for end < len(runes) {
+			next := byteLen + escapedRuneByteLen(runes[end])
+			if next > telegramChunkByteTarget {
+				break
+			}
+			byteLen = next
+			if runes[end] == '\n' {
+				lastNewline = end
+			}
+			end++
 		}
-		chunk := strings.TrimRight(string(runes[:breakAt]), "\n")
+		if end >= len(runes) {
+			chunks = append(chunks, string(runes[start:]))
+			break
+		}
+		cut := end
+		// Prefer breaking at the last newline within this window, as long as
+		// it isn't so far back it would produce a tiny chunk.
+		if lastNewline >= 0 && lastNewline > start+(end-start)/2 {
+			cut = lastNewline
+		}
+		if cut <= start {
+			// No forward progress possible via the preferred boundary
+			// (shouldn't happen — a single rune's escaped size is always far
+			// smaller than telegramChunkByteTarget) — hard-cut one rune to
+			// guarantee the loop terminates.
+			cut = start + 1
+		}
+		chunk := strings.TrimRight(string(runes[start:cut]), "\n")
 		if chunk != "" {
 			chunks = append(chunks, chunk)
 		}
-		runes = []rune(strings.TrimLeft(string(runes[breakAt:]), "\n"))
-	}
-	if len(runes) > 0 {
-		chunks = append(chunks, string(runes))
+		start = cut
+		for start < len(runes) && runes[start] == '\n' {
+			start++
+		}
 	}
 	if len(chunks) == 0 {
 		chunks = append(chunks, "")
@@ -391,13 +427,28 @@ func splitForTelegram(text string) []string {
 	return chunks
 }
 
-func lastIndexRune(runes []rune, target rune) int {
-	for i := len(runes) - 1; i >= 0; i-- {
-		if runes[i] == target {
-			return i
-		}
+// escapedByteLen returns the byte length text would have after escapeHTML.
+func escapedByteLen(text string) int {
+	total := 0
+	for _, r := range text {
+		total += escapedRuneByteLen(r)
 	}
-	return -1
+	return total
+}
+
+// escapedRuneByteLen returns how many bytes a single rune contributes after
+// HTML-escaping (&, <, > expand; everything else is its normal UTF-8 width).
+func escapedRuneByteLen(r rune) int {
+	switch r {
+	case '&':
+		return 5 // &amp;
+	case '<':
+		return 4 // &lt;
+	case '>':
+		return 4 // &gt;
+	default:
+		return utf8.RuneLen(r)
+	}
 }
 
 func mustReq(method, url string, body []byte) *http.Request {

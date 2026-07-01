@@ -251,9 +251,18 @@ func classifyStoreError(err error) string {
 		case "22P02": // invalid_text_representation
 			return "Ongeldige waarde meegegeven."
 		}
+		// A recognized driver error but an unmapped SQLSTATE — still never
+		// leak the raw code/driver text, fall back to a generic message.
+		slog.Warn("unclassified pgx error", "error", err)
+		return "Er ging iets mis bij het opslaan/ophalen. Probeer het opnieuw."
 	}
-	slog.Warn("store error", "error", err)
-	return "Er ging iets mis bij het opslaan/ophalen. Probeer het opnieuw."
+	// Not a recognized pgx/driver error — this is almost always a
+	// hand-written, already-Dutch, already-actionable validation or business
+	// error (e.g. "titel en startDatum zijn verplicht"). Pass it through
+	// unchanged: rewriting it to a generic message would strip the model of
+	// the specific feedback it needs to repair a malformed tool call. Only
+	// genuine driver/pgx failures above get the classified/generic fallback.
+	return err.Error()
 }
 
 func (e *HomeBotExecutor) resolveHabit(ctx context.Context, idValue, nameValue string) (model.Habit, error) {
@@ -3555,6 +3564,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			command = commandFromStateOpts(sceneDef)
 		}
 		if args.Dimming != nil {
+			if actie == "uit" || actie == "off" {
+				return e.jsonResponse(nil, fmt.Errorf("dimming kan niet samen met uit/off — laat dimming weg om alleen de lamp uit te zetten"))
+			}
 			dimming := int(*args.Dimming)
 			if dimming < 10 {
 				dimming = 10
