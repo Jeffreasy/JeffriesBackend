@@ -493,7 +493,14 @@ func (e *Engine) processPendingCalendarOps(ctx context.Context, client *google.O
 			if errors.Is(opErr, google.ErrGoogleReauthRequired) {
 				return processed, deadLettered, opErr
 			}
-			deadLetter, recErr := evStore.RecordPendingFailure(ctx, event.UserID, event.EventID, opErr.Error(), pendingCalendarMaxAttempts)
+			// A permanent error (e.g. editing a Google-generated birthday event)
+			// will fail identically every time, so dead-letter it on the first
+			// attempt instead of burning the normal 5-attempt retry budget.
+			maxAttempts := pendingCalendarMaxAttempts
+			if google.IsPermanentCalendarError(opErr) {
+				maxAttempts = 1
+			}
+			deadLetter, recErr := evStore.RecordPendingFailure(ctx, event.UserID, event.EventID, opErr.Error(), maxAttempts)
 			if recErr != nil {
 				slog.Warn("pending calendar failure bookkeeping failed", "eventId", event.EventID, "error", recErr)
 			}

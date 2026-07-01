@@ -618,6 +618,20 @@ func isInvalidStartTimeError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid start time")
 }
 
+// IsPermanentCalendarError reports whether a Google Calendar error can never
+// succeed on retry, regardless of how many times it's attempted — e.g. trying
+// to edit a Google-generated "birthday" event, whose eventType is immutable
+// via the events API (HTTP 400, reason "eventTypeRestriction"). Callers should
+// dead-letter these on the first failure instead of burning the normal retry
+// budget on something that will fail identically every time.
+func IsPermanentCalendarError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "eventtyperestriction") || strings.Contains(msg, "event type cannot be changed")
+}
+
 func inclusiveAllDayEnd(startDt, googleEndDt time.Time) time.Time {
 	endDt := googleEndDt.AddDate(0, 0, -1)
 	if endDt.Before(startDt) {

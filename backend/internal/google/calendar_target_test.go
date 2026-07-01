@@ -8,6 +8,25 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
 
+func TestIsPermanentCalendarError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"birthday event type restriction", &APIError{Method: "PUT", URL: "x", Status: 400, Body: `{"error":{"errors":[{"reason":"eventTypeRestriction","message":"Event type cannot be changed."}]}}`}, true},
+		{"human-readable message match", errors.New("Event type cannot be changed."), true},
+		{"unrelated 404", &APIError{Method: "PUT", URL: "x", Status: 404, Body: "Not Found"}, false},
+		{"transient 503", &APIError{Method: "PUT", URL: "x", Status: 503, Body: "Service Unavailable"}, false},
+	}
+	for _, c := range cases {
+		if got := IsPermanentCalendarError(c.err); got != c.want {
+			t.Errorf("%s: IsPermanentCalendarError() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestNormalizeCalendarID(t *testing.T) {
 	cases := map[string]string{
 		"":           "primary",
