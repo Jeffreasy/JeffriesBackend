@@ -309,6 +309,45 @@ func TestParseOptionalNoteDeadline(t *testing.T) {
 	}
 }
 
+func TestClosestKnownCommandSuggestsTypo(t *testing.T) {
+	cases := map[string]string{
+		"/aproove":  "/approve",  // the exact reported typo class — missing/reordered letters, must still suggest
+		"/aprove":   "/approve",
+		"/rejct":    "/reject",
+		"/breifing": "/briefing",
+	}
+	for typed, want := range cases {
+		if got := closestKnownCommand(typed); got != want {
+			t.Errorf("closestKnownCommand(%q) = %q, want %q", typed, got, want)
+		}
+	}
+}
+
+func TestClosestKnownCommandNoSuggestionWhenTooDifferent(t *testing.T) {
+	// A genuinely unrelated slash-string shouldn't produce a misleading guess.
+	if got := closestKnownCommand("/xyzxyzxyz"); got != "" {
+		t.Errorf("closestKnownCommand(%q) = %q, want no suggestion", "/xyzxyzxyz", got)
+	}
+}
+
+func TestLevenshteinDistance(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"approve", "approve", 0},
+		{"approve", "aproove", 2},
+		{"", "abc", 3},
+		{"abc", "", 3},
+		{"kitten", "sitting", 3},
+	}
+	for _, c := range cases {
+		if got := levenshteinDistance(c.a, c.b); got != c.want {
+			t.Errorf("levenshteinDistance(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestFormatNoteDeadlineDST(t *testing.T) {
 	// Mock a DST transition day in spring: Sunday 2026-03-29 clocks go forward.
 	// We'll test from Saturday 2026-03-28 to Sunday 2026-03-29.

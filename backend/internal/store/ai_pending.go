@@ -99,7 +99,11 @@ func (s *PendingStore) FindPendingByToolArgs(ctx context.Context, userID, toolNa
 	return &pa, nil
 }
 
-// Claim atomically claims a pending action for execution.
+// Claim atomically claims a pending action for execution. Returns (nil, nil)
+// — not an error — if no matching pending row exists (already claimed,
+// rejected, or expired, or a TOCTOU race with a second claim attempt via a
+// different UI entry point). Callers must check for a nil result rather than
+// assuming a non-nil error means "not found".
 func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAction, error) {
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
@@ -110,12 +114,17 @@ func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAc
 		id, userID,
 	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &pa, nil
 }
 
-// Cancel marks a pending action as cancelled for a user.
+// Cancel marks a pending action as cancelled for a user. Returns (nil, nil)
+// — not an error — if no matching pending row exists, matching Claim/
+// FindByCode's convention.
 func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingAction, error) {
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
@@ -126,6 +135,9 @@ func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingA
 		id, userID,
 	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &pa, nil
@@ -140,7 +152,11 @@ func (s *PendingStore) MarkStatus(ctx context.Context, id, status string, result
 	return err
 }
 
-// FindByCode finds a pending action by its confirmation code.
+// FindByCode finds a pending action by its confirmation code. Returns
+// (nil, nil) — not an error — if the code is unknown, already used, or
+// expired, matching FindPendingByToolArgs's convention above so callers
+// can show a specific "code onbekend/verlopen" message instead of
+// forwarding a raw pgx.ErrNoRows ("no rows in result set") to the user.
 func (s *PendingStore) FindByCode(ctx context.Context, userID, code string) (*PendingAction, error) {
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
@@ -150,6 +166,9 @@ func (s *PendingStore) FindByCode(ctx context.Context, userID, code string) (*Pe
 		userID, strings.ToUpper(code),
 	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &pa, nil

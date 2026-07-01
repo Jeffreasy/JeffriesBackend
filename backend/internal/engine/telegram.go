@@ -108,15 +108,25 @@ func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg
 
 		ownerID := e.cfg.TelegramChatID
 		if ownerID == "" || strconv.FormatInt(chatID, 10) != ownerID {
-			_ = client.AnswerCallbackQuery(cb.ID, "Ongeautoriseerd.")
+			slog.Warn("telegram callback query from non-owner chat rejected", "chatID", chatID)
+			if err := client.AnswerCallbackQuery(cb.ID, "Ongeautoriseerd."); err != nil {
+				slog.Warn("telegram AnswerCallbackQuery failed", "error", err)
+			}
 			return
 		}
 
 		// Acknowledge the click immediately so the loading spinner goes away
-		_ = client.AnswerCallbackQuery(cb.ID, "")
+		if err := client.AnswerCallbackQuery(cb.ID, ""); err != nil {
+			slog.Warn("telegram AnswerCallbackQuery failed", "error", err)
+		}
 
-		// Process the callback data exactly as if the user typed it
-		e.processText(ctx, client, chatID, strings.TrimSpace(cb.Data))
+		// Process the callback data exactly as if the user typed it. Pass the
+		// tapped message's ID so button-originated actions (note archive/done/
+		// pin, pending confirm/reject) can edit that message in place instead
+		// of always sending a new one and leaving the original's now-stale
+		// buttons live and re-tappable.
+		messageID := cb.Message.MessageID
+		e.processText(ctx, client, chatID, strings.TrimSpace(cb.Data), &messageID)
 		return
 	}
 
@@ -147,5 +157,5 @@ func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg
 		return
 	}
 
-	e.processText(ctx, client, chatID, strings.TrimSpace(msg.Text))
+	e.processText(ctx, client, chatID, strings.TrimSpace(msg.Text), nil)
 }

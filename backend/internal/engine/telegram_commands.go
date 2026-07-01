@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -36,6 +37,11 @@ const (
 	summaryPrompt  = "Vat mijn actieve notities compact samen. Gebruik eerst Live Data.notes en verifieer met notitiesOverzicht. Groepeer per thema/tag en benoem losse actiepunten apart."
 	autoPrompt     = "Geef the automation en sync status van mijn systeem."
 	newsPrompt     = "Wat was het belangrijkste nieuws van de afgelopen 24 uur? Geef een compacte top 5 met bron per punt."
+
+	afspraakPrompt    = "Ik wil een nieuwe agenda-afspraak aanmaken. Vraag kort naar titel, datum en tijd als die nog ontbreken, en gebruik dan afspraakMaken."
+	composePrompt     = "Ik wil een nieuwe email opstellen en versturen. Vraag kort naar ontvanger, onderwerp en inhoud als die nog ontbreken, en gebruik dan emailVersturen."
+	inboxTriagePrompt = "Doe een triage van mijn inbox. Gebruik zoekEmails en/of leesEmail waar nodig. Geef een compacte actielijst: welke emails vandaag aandacht nodig hebben, welke via inboxOpruimen of bulkVerwijder opgeruimd kunnen worden, en wat de volgende stap is."
+	emailSearchPrompt = "Ik wil in mijn email zoeken. Vraag kort naar het zoekwoord als dat ontbreekt, en gebruik dan zoekEmails."
 )
 
 var (
@@ -69,10 +75,10 @@ var (
 		"/nieuws":           {agentID: "brain", expansion: newsPrompt},
 
 		"/lampen":   {agentID: "lampen"},
-		"/afspraak": {agentID: "agenda"},
-		"/compose":  {agentID: "email"},
-		"/triage":   {agentID: "email"},
-		"/search":   {agentID: "email"},
+		"/afspraak": {agentID: "agenda", expansion: afspraakPrompt},
+		"/compose":  {agentID: "email", expansion: composePrompt},
+		"/triage":   {agentID: "email", expansion: inboxTriagePrompt},
+		"/search":   {agentID: "email", expansion: emailSearchPrompt},
 		"/notities": {agentID: "notes"},
 		"/notehelp": {agentID: "notes"},
 		"/noteer":   {agentID: "notes"},
@@ -81,31 +87,52 @@ var (
 	}
 )
 
-// telegramMenuCommands is the curated "/" menu registered via setMyCommands.
-// The long alias set in commandRegistry stays available as hidden synonyms.
+// telegramMenuCommands is the "/" menu registered via setMyCommands. This
+// covers every genuinely distinct capability in commandRegistry — pure
+// Dutch/English synonyms of an already-listed command (e.g. /calendar for
+// /agenda, /inbox for /email, /lc for /laventecare, /news for /nieuws) are
+// deliberately left out to avoid a cluttered popup, but stay reachable as
+// typed aliases (see commandRegistry) and are all documented in /help.
 func telegramMenuCommands() []tg.BotCommand {
 	return []tg.BotCommand{
 		{Command: "start", Description: "Startmenu en dagoverzicht"},
 		{Command: "briefing", Description: "AI dagbriefing"},
 		{Command: "planning", Description: "Planning (rooster + afspraken)"},
 		{Command: "agenda", Description: "Agenda / afspraken"},
+		{Command: "afspraak", Description: "Nieuwe agenda-afspraak aanmaken"},
 		{Command: "rooster", Description: "Werkrooster en uren"},
 		{Command: "finance", Description: "Saldo en transacties"},
 		{Command: "laventecare", Description: "LaventeCare cockpit"},
 		{Command: "email", Description: "Inbox en e-mailsignalen"},
+		{Command: "compose", Description: "Nieuwe email opstellen"},
 		{Command: "notities", Description: "Notities-overzicht"},
+		{Command: "noteer", Description: "Snel een notitie vastleggen"},
+		{Command: "zoeknote", Description: "Notities doorzoeken"},
+		{Command: "vandaag", Description: "Notities van vandaag"},
+		{Command: "week", Description: "Notities van deze week"},
 		{Command: "noteai", Description: "AI notitie-assistent"},
+		{Command: "notehelp", Description: "Notitie-commando's uitleg"},
 		{Command: "habits", Description: "Habits en streaks"},
+		{Command: "check", Description: "Habit snel afvinken"},
 		{Command: "lampen", Description: "Lampstatus en bediening"},
+		{Command: "automations", Description: "Automation- en sync-status"},
 		{Command: "news", Description: "Actueel nieuws (web search)"},
 		{Command: "pending", Description: "Openstaande bevestigingen"},
-		{Command: "sync", Description: "Gmail/agenda sync-status"},
+		{Command: "sync", Description: "Gmail/agenda sync uitvoeren"},
+		{Command: "voicehelp", Description: "Spraakbericht uitleg"},
 		{Command: "ai", Description: "AI-diagnose en status"},
 		{Command: "help", Description: "Alle commando's"},
 	}
 }
 
-func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int64, text string) {
+// processText handles one incoming message or callback-tap. originMessageID
+// is non-nil only when this call originated from a tapped inline-keyboard
+// button (see processUpdate): button-originated note/pending actions use it
+// to edit that message in place instead of always sending a new one, which
+// would otherwise leave the original message's now-stale buttons (referring
+// to an already-archived note, an already-confirmed pending action, etc.)
+// live and re-tappable.
+func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int64, text string, originMessageID *int64) {
 	// NOTE: the user message is intentionally NOT persisted here. Slash commands,
 	// callback tokens (note_*, pending_*) and lamp commands return before reaching
 	// the model, so persisting up-front would pollute AI history with non-
@@ -113,7 +140,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	// to the model (see the ProcessAIPrompt call below).
 	chatStore := store.NewChatStore(e.db.Pool)
 
-	if e.handlePendingConfirmationCommand(ctx, client, chatID, text) {
+	if e.handlePendingConfirmationCommand(ctx, client, chatID, text, originMessageID) {
 		return
 	}
 
@@ -148,7 +175,12 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	case command == "/habits" || command == "/habitrapport" || command == "/streak":
 		e.handleHabitStatus(ctx, client, chatID)
 		return
-	case command == "/finance" || strings.HasPrefix(command, "/finance "):
+	case command == "/finance":
+		// Bare "/finance" only — matches the dual-mode pattern used by
+		// /habits etc.: with trailing args, this falls through to
+		// expandTelegramCommand's financePrompt AI-expansion path below
+		// instead of being swallowed here (previously the HasPrefix match
+		// caught "/finance <anything>" too, making financePrompt dead code).
 		e.handleFinanceStatus(ctx, client, chatID, text)
 		return
 	case command == "/notities":
@@ -173,13 +205,13 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		e.handleNoteRead(ctx, client, chatID, strings.TrimPrefix(text, "note_read_"))
 		return
 	case strings.HasPrefix(text, "note_done_"):
-		e.handleNoteDone(ctx, client, chatID, strings.TrimPrefix(text, "note_done_"))
+		e.handleNoteDone(ctx, client, chatID, strings.TrimPrefix(text, "note_done_"), originMessageID)
 		return
 	case strings.HasPrefix(text, "note_pin_"):
-		e.handleNotePin(ctx, client, chatID, strings.TrimPrefix(text, "note_pin_"))
+		e.handleNotePin(ctx, client, chatID, strings.TrimPrefix(text, "note_pin_"), originMessageID)
 		return
 	case strings.HasPrefix(text, "note_archive_"):
-		e.handleNoteArchive(ctx, client, chatID, strings.TrimPrefix(text, "note_archive_"))
+		e.handleNoteArchive(ctx, client, chatID, strings.TrimPrefix(text, "note_archive_"), originMessageID)
 		return
 	}
 
@@ -243,6 +275,25 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		return
 	}
 
+	// At this point, nothing recognized the message: not a built-in switch
+	// case, not a commandRegistry alias, not free-text lamp control. If it
+	// still looks like a slash-command attempt (a typo like "/aproove", an
+	// old/removed command, or one half-remembered), stop here with an
+	// explicit Dutch hint instead of silently handing the raw "/whatever"
+	// string to Grok as if it were a genuine conversational turn — the
+	// bot would otherwise produce a confused AI answer with zero signal
+	// that the command itself never fired, which is especially dangerous
+	// for a mistyped /approve or /reject on a pending money/email action.
+	if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, "/") {
+		typed := strings.Fields(trimmed)[0]
+		reply := fmt.Sprintf("❓ Onbekend commando: %s\nTyp /help voor het overzicht.", typed)
+		if suggestion := closestKnownCommand(typed); suggestion != "" {
+			reply += fmt.Sprintf("\nBedoelde je %s?", suggestion)
+		}
+		_ = client.SendMessage(chatID, reply)
+		return
+	}
+
 	agentID := routeFreeText(text)
 	if agentHint != "" {
 		agentID = agentHint
@@ -251,6 +302,94 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	// ProcessAIPrompt persists the user turn itself (after loading prior
 	// history), so it's never saved here — see telegram_ai.go.
 	_, _ = e.ProcessAIPrompt(ctx, chatID, text, agentID, true)
+}
+
+// knownCommandNames lists every command the bot actually recognizes, for
+// the unknown-command hint above — commandRegistry plus the built-in
+// switch/pending-flow commands that aren't in that map.
+func knownCommandNames() []string {
+	names := make([]string, 0, len(commandRegistry)+16)
+	for cmd := range commandRegistry {
+		names = append(names, cmd)
+	}
+	names = append(names,
+		"/start", "/help", "/status", "/health", "/ai", "/voicehelp",
+		"/vandaag", "/week",
+		"/pending", "/bevestigingen", "/approve", "/confirm", "/akkoord",
+		"/reject", "/cancel", "/annuleer",
+	)
+	return names
+}
+
+// closestKnownCommand returns the closest known command to a mistyped one
+// (by Levenshtein distance on the command word, case-insensitive, ignoring
+// the leading slash), or "" if nothing is close enough to be a useful guess.
+func closestKnownCommand(typed string) string {
+	needle := strings.ToLower(strings.TrimPrefix(typed, "/"))
+	if needle == "" {
+		return ""
+	}
+	best := ""
+	bestDist := -1
+	for _, known := range knownCommandNames() {
+		candidate := strings.ToLower(strings.TrimPrefix(known, "/"))
+		dist := levenshteinDistance(needle, candidate)
+		// Only suggest for a genuinely close typo, scaled to word length —
+		// otherwise short commands (e.g. "/ai") would match almost anything.
+		maxDist := len(candidate) / 3
+		if maxDist < 1 {
+			maxDist = 1
+		}
+		if dist > maxDist {
+			continue
+		}
+		if bestDist == -1 || dist < bestDist {
+			bestDist = dist
+			best = known
+		}
+	}
+	return best
+}
+
+// levenshteinDistance computes the classic edit distance between two
+// strings (insertions/deletions/substitutions), used only for the small
+// (~40 command) "did you mean" lookup above.
+func levenshteinDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	la, lb := len(ra), len(rb)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			min := del
+			if ins < min {
+				min = ins
+			}
+			if sub < min {
+				min = sub
+			}
+			curr[j] = min
+		}
+		prev, curr = curr, prev
+	}
+	return prev[lb]
 }
 
 func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64) {
@@ -503,7 +642,7 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	_ = client.SendMessage(chatID, b.String())
 }
 
-func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *tg.Client, chatID int64, text string) bool {
+func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *tg.Client, chatID int64, text string, originMessageID *int64) bool {
 	normalized := strings.TrimSpace(text)
 	lower := strings.ToLower(normalized)
 
@@ -512,12 +651,12 @@ func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *t
 		e.handlePendingList(ctx, client, chatID)
 		return true
 	case strings.HasPrefix(lower, "pending_confirm_"):
-		id := strings.TrimPrefix(normalized, "pending_confirm_")
-		e.handlePendingConfirmID(ctx, client, chatID, id)
+		id := strings.TrimPrefix(lower, "pending_confirm_")
+		e.handlePendingConfirmID(ctx, client, chatID, id, originMessageID)
 		return true
 	case strings.HasPrefix(lower, "pending_reject_"):
-		id := strings.TrimPrefix(normalized, "pending_reject_")
-		e.handlePendingCancelID(ctx, client, chatID, id)
+		id := strings.TrimPrefix(lower, "pending_reject_")
+		e.handlePendingCancelID(ctx, client, chatID, id, originMessageID)
 		return true
 	}
 
@@ -540,10 +679,19 @@ func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *t
 	}
 }
 
+// pendingListButtonCap bounds how many pending actions get confirm/reject
+// buttons — a keyboard beyond this many rows pushes the Startmenu escape
+// button off-screen on a phone. Items beyond the cap are still listed as
+// plain text (with their code) so /approve <code>/reject <code> keeps
+// working for them from chat — the one place this human-in-the-loop safety
+// net is meant to operate — instead of being invisible until the user
+// switches to a separate Settings UI.
+const pendingListButtonCap = 5
+
 func (e *Engine) handlePendingList(ctx context.Context, client *tg.Client, chatID int64) {
 	actions, err := store.NewPendingStore(e.db.Pool).ListPending(ctx, e.cfg.HomeappUserID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "❌ Bevestigingen ophalen mislukt: "+err.Error())
+		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 	if len(actions) == 0 {
@@ -553,64 +701,94 @@ func (e *Engine) handlePendingList(ctx context.Context, client *tg.Client, chatI
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "⏳ Openstaande bevestigingen (%d)\n\n", len(actions))
-	rows := make([][]tg.InlineKeyboardButton, 0, len(actions)*2+1)
+	rows := make([][]tg.InlineKeyboardButton, 0, pendingListButtonCap+1)
 	for i, action := range actions {
-		if i >= 8 {
-			fmt.Fprintf(&b, "… en %d extra via Settings.\n", len(actions)-i)
-			break
-		}
 		fmt.Fprintf(&b, "%d. %s\nCode: %s\nTool: %s\n\n", i+1, action.Summary, action.Code, action.ToolName)
-		short := truncateRunes(action.Summary, 24)
+		if i >= pendingListButtonCap {
+			continue
+		}
+		short := truncateRunes(action.Summary, 18)
 		rows = append(rows, []tg.InlineKeyboardButton{
 			{Text: "✅ " + short, CallbackData: "pending_confirm_" + action.ID},
+			{Text: "✕ " + action.Code, CallbackData: "pending_reject_" + action.ID},
 		})
-		rows = append(rows, []tg.InlineKeyboardButton{
-			{Text: "✕ Annuleer " + action.Code, CallbackData: "pending_reject_" + action.ID},
-		})
+	}
+	if len(actions) > pendingListButtonCap {
+		fmt.Fprintf(&b, "Nog %d via /approve CODE of /reject CODE hierboven.\n", len(actions)-pendingListButtonCap)
 	}
 	rows = append(rows, []tg.InlineKeyboardButton{{Text: "🏠 Startmenu", CallbackData: "/start"}})
 	_ = client.SendMessageWithKeyboard(chatID, b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows})
 }
 
-func (e *Engine) handlePendingConfirmID(ctx context.Context, client *tg.Client, chatID int64, id string) {
+func (e *Engine) handlePendingConfirmID(ctx context.Context, client *tg.Client, chatID int64, id string, originMessageID *int64) {
 	result, err := ConfirmPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, id, e.googleOAuthClient())
-	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd")
+	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd", originMessageID)
 }
 
 func (e *Engine) handlePendingConfirmCode(ctx context.Context, client *tg.Client, chatID int64, code string) {
 	result, err := ConfirmPendingActionByCode(ctx, e.db.Pool, e.cfg.HomeappUserID, code, e.googleOAuthClient())
-	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd")
+	e.sendPendingOutcome(client, chatID, result, err, "uitgevoerd", nil)
 }
 
-func (e *Engine) handlePendingCancelID(ctx context.Context, client *tg.Client, chatID int64, id string) {
+func (e *Engine) handlePendingCancelID(ctx context.Context, client *tg.Client, chatID int64, id string, originMessageID *int64) {
 	result, err := CancelPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, id)
-	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd")
+	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd", originMessageID)
 }
 
 func (e *Engine) handlePendingCancelCode(ctx context.Context, client *tg.Client, chatID int64, code string) {
 	pending := store.NewPendingStore(e.db.Pool)
 	action, err := pending.FindByCode(ctx, e.cfg.HomeappUserID, code)
 	if err != nil {
-		_ = client.SendMessage(chatID, "❌ Bevestiging niet gevonden of verlopen.")
+		_ = client.SendMessage(chatID, classifyPendingCodeError(err))
+		return
+	}
+	if action == nil {
+		_ = client.SendMessage(chatID, "❌ Code onbekend, al gebruikt, of verlopen. Typ /pending voor de actuele lijst.")
 		return
 	}
 	result, err := CancelPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, action.ID)
-	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd")
+	e.sendPendingOutcome(client, chatID, result, err, "geannuleerd", nil)
 }
 
-func (e *Engine) sendPendingOutcome(client *tg.Client, chatID int64, result map[string]any, err error, verb string) {
+// sendPendingOutcome reports the result of a confirm/reject action. When
+// originMessageID is set (the action was triggered by tapping a button on
+// the /pending list), it EDITS that message instead of sending a new one —
+// otherwise the list's other confirm/reject buttons for still-pending items
+// stay live, but the row for the item just actioned would keep showing a
+// now-stale button referencing an already-claimed action.
+func (e *Engine) sendPendingOutcome(client *tg.Client, chatID int64, result map[string]any, err error, verb string, originMessageID *int64) {
+	var text string
 	if err != nil {
-		_ = client.SendMessageWithKeyboard(chatID, "❌ Actie mislukt: "+err.Error(), buildPendingMenu())
+		text = classifyPendingCodeError(err)
+	} else {
+		summary := ""
+		if raw, ok := result["summary"]; ok {
+			summary = strings.TrimSpace(fmt.Sprint(raw))
+		}
+		if summary == "" {
+			summary = "AI-actie"
+		}
+		text = fmt.Sprintf("✅ %s %s.\n\nTyp /pending voor de actuele lijst.", summary, verb)
+	}
+	keyboard := buildPendingMenu()
+	if originMessageID != nil {
+		_ = client.EditMessageText(chatID, *originMessageID, text, &keyboard)
 		return
 	}
-	summary := ""
-	if raw, ok := result["summary"]; ok {
-		summary = strings.TrimSpace(fmt.Sprint(raw))
+	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+}
+
+// classifyPendingCodeError maps a pending-action lookup/claim failure to a
+// short, actionable Dutch message instead of forwarding whatever the store
+// layer returned (which, for a plain "not found" case, used to be the raw
+// English pgx text "no rows in result set") — this is precisely the command
+// gating money/email/deletion actions, so a confusing failure message here
+// is the worst place for one.
+func classifyPendingCodeError(err error) string {
+	if err == nil || errors.Is(err, ErrPendingActionNotFound) {
+		return "❌ Code onbekend, al gebruikt, of verlopen. Typ /pending voor de actuele lijst."
 	}
-	if summary == "" {
-		summary = "AI-actie"
-	}
-	_ = client.SendMessageWithKeyboard(chatID, fmt.Sprintf("✅ %s %s.", summary, verb), buildPendingMenu())
+	return "❌ " + classifyUserFacingError(err.Error())
 }
 
 func expandTelegramCommand(text string) (expanded string, agentHint string, ok bool) {

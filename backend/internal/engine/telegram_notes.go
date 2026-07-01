@@ -373,7 +373,24 @@ func (e *Engine) handleNoteRead(ctx context.Context, client *tg.Client, chatID i
 	_ = client.SendMessageWithKeyboard(chatID, formatNoteDetail(note, now, loc), buildSingleNoteKeyboard(note))
 }
 
-func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+// sendNoteActionOutcome sends (or, if originMessageID is set — meaning this
+// action was triggered by tapping a button — edits in place) the result of
+// a note action, replacing the origin message's keyboard so a now-stale
+// button (e.g. "archive" on a note that's already archived) can't be
+// re-tapped from the old view.
+func (e *Engine) sendNoteActionOutcome(client *tg.Client, chatID int64, text string, keyboard tg.InlineKeyboardMarkup, originMessageID *int64) {
+	if originMessageID != nil {
+		_ = client.EditMessageText(chatID, *originMessageID, text, &keyboard)
+		return
+	}
+	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+}
+
+var startMenuOnlyKeyboard = tg.InlineKeyboardMarkup{
+	InlineKeyboard: [][]tg.InlineKeyboardButton{{{Text: "🏠 Startmenu", CallbackData: "/start"}}},
+}
+
+func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
 		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
@@ -387,11 +404,11 @@ func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatI
 		return
 	}
 
-	_ = client.SendMessage(chatID, "✅ Notitie gearchiveerd.")
+	e.sendNoteActionOutcome(client, chatID, "✅ Notitie gearchiveerd.", startMenuOnlyKeyboard, originMessageID)
 	e.handleNotitiesDashboard(ctx, client, chatID)
 }
 
-func (e *Engine) handleNoteDone(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+func (e *Engine) handleNoteDone(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
 		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
@@ -411,7 +428,7 @@ func (e *Engine) handleNoteDone(ctx context.Context, client *tg.Client, chatID i
 	}
 
 	text := fmt.Sprintf("✅ Afgerond\n📝 %s", noteTitle(note))
-	_ = client.SendMessageWithKeyboard(chatID, text, buildSingleNoteKeyboard(note))
+	e.sendNoteActionOutcome(client, chatID, text, buildSingleNoteKeyboard(note), originMessageID)
 }
 
 func (e *Engine) handleNoteSearch(ctx context.Context, client *tg.Client, chatID int64, query string) {
@@ -749,7 +766,7 @@ func (e *Engine) handleQuickNote(ctx context.Context, client *tg.Client, chatID 
 	_ = client.SendMessageWithKeyboard(chatID, reply, buildSingleNoteKeyboard(n))
 }
 
-func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
+func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
 		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
@@ -769,13 +786,21 @@ func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID in
 		_ = client.SendMessage(chatID, "Fout bij pinnen.")
 		return
 	}
+	// Reflect the new state locally (no extra round-trip) so the outcome
+	// message/keyboard shows the note's actual current pin status instead
+	// of stale pre-toggle data.
+	note.IsPinned = newPinned
 
+	var text string
 	if newPinned {
-		_ = client.SendMessage(chatID, "📌 Notitie vastgezet.")
+		text = "📌 Notitie vastgezet."
 	} else {
-		_ = client.SendMessage(chatID, "📌 Pin verwijderd.")
+		text = "📍 Pin verwijderd."
 	}
-	e.handleNotitiesDashboard(ctx, client, chatID)
+	e.sendNoteActionOutcome(client, chatID, text, buildSingleNoteKeyboard(note), originMessageID)
+	if originMessageID == nil {
+		e.handleNotitiesDashboard(ctx, client, chatID)
+	}
 }
 
 func parseNoteCapture(raw string, now time.Time, loc *time.Location) noteCapture {

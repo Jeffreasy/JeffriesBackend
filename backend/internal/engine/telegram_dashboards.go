@@ -682,8 +682,78 @@ func buildWelcomeText(snapshot telegramStartSnapshot) string {
 	return b.String()
 }
 
+// buildHelpText is the /help output. It's the one documentation surface
+// that has to compensate for the native "/" menu deliberately not showing
+// every alias (see telegramMenuCommands) — grouped into short sections so
+// it scans on a phone instead of reading like one unbroken wall of text,
+// and lists every real working command/synonym so nothing here is only
+// discoverable by reading Go source.
 func buildHelpText() string {
-	return "🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n\n/start — AI cockpit\n/briefing — complete dagbriefing\n/planning — planning vandaag\n/pending — openstaande bevestigingen\n/approve CODE — actie uitvoeren\n/reject CODE — actie annuleren\n/ai — AI status en tools\n/status — backend health\n/lampen — lamp status en snelle acties\n/rooster — weekplanning\n/agenda — afspraken\n/finance — salaris & transacties\n/laventecare — CRM cockpit\n/email — inbox\n/notities — notitie cockpit\n/noteai — AI triage van notities\n/zoeknote [term] — notities zoeken\n/noteer [tekst] — slimme snelle notitie\n/habits — habit cockpit\n/habitrapport — habit analyse\n/check — habit afvinken\n/news — nieuws via web-search\n\n💡 Lamp bediening: 'lampen uit', 'lampen 50%', 'scene focus'\n🎙️ Spraakberichten worden automatisch herkend."
+	sections := []struct {
+		title string
+		lines []string
+	}{
+		{"Dagstart", []string{
+			"/start — AI cockpit en startmenu",
+			"/briefing — complete dagbriefing (ook: /brain, /dashboard)",
+			"/news — actueel nieuws via web-search (ook: /nieuws)",
+		}},
+		{"Werk & agenda", []string{
+			"/planning — planning vandaag (diensten + afspraken)",
+			"/rooster — weekplanning en uren",
+			"/agenda — persoonlijke afspraken (ook: /calendar)",
+			"/afspraak — nieuwe agenda-afspraak aanmaken",
+			"/sync — Gmail- en agenda-sync nu uitvoeren",
+		}},
+		{"Notities", []string{
+			"/notities — notitie-cockpit",
+			"/noteer [tekst] — slimme snelle notitie",
+			"/zoeknote [term] — notities doorzoeken",
+			"/vandaag — notities van vandaag",
+			"/week — notities van deze week",
+			"/noteai — AI-triage van notities (ook: /notitieai)",
+			"/notetriage — urgentie-gesorteerde actielijst (ook: /triagenotes)",
+			"/notesamenvatting — thematische samenvatting (ook: /samenvatnotes)",
+			"/notehelp — meer over notitie-commando's",
+		}},
+		{"Finance & LaventeCare", []string{
+			"/finance — saldo en transacties",
+			"/laventecare — CRM cockpit (ook: /lc)",
+		}},
+		{"Email", []string{
+			"/email — inbox en e-mailsignalen (ook: /inbox)",
+			"/compose — nieuwe email opstellen",
+		}},
+		{"Habits", []string{
+			"/habits — habit-cockpit (ook: /streak, /habitrapport)",
+			"/check — habit snel afvinken",
+		}},
+		{"Lampen", []string{
+			"/lampen — lampstatus en snelle acties",
+			"Vrije tekst werkt ook: 'lampen uit', 'lampen 50%', 'lampen focus'",
+		}},
+		{"Bevestigingen (AI-acties)", []string{
+			"/pending — openstaande bevestigingen (ook: /bevestigingen)",
+			"/approve CODE — actie uitvoeren (ook: /confirm, /akkoord)",
+			"/reject CODE — actie annuleren (ook: /cancel, /annuleer)",
+		}},
+		{"Systeem", []string{
+			"/ai — AI-diagnose en tool-status",
+			"/status — backend health (ook: /health)",
+			"/automations — automation- en sync-status",
+		}},
+	}
+
+	var b strings.Builder
+	b.WriteString("🏠 Jeffries HomeBot\n🧠 Vrije tekst gaat standaard naar Jeffries Brain. Notitie-achtige tekst gaat naar de Notes-agent.\n")
+	for _, section := range sections {
+		fmt.Fprintf(&b, "\n%s\n", section.title)
+		for _, line := range section.lines {
+			fmt.Fprintf(&b, "%s\n", line)
+		}
+	}
+	b.WriteString("\n🎙️ Spraakberichten worden automatisch herkend — zie /voicehelp.")
+	return b.String()
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {

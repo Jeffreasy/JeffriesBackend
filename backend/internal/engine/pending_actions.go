@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrPendingActionNotFound is returned by ConfirmPendingAction(ByCode) and
+// CancelPendingAction when the code/id doesn't match any currently-pending
+// action (unknown, already claimed/cancelled, or expired) — as opposed to a
+// genuine unexpected error. Distinguishing this lets callers show a specific,
+// actionable Dutch message instead of a raw "no rows in result set".
+var ErrPendingActionNotFound = errors.New("pending actie niet gevonden, al bevestigd/geannuleerd, of verlopen")
 
 // ConfirmingExecutor turns protected mutating tools into pending actions.
 type ConfirmingExecutor struct {
@@ -93,6 +101,9 @@ func ConfirmPendingAction(ctx context.Context, pool *pgxpool.Pool, userID, id st
 	if err != nil {
 		return nil, err
 	}
+	if action == nil {
+		return nil, ErrPendingActionNotFound
+	}
 	return executeClaimedPendingAction(ctx, pool, pending, userID, action, googleClient)
 }
 
@@ -103,9 +114,15 @@ func ConfirmPendingActionByCode(ctx context.Context, pool *pgxpool.Pool, userID,
 	if err != nil {
 		return nil, err
 	}
+	if action == nil {
+		return nil, ErrPendingActionNotFound
+	}
 	claimed, err := pending.Claim(ctx, action.ID, userID)
 	if err != nil {
 		return nil, err
+	}
+	if claimed == nil {
+		return nil, ErrPendingActionNotFound
 	}
 	return executeClaimedPendingAction(ctx, pool, pending, userID, claimed, googleClient)
 }
@@ -115,6 +132,9 @@ func CancelPendingAction(ctx context.Context, pool *pgxpool.Pool, userID, id str
 	action, err := store.NewPendingStore(pool).Cancel(ctx, id, userID)
 	if err != nil {
 		return nil, err
+	}
+	if action == nil {
+		return nil, ErrPendingActionNotFound
 	}
 	return pendingActionResult(action, nil, nil), nil
 }

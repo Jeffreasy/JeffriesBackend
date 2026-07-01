@@ -66,7 +66,7 @@ func (e *Engine) handleVoice(ctx context.Context, client *tg.Client, chatID int6
 	}
 
 	_ = client.SendMessage(chatID, fmt.Sprintf("\"%s\"", transcript))
-	e.processText(ctx, client, chatID, transcript)
+	e.processText(ctx, client, chatID, transcript, nil)
 }
 
 func (e *Engine) googleOAuthClient() *google.OAuthClient {
