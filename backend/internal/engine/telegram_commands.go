@@ -669,6 +669,23 @@ func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *t
 
 	fields := strings.Fields(normalized)
 	if len(fields) < 2 {
+		// A bare "/approve"/"/reject" (no code) with no args falls through
+		// to processText's unknown-command fallback if we just return false
+		// here — and since these command words are themselves in
+		// knownCommandNames(), closestKnownCommand would suggest "Bedoelde
+		// je /approve?" for someone who typed exactly /approve. Handle the
+		// usage error here instead, on the command gating money/email/
+		// deletion actions.
+		if len(fields) == 1 {
+			switch strings.ToLower(strings.Split(fields[0], "@")[0]) {
+			case "/approve", "/confirm", "/akkoord":
+				_ = client.SendMessage(chatID, "Gebruik /approve CODE om de actie uit te voeren. Typ /pending voor de actuele lijst.")
+				return true
+			case "/reject", "/cancel", "/annuleer":
+				_ = client.SendMessage(chatID, "Gebruik /reject CODE om de actie te annuleren. Typ /pending voor de actuele lijst.")
+				return true
+			}
+		}
 		return false
 	}
 

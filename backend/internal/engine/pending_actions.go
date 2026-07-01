@@ -143,10 +143,10 @@ func executeClaimedPendingAction(ctx context.Context, pool *pgxpool.Pool, pendin
 	executor := NewHomeBotExecutorWithGoogle(pool, userID, googleClient)
 	result := executor.Execute(ctx, action.ToolName, action.ArgsJSON)
 	if message := toolResultError(result); message != "" {
-		_ = pending.MarkStatus(ctx, action.ID, "failed", &result, &message)
+		_ = pending.MarkStatus(ctx, action.ID, userID, "failed", &result, &message)
 		return pendingActionResult(action, &result, &message), fmt.Errorf("%s", message)
 	}
-	if err := pending.MarkStatus(ctx, action.ID, "confirmed", &result, nil); err != nil {
+	if err := pending.MarkStatus(ctx, action.ID, userID, "confirmed", &result, nil); err != nil {
 		return nil, err
 	}
 	return pendingActionResult(action, &result, nil), nil

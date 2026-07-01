@@ -106,6 +106,13 @@ func (s *PendingStore) ListPending(ctx context.Context, userID string) ([]Pendin
 		}
 		actions = append(actions, a)
 	}
+	// rows.Next() also returns false on a cursor/iteration failure (connection
+	// drop mid-stream, server-side error), not just on genuine exhaustion —
+	// without this check that failure silently looks like "no more rows" and
+	// a partial list gets returned as if it were the complete one.
+	if err := rows.Err(); err != nil {
+		return nil, wrapStoreError("ophalen", err)
+	}
 	return actions, nil
 }
 
@@ -173,11 +180,13 @@ func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingA
 	return &pa, nil
 }
 
-// MarkStatus updates an action's status.
-func (s *PendingStore) MarkStatus(ctx context.Context, id, status string, result, errMsg *string) error {
+// MarkStatus updates an action's status. Scoped to userID (not id alone) so a
+// bad/spoofed action id can never mutate another user's row — matches the
+// scoping every other mutating method here already uses.
+func (s *PendingStore) MarkStatus(ctx context.Context, id, userID, status string, result, errMsg *string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE ai_pending_actions SET status = $2, result = $3, error = $4, updated_at = now() WHERE id = $1`,
-		id, status, result, errMsg,
+		`UPDATE ai_pending_actions SET status = $3, result = $4, error = $5, updated_at = now() WHERE id = $1 AND user_id = $2`,
+		id, userID, status, result, errMsg,
 	)
 	if err != nil {
 		return wrapStoreError("status bijwerken", err)

@@ -724,6 +724,8 @@ func buildHelpText() string {
 		{"Email", []string{
 			"/email — inbox en e-mailsignalen (ook: /inbox)",
 			"/compose — nieuwe email opstellen",
+			"/triage — actielijst voor je inbox",
+			"/search — zoeken in je email",
 		}},
 		{"Habits", []string{
 			"/habits — habit-cockpit (ook: /streak, /habitrapport)",
