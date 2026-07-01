@@ -1350,6 +1350,7 @@ var AllTools = []ToolDefinition{
 					"action_type": {"type": "string"},
 					"priority": {"type": "string"},
 					"due_date": {"type": "string"},
+					"due_time": {"type": "string", "description": "Tijdstip HH:MM, optioneel naast due_date."},
 					"linked_lead_id": {"type": "string"},
 					"linked_project_id": {"type": "string"},
 					"linked_workstream_id": {"type": "string"},

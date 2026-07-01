@@ -1283,12 +1283,26 @@ func (s *LaventeCareStore) ConvertWorkstreamToProject(ctx context.Context, userI
 
 func (s *LaventeCareStore) ListActions(ctx context.Context, userID string, limit int) ([]model.LCActionItem, error) {
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, user_id, source, source_id, title, summary, action_type,
-		        status, priority, due_date, linked_lead_id, linked_project_id, linked_workstream_id,
-		        linked_company_id, created_at, updated_at
-		 FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant')
-		 ORDER BY COALESCE(due_date, '9999-12-31'), updated_at DESC
-		 LIMIT $2`, userID, limit)
+		`SELECT a.id, a.user_id, a.source, a.source_id, a.title, a.summary, a.action_type,
+		        a.status, a.priority, a.due_date, a.due_time, a.linked_lead_id, a.linked_project_id,
+		        a.linked_workstream_id, a.linked_company_id, a.created_at, a.updated_at,
+		        co.naam, pr.naam, ws.titel, ld.titel,
+		        act.id, act.title, act.occurred_at
+		   FROM lc_action_items a
+		   LEFT JOIN lc_companies co ON co.id = a.linked_company_id AND co.user_id = a.user_id
+		   LEFT JOIN lc_projects pr ON pr.id = a.linked_project_id AND pr.user_id = a.user_id
+		   LEFT JOIN lc_workstreams ws ON ws.id = a.linked_workstream_id AND ws.user_id = a.user_id
+		   LEFT JOIN lc_leads ld ON ld.id = a.linked_lead_id AND ld.user_id = a.user_id
+		   LEFT JOIN LATERAL (
+		       SELECT e.id, e.title, e.occurred_at
+		         FROM lc_activity_events e
+		        WHERE e.action_item_id = a.id AND e.user_id = a.user_id
+		        ORDER BY e.occurred_at DESC
+		        LIMIT 1
+		   ) act ON true
+		  WHERE a.user_id = $1 AND a.status IN ('open','bezig','wacht_op_klant')
+		  ORDER BY COALESCE(a.due_date, '9999-12-31'), a.updated_at DESC
+		  LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1314,11 +1328,11 @@ func (s *LaventeCareStore) CreateAction(ctx context.Context, userID string, inpu
 
 	_, err := s.db.Pool.Exec(ctx,
 		`INSERT INTO lc_action_items (id, user_id, source, source_id, title, summary,
-		        action_type, status, priority, due_date, linked_lead_id, linked_project_id, linked_workstream_id,
-		        linked_company_id, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$14)`,
+		        action_type, status, priority, due_date, due_time, linked_lead_id, linked_project_id,
+		        linked_workstream_id, linked_company_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
 		id, userID, source, input.SourceID, input.Title, input.Summary,
-		actionType, priority, input.DueDate, input.LinkedLeadID, input.LinkedProjectID,
+		actionType, priority, input.DueDate, input.DueTime, input.LinkedLeadID, input.LinkedProjectID,
 		input.LinkedWorkstreamID, input.LinkedCompanyID, now)
 	if err != nil {
 		return nil, err
@@ -1327,7 +1341,7 @@ func (s *LaventeCareStore) CreateAction(ctx context.Context, userID string, inpu
 	return &model.LCActionItem{
 		ID: id, UserID: userID, Source: source, SourceID: input.SourceID,
 		Title: input.Title, Summary: input.Summary, ActionType: actionType,
-		Status: "open", Priority: priority, DueDate: input.DueDate,
+		Status: "open", Priority: priority, DueDate: input.DueDate, DueTime: input.DueTime,
 		LinkedLeadID: input.LinkedLeadID, LinkedProjectID: input.LinkedProjectID,
 		LinkedWorkstreamID: input.LinkedWorkstreamID,
 		LinkedCompanyID:    input.LinkedCompanyID,
@@ -1337,16 +1351,45 @@ func (s *LaventeCareStore) CreateAction(ctx context.Context, userID string, inpu
 
 func (s *LaventeCareStore) UpdateActionStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
 	now := time.Now().UTC()
-	tag, err := s.db.Pool.Exec(ctx,
+	var title string
+	var summary *string
+	var linkedLeadID, linkedProjectID, linkedWorkstreamID, linkedCompanyID *uuid.UUID
+	err := s.db.Pool.QueryRow(ctx,
 		`UPDATE lc_action_items SET status = $3, updated_at = $4
-		 WHERE id = $1 AND user_id = $2`, id, userID, status, now)
+		 WHERE id = $1 AND user_id = $2
+		 RETURNING title, summary, linked_lead_id, linked_project_id, linked_workstream_id, linked_company_id`,
+		id, userID, status, now,
+	).Scan(&title, &summary, &linkedLeadID, &linkedProjectID, &linkedWorkstreamID, &linkedCompanyID)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+
+	// Close the loop with fix #4: completing an action logs a timeline "moment"
+	// on the linked customer dossier, so the dossier history stays complete
+	// without manual double-entry. Best-effort — a company-less action (no
+	// dossier to attach to) or a validation hiccup must not fail the status
+	// update itself.
+	if isActionCompletionStatus(status) && linkedCompanyID != nil {
+		occurredAt := now.Format(time.RFC3339)
+		actionID := id
+		_, _ = s.CreateActivityEvent(ctx, userID, model.LCActivityEventCreate{
+			CompanyID:    *linkedCompanyID,
+			LeadID:       linkedLeadID,
+			ProjectID:    linkedProjectID,
+			WorkstreamID: linkedWorkstreamID,
+			ActionItemID: &actionID,
+			EventType:    "actie_afgerond",
+			Channel:      "systeem",
+			Title:        "Actie afgerond: " + title,
+			Body:         summary,
+			OccurredAt:   &occurredAt,
+		})
 	}
 	return nil
+}
+
+func isActionCompletionStatus(status string) bool {
+	return status == "done" || status == "afgerond"
 }
 
 // ─── Documents ───────────────────────────────────────────────────────────────
@@ -2320,12 +2363,13 @@ func (s *LaventeCareStore) ListActivityEvents(ctx context.Context, userID string
 	query := `SELECT e.id, e.user_id, e.company_id, e.contact_id, e.lead_id,
 		        e.project_id, e.workstream_id, e.action_item_id, e.event_type, e.channel,
 		        e.title, e.body, e.occurred_at, e.created_at, e.updated_at,
-		        c.naam, ct.naam, p.naam, w.titel
+		        c.naam, ct.naam, p.naam, w.titel, ai.title, ai.status
 		   FROM lc_activity_events e
 		   JOIN lc_companies c ON c.id = e.company_id AND c.user_id = e.user_id
 		   LEFT JOIN lc_contacts ct ON ct.id = e.contact_id AND ct.user_id = e.user_id
 		   LEFT JOIN lc_projects p ON p.id = e.project_id AND p.user_id = e.user_id
 		   LEFT JOIN lc_workstreams w ON w.id = e.workstream_id AND w.user_id = e.user_id
+		   LEFT JOIN lc_action_items ai ON ai.id = e.action_item_id AND ai.user_id = e.user_id
 		  WHERE e.user_id = $1`
 	args := []any{userID}
 	if companyID != nil {
@@ -4574,9 +4618,11 @@ func scanWorkstream(row pgx.CollectableRow) (model.LCWorkstream, error) {
 func scanAction(row pgx.CollectableRow) (model.LCActionItem, error) {
 	var a model.LCActionItem
 	err := row.Scan(&a.ID, &a.UserID, &a.Source, &a.SourceID, &a.Title,
-		&a.Summary, &a.ActionType, &a.Status, &a.Priority, &a.DueDate,
+		&a.Summary, &a.ActionType, &a.Status, &a.Priority, &a.DueDate, &a.DueTime,
 		&a.LinkedLeadID, &a.LinkedProjectID, &a.LinkedWorkstreamID, &a.LinkedCompanyID,
-		&a.CreatedAt, &a.UpdatedAt)
+		&a.CreatedAt, &a.UpdatedAt,
+		&a.CompanyName, &a.ProjectName, &a.WorkstreamTitle, &a.LeadTitle,
+		&a.SourceActivityID, &a.SourceActivityTitle, &a.SourceActivityAt)
 	return a, err
 }
 
@@ -4601,7 +4647,8 @@ func scanActivityEvent(row pgx.CollectableRow) (model.LCActivityEvent, error) {
 	err := row.Scan(&e.ID, &e.UserID, &e.CompanyID, &e.ContactID, &e.LeadID,
 		&e.ProjectID, &e.WorkstreamID, &e.ActionItemID, &e.EventType, &e.Channel,
 		&e.Title, &e.Body, &e.OccurredAt, &e.CreatedAt, &e.UpdatedAt,
-		&e.CompanyName, &e.ContactName, &e.ProjectName, &e.WorkstreamName)
+		&e.CompanyName, &e.ContactName, &e.ProjectName, &e.WorkstreamName,
+		&e.LinkedActionTitle, &e.LinkedActionStatus)
 	return e, err
 }
 

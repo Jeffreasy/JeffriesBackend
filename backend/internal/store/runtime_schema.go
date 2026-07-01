@@ -856,7 +856,8 @@ CREATE INDEX IF NOT EXISTS idx_lc_workstreams_user_source
     WHERE source_id IS NOT NULL;
 
 ALTER TABLE lc_action_items
-    ADD COLUMN IF NOT EXISTS linked_workstream_id UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL;
+    ADD COLUMN IF NOT EXISTS linked_workstream_id UUID REFERENCES lc_workstreams(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS due_time TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_lc_actions_workstream
     ON lc_action_items (linked_workstream_id, updated_at DESC)

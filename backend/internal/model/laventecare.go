@@ -366,12 +366,21 @@ type LCActionItem struct {
 	Status             string     `json:"status" db:"status"`
 	Priority           string     `json:"priority" db:"priority"`
 	DueDate            *string    `json:"due_date" db:"due_date"`
+	DueTime            *string    `json:"due_time" db:"due_time"`
 	LinkedLeadID       *uuid.UUID `json:"linked_lead_id" db:"linked_lead_id"`
 	LinkedProjectID    *uuid.UUID `json:"linked_project_id" db:"linked_project_id"`
 	LinkedWorkstreamID *uuid.UUID `json:"linked_workstream_id" db:"linked_workstream_id"`
 	LinkedCompanyID    *uuid.UUID `json:"linked_company_id" db:"linked_company_id"`
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
+	// Join-only display fields (not persisted on lc_action_items itself).
+	CompanyName         *string    `json:"company_name,omitempty"`
+	ProjectName         *string    `json:"project_name,omitempty"`
+	WorkstreamTitle     *string    `json:"workstream_title,omitempty"`
+	LeadTitle           *string    `json:"lead_title,omitempty"`
+	SourceActivityID    *uuid.UUID `json:"source_activity_id,omitempty"`
+	SourceActivityTitle *string    `json:"source_activity_title,omitempty"`
+	SourceActivityAt    *time.Time `json:"source_activity_at,omitempty"`
 }
 
 type LCActionCreate struct {
@@ -382,6 +391,7 @@ type LCActionCreate struct {
 	ActionType         string     `json:"action_type"`
 	Priority           string     `json:"priority"`
 	DueDate            *string    `json:"due_date"`
+	DueTime            *string    `json:"due_time"`
 	LinkedLeadID       *uuid.UUID `json:"linked_lead_id"`
 	LinkedProjectID    *uuid.UUID `json:"linked_project_id"`
 	LinkedWorkstreamID *uuid.UUID `json:"linked_workstream_id"`
@@ -502,25 +512,27 @@ type LCDossierAdvice struct {
 }
 
 type LCActivityEvent struct {
-	ID             uuid.UUID  `json:"id" db:"id"`
-	UserID         string     `json:"user_id" db:"user_id"`
-	CompanyID      uuid.UUID  `json:"company_id" db:"company_id"`
-	ContactID      *uuid.UUID `json:"contact_id" db:"contact_id"`
-	LeadID         *uuid.UUID `json:"lead_id" db:"lead_id"`
-	ProjectID      *uuid.UUID `json:"project_id" db:"project_id"`
-	WorkstreamID   *uuid.UUID `json:"workstream_id" db:"workstream_id"`
-	ActionItemID   *uuid.UUID `json:"action_item_id" db:"action_item_id"`
-	EventType      string     `json:"event_type" db:"event_type"`
-	Channel        string     `json:"channel" db:"channel"`
-	Title          string     `json:"title" db:"title"`
-	Body           *string    `json:"body" db:"body"`
-	OccurredAt     time.Time  `json:"occurred_at" db:"occurred_at"`
-	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
-	CompanyName    *string    `json:"company_name,omitempty"`
-	ContactName    *string    `json:"contact_name,omitempty"`
-	ProjectName    *string    `json:"project_name,omitempty"`
-	WorkstreamName *string    `json:"workstream_name,omitempty"`
+	ID                 uuid.UUID  `json:"id" db:"id"`
+	UserID             string     `json:"user_id" db:"user_id"`
+	CompanyID          uuid.UUID  `json:"company_id" db:"company_id"`
+	ContactID          *uuid.UUID `json:"contact_id" db:"contact_id"`
+	LeadID             *uuid.UUID `json:"lead_id" db:"lead_id"`
+	ProjectID          *uuid.UUID `json:"project_id" db:"project_id"`
+	WorkstreamID       *uuid.UUID `json:"workstream_id" db:"workstream_id"`
+	ActionItemID       *uuid.UUID `json:"action_item_id" db:"action_item_id"`
+	EventType          string     `json:"event_type" db:"event_type"`
+	Channel            string     `json:"channel" db:"channel"`
+	Title              string     `json:"title" db:"title"`
+	Body               *string    `json:"body" db:"body"`
+	OccurredAt         time.Time  `json:"occurred_at" db:"occurred_at"`
+	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
+	CompanyName        *string    `json:"company_name,omitempty"`
+	ContactName        *string    `json:"contact_name,omitempty"`
+	ProjectName        *string    `json:"project_name,omitempty"`
+	WorkstreamName     *string    `json:"workstream_name,omitempty"`
+	LinkedActionTitle  *string    `json:"linked_action_title,omitempty"`
+	LinkedActionStatus *string    `json:"linked_action_status,omitempty"`
 }
 
 type LCActivityEventCreate struct {

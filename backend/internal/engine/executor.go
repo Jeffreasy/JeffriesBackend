@@ -3370,6 +3370,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			ActionType         string  `json:"action_type"`
 			Priority           string  `json:"priority"`
 			DueDate            *string `json:"due_date"`
+			DueTime            *string `json:"due_time"`
 			LinkedLeadID       *string `json:"linked_lead_id"`
 			LinkedProjectID    *string `json:"linked_project_id"`
 			LinkedWorkstreamID *string `json:"linked_workstream_id"`
@@ -3427,6 +3428,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			ActionType:         args.ActionType,
 			Priority:           args.Priority,
 			DueDate:            args.DueDate,
+			DueTime:            args.DueTime,
 			LinkedLeadID:       linkedLeadID,
 			LinkedProjectID:    linkedProjectID,
 			LinkedWorkstreamID: linkedWorkstreamID,
