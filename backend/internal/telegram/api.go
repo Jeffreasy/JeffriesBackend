@@ -57,6 +57,7 @@ func (c *Client) apiURL(method string) string {
 func (c *Client) post(method string, body any) (json.RawMessage, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
+		slog.Warn("telegram API request marshal failed", "method", method, "chatID", extractChatID(body), "error", err)
 		return nil, err
 	}
 	resp, err := c.httpClient.Do(mustReq("POST", c.apiURL(method), data))

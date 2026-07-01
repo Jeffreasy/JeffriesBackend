@@ -198,6 +198,13 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 	case strings.HasPrefix(command, "/noteer "):
 		e.handleQuickNote(ctx, client, chatID, strings.TrimSpace(text[strings.Index(text, " ")+1:]))
 		return
+	case command == "/noteer":
+		// /noteer is registry-listed (menu + commandRegistry) with no expansion
+		// prompt and no args here, so without this case it fell through to the
+		// unknown-command block below and replied "Onbekend commando" for a
+		// command that genuinely exists.
+		_ = client.SendMessageWithKeyboard(chatID, "Gebruik /noteer <tekst> om snel een notitie vast te leggen.", buildNotesMenu())
+		return
 	case strings.HasPrefix(command, "/zoeknote "):
 		e.handleNoteSearch(ctx, client, chatID, strings.TrimSpace(text[strings.Index(text, " ")+1:]))
 		return
@@ -772,7 +779,14 @@ func (e *Engine) sendPendingOutcome(client *tg.Client, chatID int64, result map[
 	}
 	keyboard := buildPendingMenu()
 	if originMessageID != nil {
-		_ = client.EditMessageText(chatID, *originMessageID, text, &keyboard)
+		// The pending action is already claimed/cancelled at this point, so a
+		// failed edit (message deleted, too old to edit, transient API error)
+		// must not leave the user without any outcome — fall back to a normal
+		// message rather than silently dropping the confirmation.
+		if err := client.EditMessageText(chatID, *originMessageID, text, &keyboard); err != nil {
+			slog.Warn("telegram pending outcome edit failed, falling back to new message", "chatID", chatID, "error", err)
+			_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+		}
 		return
 	}
 	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)

@@ -413,6 +413,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_user_periode ON salary (user_id, pe
 CREATE UNIQUE INDEX IF NOT EXISTS idx_loon_user_jr_per ON loonstroken (user_id, jaar, periode);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_user_source ON sync_status (user_id, source);
 CREATE INDEX IF NOT EXISTS idx_ai_pending_user_status ON ai_pending_actions (user_id, status, expires_at);
+
+-- Backfill for idx_ai_pending_user_code_pending below: before this index
+-- existed, nothing stopped two 'pending' rows for the same (user_id, code)
+-- from coexisting (an extremely unlikely but real 6-hex-char collision, or
+-- rows from a version predating this constraint). CREATE UNIQUE INDEX would
+-- fail outright on a restored/live DB carrying such a duplicate, so expire
+-- every pending row that has a newer pending duplicate for the same code
+-- first, keeping only the most recent one live. A no-op once no duplicates
+-- remain, so safe to run on every startup.
+UPDATE ai_pending_actions AS a
+SET status = 'expired', updated_at = now()
+WHERE a.status = 'pending'
+  AND EXISTS (
+    SELECT 1 FROM ai_pending_actions AS b
+    WHERE b.user_id = a.user_id AND b.code = a.code AND b.status = 'pending'
+      AND (b.created_at, b.id) > (a.created_at, a.id)
+  );
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_pending_user_code_pending ON ai_pending_actions (user_id, code) WHERE status = 'pending';
 `)
 	return err

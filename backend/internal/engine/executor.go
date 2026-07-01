@@ -218,6 +218,17 @@ func boolifyToolArg(value any) any {
 	return value
 }
 
+// invalidUUIDResponse returns a static Dutch "ongeldige X" tool error and
+// logs the raw parse error server-side for diagnostics. classifyStoreError
+// passes non-pgx errors through unchanged (see below), so wrapping the raw
+// uuid.Parse error with %w — e.g. fmt.Errorf("ongeldige id: %w", err) — would
+// leak its English text ("invalid UUID length: 5") straight into the tool
+// result instead of the clean field name that's actually useful to the model.
+func (e *HomeBotExecutor) invalidUUIDResponse(field string, err error) string {
+	slog.Warn("ongeldige uuid in ai tool-aanroep", "field", field, "error", err)
+	return e.jsonResponse(nil, fmt.Errorf("ongeldige %s", field))
+}
+
 func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
 	if err != nil {
 		b, _ := json.Marshal(map[string]string{"error": classifyStoreError(err)})
@@ -2801,7 +2812,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		contacts, err := e.laventeCareStore.ListContacts(ctx, e.userID, companyID, clampToolLimit(args.Limit, 10, 30))
 		return e.jsonResponse(map[string]any{"scope": "laventecare contacten", "count": len(contacts), "items": contacts}, err)
@@ -2874,19 +2885,19 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		leadID, err := parseOptionalUUID(args.LeadID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
+			return e.invalidUUIDResponse("lead_id", err)
 		}
 		projectID, err := parseOptionalUUID(args.ProjectID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+			return e.invalidUUIDResponse("project_id", err)
 		}
 		workstreamID, err := parseOptionalUUID(args.WorkstreamID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige workstream_id: %w", err))
+			return e.invalidUUIDResponse("workstream_id", err)
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		docs, err := e.laventeCareStore.ListDossierDocuments(ctx, e.userID, clampToolLimit(args.Limit, 8, 30), leadID, projectID, workstreamID, companyID)
 		return e.jsonResponse(map[string]any{
@@ -2906,7 +2917,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		billing, err := e.laventeCareStore.GetBilling(ctx, e.userID, clampToolLimit(args.Limit, 20, 80), companyID)
 		return e.jsonResponse(map[string]any{
@@ -2924,7 +2935,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		invoiceID, err := uuid.Parse(strings.TrimSpace(args.InvoiceID))
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige invoice_id: %w", err))
+			return e.invalidUUIDResponse("invoice_id", err)
 		}
 		invoice, err := e.laventeCareStore.GetInvoice(ctx, e.userID, invoiceID)
 		if err != nil {
@@ -3005,7 +3016,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
+			return e.invalidUUIDResponse("id", err)
 		}
 		if err := e.laventeCareStore.UpdateCompany(ctx, e.userID, id, model.LCCompanyUpdate{
 			Naam:           args.Naam,
@@ -3039,7 +3050,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		contact, err := e.laventeCareStore.CreateContact(ctx, e.userID, model.LCContactCreate{
 			CompanyID: companyID,
@@ -3083,15 +3094,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
+			return e.invalidUUIDResponse("id", err)
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		contactID, err := parseOptionalUUID(args.ContactID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige contact_id: %w", err))
+			return e.invalidUUIDResponse("contact_id", err)
 		}
 		input := model.LCLeadUpdate{
 			CompanyID:          companyID,
@@ -3121,7 +3132,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		leadID, err := uuid.Parse(args.LeadID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
+			return e.invalidUUIDResponse("lead_id", err)
 		}
 		project, err := e.laventeCareStore.ConvertLeadToProject(ctx, e.userID, model.LCConvertLeadToProject{
 			LeadID:       leadID,
@@ -3163,15 +3174,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		leadID, err := parseOptionalUUID(args.LeadID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
+			return e.invalidUUIDResponse("lead_id", err)
 		}
 		projectID, err := parseOptionalUUID(args.ProjectID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+			return e.invalidUUIDResponse("project_id", err)
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		workstream, err := e.laventeCareStore.CreateWorkstream(ctx, e.userID, model.LCWorkstreamCreate{
 			Titel:            args.Titel,
@@ -3222,15 +3233,15 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
+			return e.invalidUUIDResponse("id", err)
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		projectID, err := parseOptionalUUID(args.ProjectID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+			return e.invalidUUIDResponse("project_id", err)
 		}
 		if err := e.laventeCareStore.UpdateWorkstream(ctx, e.userID, id, model.LCWorkstreamUpdate{
 			CompanyID:        companyID,
@@ -3268,11 +3279,11 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		workstreamID, err := uuid.Parse(args.WorkstreamID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige workstream_id: %w", err))
+			return e.invalidUUIDResponse("workstream_id", err)
 		}
 		projectID, err := parseOptionalUUID(args.ProjectID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige project_id: %w", err))
+			return e.invalidUUIDResponse("project_id", err)
 		}
 		project, err := e.laventeCareStore.ConvertWorkstreamToProject(ctx, e.userID, model.LCConvertWorkstreamToProject{
 			WorkstreamID: workstreamID,
@@ -3330,11 +3341,11 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
+			return e.invalidUUIDResponse("id", err)
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige company_id: %w", err))
+			return e.invalidUUIDResponse("company_id", err)
 		}
 		input := model.LCProjectUpdate{
 			CompanyID:       companyID,
@@ -3383,28 +3394,28 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if args.LinkedLeadID != nil && strings.TrimSpace(*args.LinkedLeadID) != "" {
 			id, err := uuid.Parse(*args.LinkedLeadID)
 			if err != nil {
-				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_lead_id: %w", err))
+				return e.invalidUUIDResponse("linked_lead_id", err)
 			}
 			linkedLeadID = &id
 		}
 		if args.LinkedProjectID != nil && strings.TrimSpace(*args.LinkedProjectID) != "" {
 			id, err := uuid.Parse(*args.LinkedProjectID)
 			if err != nil {
-				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_project_id: %w", err))
+				return e.invalidUUIDResponse("linked_project_id", err)
 			}
 			linkedProjectID = &id
 		}
 		if args.LinkedWorkstreamID != nil && strings.TrimSpace(*args.LinkedWorkstreamID) != "" {
 			id, err := uuid.Parse(*args.LinkedWorkstreamID)
 			if err != nil {
-				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_workstream_id: %w", err))
+				return e.invalidUUIDResponse("linked_workstream_id", err)
 			}
 			linkedWorkstreamID = &id
 		}
 		if args.LinkedCompanyID != nil && strings.TrimSpace(*args.LinkedCompanyID) != "" {
 			id, err := uuid.Parse(*args.LinkedCompanyID)
 			if err != nil {
-				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_company_id: %w", err))
+				return e.invalidUUIDResponse("linked_company_id", err)
 			}
 			linkedCompanyID = &id
 		}
@@ -3433,7 +3444,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
+			return e.invalidUUIDResponse("id", err)
 		}
 		status := strings.TrimSpace(args.Status)
 		if status == "" {

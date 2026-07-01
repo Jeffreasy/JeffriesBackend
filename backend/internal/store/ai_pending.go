@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -17,6 +18,18 @@ import (
 // rows, so a collision on the first attempt is already rare; this is a
 // backstop against an unlucky run, not an expected path.
 const maxCodeGenerationAttempts = 5
+
+// wrapStoreError logs a raw database failure server-side and returns a
+// static, safe Dutch message in its place. Only pgx.ErrNoRows and unique-
+// violation are handled specially by callers above this — every other
+// failure (pool exhaustion, network errors, an unmapped constraint) must
+// never reach a caller as raw driver/SQLSTATE text, since some callers (the
+// pending-action HTTP handler in particular) surface err.Error() directly in
+// API responses.
+func wrapStoreError(action string, err error) error {
+	slog.Warn("ai_pending store failure", "action", action, "error", err)
+	return fmt.Errorf("pending actie %s mislukt, probeer het opnieuw", action)
+}
 
 // PendingAction represents an AI action awaiting user confirmation.
 type PendingAction struct {
@@ -64,7 +77,7 @@ func (s *PendingStore) Create(ctx context.Context, userID, agentID, toolName, ar
 			if isUniqueViolation(err) {
 				continue
 			}
-			return nil, err
+			return nil, wrapStoreError("aanmaken", err)
 		}
 		return &pa, nil
 	}
@@ -81,7 +94,7 @@ func (s *PendingStore) ListPending(ctx context.Context, userID string) ([]Pendin
 		userID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, wrapStoreError("ophalen", err)
 	}
 	defer rows.Close()
 
@@ -89,7 +102,7 @@ func (s *PendingStore) ListPending(ctx context.Context, userID string) ([]Pendin
 	for rows.Next() {
 		var a PendingAction
 		if err := rows.Scan(&a.ID, &a.UserID, &a.AgentID, &a.ToolName, &a.ArgsJSON, &a.Summary, &a.Code, &a.Status, &a.ExpiresAt, &a.CreatedAt); err != nil {
-			return nil, err
+			return nil, wrapStoreError("ophalen", err)
 		}
 		actions = append(actions, a)
 	}
@@ -111,7 +124,7 @@ func (s *PendingStore) FindPendingByToolArgs(ctx context.Context, userID, toolNa
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, err
+		return nil, wrapStoreError("ophalen", err)
 	}
 	return &pa, nil
 }
@@ -134,7 +147,7 @@ func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAc
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, err
+		return nil, wrapStoreError("claimen", err)
 	}
 	return &pa, nil
 }
@@ -155,7 +168,7 @@ func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingA
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, err
+		return nil, wrapStoreError("annuleren", err)
 	}
 	return &pa, nil
 }
@@ -166,7 +179,10 @@ func (s *PendingStore) MarkStatus(ctx context.Context, id, status string, result
 		`UPDATE ai_pending_actions SET status = $2, result = $3, error = $4, updated_at = now() WHERE id = $1`,
 		id, status, result, errMsg,
 	)
-	return err
+	if err != nil {
+		return wrapStoreError("status bijwerken", err)
+	}
+	return nil
 }
 
 // FindByCode finds a pending action by its confirmation code. Returns
@@ -191,7 +207,7 @@ func (s *PendingStore) FindByCode(ctx context.Context, userID, code string) (*Pe
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, err
+		return nil, wrapStoreError("opzoeken", err)
 	}
 	return &pa, nil
 }
@@ -203,7 +219,7 @@ func (s *PendingStore) ExpireOld(ctx context.Context) (int64, error) {
 		 WHERE status = 'pending' AND expires_at <= now()`,
 	)
 	if err != nil {
-		return 0, err
+		return 0, wrapStoreError("opschonen", err)
 	}
 	return tag.RowsAffected(), nil
 }

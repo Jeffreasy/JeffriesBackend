@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -408,7 +409,13 @@ func (e *Engine) handleNoteRead(ctx context.Context, client *tg.Client, chatID i
 // re-tapped from the old view.
 func (e *Engine) sendNoteActionOutcome(client *tg.Client, chatID int64, text string, keyboard tg.InlineKeyboardMarkup, originMessageID *int64) {
 	if originMessageID != nil {
-		_ = client.EditMessageText(chatID, *originMessageID, text, &keyboard)
+		// The note mutation already happened by this point, so a failed edit
+		// (message too old, deleted, transient API error) must not leave the
+		// user without any confirmation — fall back to a normal message.
+		if err := client.EditMessageText(chatID, *originMessageID, text, &keyboard); err != nil {
+			slog.Warn("telegram note outcome edit failed, falling back to new message", "chatID", chatID, "error", err)
+			_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
+		}
 		return
 	}
 	_ = client.SendMessageWithKeyboard(chatID, text, keyboard)
@@ -570,8 +577,15 @@ func buildNotesSearchKeyboard(notes []model.Note) tg.InlineKeyboardMarkup {
 }
 
 func buildSingleNoteKeyboard(note model.Note) tg.InlineKeyboardMarkup {
+	// The label must reflect the note's current pin state, not always offer
+	// "Pin" — after pinning, note_pin_ toggles, so a still-"📌 Pin" button
+	// actually unpins on the next tap with no visual cue that it would.
+	pinLabel := "📌 Pin"
+	if note.IsPinned {
+		pinLabel = "📍 Pin los"
+	}
 	primary := []tg.InlineKeyboardButton{
-		{Text: "📌 Pin", CallbackData: "note_pin_" + note.ID.String()},
+		{Text: pinLabel, CallbackData: "note_pin_" + note.ID.String()},
 		{Text: "📥 Archiveer", CallbackData: "note_archive_" + note.ID.String()},
 	}
 	if !note.IsCompleted {
