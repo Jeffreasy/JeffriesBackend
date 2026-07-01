@@ -210,7 +210,7 @@ func (s *LaventeCareStore) CreateCompany(ctx context.Context, userID string, inp
 		        billing_address, billing_reference, payment_terms_days, contract_status, service_level,
 		        preferred_channel, portal_url, default_login_url, onboarding_status, data_processing_status,
 		        created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$22)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)`,
 		id, userID, name, cleanStringPtr(input.Website), cleanStringPtr(input.Sector),
 		status, relatieType, cleanStringPtr(input.Notities), laatsteContact,
 		cleanStringPtr(input.VolgendeActie), cleanStringPtr(input.KVKNumber),
