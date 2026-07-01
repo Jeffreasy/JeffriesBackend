@@ -944,13 +944,17 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareLeadsOpvragen",
-			Description: "Haalt recente LaventeCare leads op.",
+			Description: "Haalt recente LaventeCare leads op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je leads van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"limit": {
 						"type": "number",
 						"description": "Aantal leads (max 30)."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om alleen leads van dit bedrijf op te halen."
 					}
 				},
 				"required": []
@@ -961,13 +965,17 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareProjectenOpvragen",
-			Description: "Haalt recente LaventeCare projecten op.",
+			Description: "Haalt recente LaventeCare projecten op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je projecten van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"limit": {
 						"type": "number",
 						"description": "Aantal projecten (max 30)."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om alleen projecten van dit bedrijf op te halen."
 					}
 				},
 				"required": []
@@ -978,7 +986,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareOpdrachtenOpvragen",
-			Description: "Haalt recente LaventeCare opdrachten/werkstreams op voor flexibele kleine en middelgrote klussen.",
+			Description: "Haalt recente LaventeCare opdrachten/werkstreams op voor flexibele kleine en middelgrote klussen. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je opdrachten van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -989,6 +997,10 @@ var AllTools = []ToolDefinition{
 					"include_closed": {
 						"type": "boolean",
 						"description": "Ook afgeronde/gearchiveerde opdrachten tonen."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om alleen opdrachten van dit bedrijf op te halen."
 					}
 				},
 				"required": []
@@ -999,13 +1011,17 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "laventecareActiesOpvragen",
-			Description: "Haalt open LaventeCare actie-items op.",
+			Description: "Haalt open LaventeCare actie-items op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je acties van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"limit": {
 						"type": "number",
 						"description": "Aantal acties (max 30)."
+					},
+					"company_id": {
+						"type": "string",
+						"description": "Optionele klant/company UUID om alleen acties van dit bedrijf op te halen."
 					}
 				},
 				"required": []

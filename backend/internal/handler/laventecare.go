@@ -1622,12 +1622,19 @@ func (h *LaventeCareHandler) UpdateAccessCredential(w http.ResponseWriter, r *ht
 // @Tags LaventeCare
 // @Produce json
 // @Param limit query int false "Limit count" default(30)
+// @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCLead
+// @Failure 400 {string} string "Invalid companyId"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/leads [get]
 func (h *LaventeCareHandler) ListLeads(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 30)
-	leads, err := h.store.ListLeads(r.Context(), h.userID, limit)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	leads, err := h.store.ListLeads(r.Context(), h.userID, limit, companyID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1754,12 +1761,19 @@ func (h *LaventeCareHandler) ConvertLeadToProject(w http.ResponseWriter, r *http
 // @Tags LaventeCare
 // @Produce json
 // @Param limit query int false "Limit count" default(30)
+// @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCProject
+// @Failure 400 {string} string "Invalid companyId"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/projects [get]
 func (h *LaventeCareHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 30)
-	projects, err := h.store.ListProjects(r.Context(), h.userID, limit)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	projects, err := h.store.ListProjects(r.Context(), h.userID, limit, companyID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1873,13 +1887,20 @@ func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Reques
 // @Produce json
 // @Param limit query int false "Limit count" default(30)
 // @Param includeClosed query bool false "Include closed/completed workstreams"
+// @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCWorkstream
+// @Failure 400 {string} string "Invalid companyId"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/workstreams [get]
 func (h *LaventeCareHandler) ListWorkstreams(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 30)
 	includeClosed := r.URL.Query().Get("includeClosed") == "true"
-	workstreams, err := h.store.ListWorkstreams(r.Context(), h.userID, limit, includeClosed)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	workstreams, err := h.store.ListWorkstreams(r.Context(), h.userID, limit, includeClosed, companyID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2006,12 +2027,19 @@ func (h *LaventeCareHandler) ConvertWorkstreamToProject(w http.ResponseWriter, r
 // @Tags LaventeCare
 // @Produce json
 // @Param limit query int false "Limit count" default(8)
+// @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCActionItem
+// @Failure 400 {string} string "Invalid companyId"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/actions [get]
 func (h *LaventeCareHandler) ListActions(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 8)
-	actions, err := h.store.ListActions(r.Context(), h.userID, limit)
+	companyID, err := parseOptionalUUIDQuery(r, "companyId")
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid companyId")
+		return
+	}
+	actions, err := h.store.ListActions(r.Context(), h.userID, limit, companyID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return

@@ -755,16 +755,20 @@ func (s *LaventeCareStore) GetLeadBySource(ctx context.Context, userID, bron, so
 	return &leads[0], nil
 }
 
-func (s *LaventeCareStore) ListLeads(ctx context.Context, userID string, limit int) ([]model.LCLead, error) {
+func (s *LaventeCareStore) ListLeads(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCLead, error) {
 	query := `SELECT id, user_id, company_id, contact_id, titel, bron, source_id, status,
 		        fit_score, pijnpunt, prioriteit, volgende_stap, volgende_actie_datum,
 		        created_at, updated_at
-		 FROM lc_leads WHERE user_id = $1
-		 ORDER BY updated_at DESC`
+		 FROM lc_leads WHERE user_id = $1`
 	args := []any{userID}
+	if companyID != nil {
+		args = append(args, *companyID)
+		query += ` AND company_id = $` + strconv.Itoa(len(args))
+	}
+	query += ` ORDER BY updated_at DESC`
 	if limit > 0 {
 		args = append(args, limit)
-		query += ` LIMIT $2`
+		query += ` LIMIT $` + strconv.Itoa(len(args))
 	}
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -841,16 +845,20 @@ func (s *LaventeCareStore) UpdateLead(ctx context.Context, userID string, id uui
 
 // ─── Projects ────────────────────────────────────────────────────────────────
 
-func (s *LaventeCareStore) ListProjects(ctx context.Context, userID string, limit int) ([]model.LCProject, error) {
+func (s *LaventeCareStore) ListProjects(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCProject, error) {
 	query := `SELECT id, user_id, company_id, lead_id, naam, fase, status,
 		        waarde_indicatie, start_datum, deadline, samenvatting,
 		        created_at, updated_at
-		 FROM lc_projects WHERE user_id = $1
-		 ORDER BY updated_at DESC`
+		 FROM lc_projects WHERE user_id = $1`
 	args := []any{userID}
+	if companyID != nil {
+		args = append(args, *companyID)
+		query += ` AND company_id = $` + strconv.Itoa(len(args))
+	}
+	query += ` ORDER BY updated_at DESC`
 	if limit > 0 {
 		args = append(args, limit)
-		query += ` LIMIT $2`
+		query += ` LIMIT $` + strconv.Itoa(len(args))
 	}
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -983,7 +991,7 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 
 // ─── Workstreams / Opdrachten ───────────────────────────────────────────────
 
-func (s *LaventeCareStore) ListWorkstreams(ctx context.Context, userID string, limit int, includeClosed bool) ([]model.LCWorkstream, error) {
+func (s *LaventeCareStore) ListWorkstreams(ctx context.Context, userID string, limit int, includeClosed bool, companyID *uuid.UUID) ([]model.LCWorkstream, error) {
 	statusClause := ``
 	if !includeClosed {
 		statusClause = ` AND status NOT IN ('afgerond','done','gesloten','gearchiveerd','omgezet_project')`
@@ -992,13 +1000,16 @@ func (s *LaventeCareStore) ListWorkstreams(ctx context.Context, userID string, l
 		        prioriteit, klant_naam, bron, source_id, doel, scope, deliverable,
 		        bevindingen, volgende_stap, deadline, geschatte_minuten,
 		        waarde_indicatie, stack_tags, tags, completed_at, created_at, updated_at
-		 FROM lc_workstreams WHERE user_id = $1` + statusClause + `
-		 ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, updated_at DESC
-		`
+		 FROM lc_workstreams WHERE user_id = $1` + statusClause
 	args := []any{userID}
+	if companyID != nil {
+		args = append(args, *companyID)
+		query += ` AND company_id = $` + strconv.Itoa(len(args))
+	}
+	query += ` ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, updated_at DESC`
 	if limit > 0 {
 		args = append(args, limit)
-		query += ` LIMIT $2`
+		query += ` LIMIT $` + strconv.Itoa(len(args))
 	}
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -1283,9 +1294,8 @@ func (s *LaventeCareStore) ConvertWorkstreamToProject(ctx context.Context, userI
 
 // ─── Action Items ────────────────────────────────────────────────────────────
 
-func (s *LaventeCareStore) ListActions(ctx context.Context, userID string, limit int) ([]model.LCActionItem, error) {
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT a.id, a.user_id, a.source, a.source_id, a.title, a.summary, a.action_type,
+func (s *LaventeCareStore) ListActions(ctx context.Context, userID string, limit int, companyID *uuid.UUID) ([]model.LCActionItem, error) {
+	query := `SELECT a.id, a.user_id, a.source, a.source_id, a.title, a.summary, a.action_type,
 		        a.status, a.priority, a.due_date, a.due_time, a.linked_lead_id, a.linked_project_id,
 		        a.linked_workstream_id, a.linked_company_id, a.created_at, a.updated_at,
 		        co.naam, pr.naam, ws.titel, ld.titel,
@@ -1302,9 +1312,17 @@ func (s *LaventeCareStore) ListActions(ctx context.Context, userID string, limit
 		        ORDER BY e.occurred_at DESC
 		        LIMIT 1
 		   ) act ON true
-		  WHERE a.user_id = $1 AND a.status IN ('open','bezig','wacht_op_klant')
-		  ORDER BY COALESCE(a.due_date, '9999-12-31'), a.updated_at DESC
-		  LIMIT $2`, userID, limit)
+		  WHERE a.user_id = $1 AND a.status IN ('open','bezig','wacht_op_klant')`
+	args := []any{userID}
+	if companyID != nil {
+		args = append(args, *companyID)
+		query += ` AND a.linked_company_id = $` + strconv.Itoa(len(args))
+	}
+	query += ` ORDER BY COALESCE(a.due_date, '9999-12-31'), a.updated_at DESC`
+	args = append(args, limit)
+	query += ` LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1769,15 +1787,15 @@ func (s *LaventeCareStore) resolveDossierAdviceTarget(ctx context.Context, userI
 }
 
 func (s *LaventeCareStore) expandDossierAdviceRelations(ctx context.Context, userID string, relations lcDossierAdviceRelations) (lcDossierAdviceRelations, error) {
-	leads, err := s.ListLeads(ctx, userID, 0)
+	leads, err := s.ListLeads(ctx, userID, 0, relations.CompanyID)
 	if err != nil {
 		return relations, err
 	}
-	projects, err := s.ListProjects(ctx, userID, 0)
+	projects, err := s.ListProjects(ctx, userID, 0, relations.CompanyID)
 	if err != nil {
 		return relations, err
 	}
-	workstreams, err := s.ListWorkstreams(ctx, userID, 0, true)
+	workstreams, err := s.ListWorkstreams(ctx, userID, 0, true, relations.CompanyID)
 	if err != nil {
 		return relations, err
 	}
@@ -3972,19 +3990,19 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	if err != nil {
 		return nil, err
 	}
-	leads, err := s.ListLeads(ctx, userID, 30)
+	leads, err := s.ListLeads(ctx, userID, 30, nil)
 	if err != nil {
 		return nil, err
 	}
-	projects, err := s.ListProjects(ctx, userID, 30)
+	projects, err := s.ListProjects(ctx, userID, 30, nil)
 	if err != nil {
 		return nil, err
 	}
-	workstreams, err := s.ListWorkstreams(ctx, userID, 30, true)
+	workstreams, err := s.ListWorkstreams(ctx, userID, 30, true, nil)
 	if err != nil {
 		return nil, err
 	}
-	actions, err := s.ListActions(ctx, userID, 8)
+	actions, err := s.ListActions(ctx, userID, 8, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -2819,33 +2819,48 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "laventecareLeadsOpvragen":
 		var args struct {
-			Limit int `json:"limit"`
+			Limit     int    `json:"limit"`
+			CompanyID string `json:"company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		leads, err := e.laventeCareStore.ListLeads(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.invalidUUIDResponse("company_id", err)
+		}
+		leads, err := e.laventeCareStore.ListLeads(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), companyID)
 		return e.jsonResponse(map[string]any{"scope": "laventecare leads", "count": len(leads), "items": leads}, err)
 
 	case "laventecareProjectenOpvragen":
 		var args struct {
-			Limit int `json:"limit"`
+			Limit     int    `json:"limit"`
+			CompanyID string `json:"company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		projects, err := e.laventeCareStore.ListProjects(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.invalidUUIDResponse("company_id", err)
+		}
+		projects, err := e.laventeCareStore.ListProjects(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), companyID)
 		return e.jsonResponse(map[string]any{"scope": "laventecare projecten", "count": len(projects), "items": projects}, err)
 
 	case "laventecareOpdrachtenOpvragen":
 		var args struct {
-			Limit         int  `json:"limit"`
-			IncludeClosed bool `json:"include_closed"`
+			Limit         int    `json:"limit"`
+			IncludeClosed bool   `json:"include_closed"`
+			CompanyID     string `json:"company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		workstreams, err := e.laventeCareStore.ListWorkstreams(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), args.IncludeClosed)
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.invalidUUIDResponse("company_id", err)
+		}
+		workstreams, err := e.laventeCareStore.ListWorkstreams(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), args.IncludeClosed, companyID)
 		return e.jsonResponse(map[string]any{
 			"scope":       "laventecare opdrachten",
 			"count":       len(workstreams),
@@ -2855,12 +2870,17 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "laventecareActiesOpvragen":
 		var args struct {
-			Limit int `json:"limit"`
+			Limit     int    `json:"limit"`
+			CompanyID string `json:"company_id"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30))
+		companyID, err := parseOptionalUUID(args.CompanyID)
+		if err != nil {
+			return e.invalidUUIDResponse("company_id", err)
+		}
+		actions, err := e.laventeCareStore.ListActions(ctx, e.userID, clampToolLimit(args.Limit, 10, 30), companyID)
 		return e.jsonResponse(map[string]any{"scope": "laventecare acties", "count": len(actions), "items": actions}, err)
 
 	case "laventecareDossierDocumentenOpvragen":
