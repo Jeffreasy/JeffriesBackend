@@ -196,16 +196,29 @@ func (h *FocusHandler) focusCounts(ctx context.Context, userID, today string, er
 	return counts
 }
 
+// lcClosedStatuses mirrors the shared isClosedStatus vocabulary in
+// internal/store/laventecare.go (leads/projects/workstreams share one status
+// model). Kept as a literal here rather than importing store's unexported
+// predicate — but every value must stay in sync with isClosedStatus, since a
+// lead marked "gewonnen" or a workstream marked "omgezet_project" must stop
+// counting as active here too, or these dashboard counts silently drift from
+// what the CRM itself considers open/closed.
+const lcClosedStatuses = `('afgerond','done','gesloten','gearchiveerd','omgezet_project','gewonnen','verloren','gediskwalificeerd','geannuleerd')`
+
 func (h *FocusHandler) focusBusiness(ctx context.Context, userID, today string, errors *[]string) FocusBusinessStatus {
 	return FocusBusinessStatus{
-		ActiveLeads:       h.count(ctx, errors, "lc.leads", `SELECT COUNT(*) FROM lc_leads WHERE user_id = $1 AND status NOT IN ('afgerond', 'gesloten', 'verloren', 'archief')`, userID),
-		ActiveWorkstreams: h.count(ctx, errors, "lc.workstreams", `SELECT COUNT(*) FROM lc_workstreams WHERE user_id = $1 AND status NOT IN ('afgerond', 'gesloten', 'geannuleerd', 'archief')`, userID),
-		ActiveProjects:    h.count(ctx, errors, "lc.projects", `SELECT COUNT(*) FROM lc_projects WHERE user_id = $1 AND status NOT IN ('afgerond', 'gesloten', 'geannuleerd', 'archief')`, userID),
-		OpenActions:       h.count(ctx, errors, "lc.actions", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status NOT IN ('done', 'afgerond', 'completed', 'gesloten', 'geannuleerd')`, userID),
-		OverdueActions:    h.count(ctx, errors, "lc.actions.overdue", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status NOT IN ('done', 'afgerond', 'completed', 'gesloten', 'geannuleerd') AND due_date IS NOT NULL AND due_date::date <= $2::date`, userID, today),
-		OpenQuotes:        h.count(ctx, errors, "lc.quotes", `SELECT COUNT(*) FROM lc_quotes WHERE user_id = $1 AND status NOT IN ('accepted', 'geaccepteerd', 'geannuleerd', 'cancelled', 'verlopen')`, userID),
-		OpenInvoices:      h.count(ctx, errors, "lc.invoices", `SELECT COUNT(*) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('paid', 'betaald', 'geannuleerd', 'cancelled')`, userID),
-		OutstandingCents:  h.count(ctx, errors, "lc.outstanding", `SELECT COALESCE(SUM(GREATEST(total_cents - paid_cents, 0)), 0) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('paid', 'betaald', 'geannuleerd', 'cancelled')`, userID),
+		ActiveLeads:       h.count(ctx, errors, "lc.leads", `SELECT COUNT(*) FROM lc_leads WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
+		ActiveWorkstreams: h.count(ctx, errors, "lc.workstreams", `SELECT COUNT(*) FROM lc_workstreams WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
+		ActiveProjects:    h.count(ctx, errors, "lc.projects", `SELECT COUNT(*) FROM lc_projects WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
+		// Mirrors the allow-list pattern already used for action items elsewhere
+		// in store/laventecare.go (e.g. GetCompanies' per-company action count,
+		// ListActions) instead of an ad-hoc blacklist that can miss statuses the
+		// shared lcKnownStatus validator otherwise accepts on this same table.
+		OpenActions:      h.count(ctx, errors, "lc.actions", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant')`, userID),
+		OverdueActions:   h.count(ctx, errors, "lc.actions.overdue", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant') AND due_date IS NOT NULL AND due_date::date <= $2::date`, userID, today),
+		OpenQuotes:       h.count(ctx, errors, "lc.quotes", `SELECT COUNT(*) FROM lc_quotes WHERE user_id = $1 AND status NOT IN ('afgewezen','verlopen','geaccepteerd')`, userID),
+		OpenInvoices:     h.count(ctx, errors, "lc.invoices", `SELECT COUNT(*) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd')`, userID),
+		OutstandingCents: h.count(ctx, errors, "lc.outstanding", `SELECT COALESCE(SUM(GREATEST(total_cents - paid_cents, 0)), 0) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd')`, userID),
 	}
 }
 
