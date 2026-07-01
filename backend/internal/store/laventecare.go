@@ -88,7 +88,7 @@ func isOpenStatus(status string) bool {
 	case "nieuw", "intake", "discovery", "voorstel", "actief",
 		"wacht_op_klant", "geblokkeerd", "open", "bezig",
 		"in_behandeling", "voorgesteld", "beoordeeld", "analyse",
-		"uitvoering", "review":
+		"uitvoering", "review", "on_hold", "opgeleverd":
 		return true
 	}
 	return false

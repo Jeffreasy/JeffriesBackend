@@ -39,6 +39,20 @@ func TestValidateLCStatus(t *testing.T) {
 		bad(s)
 	}
 
+	// LAVENTECARE_PROJECT_STATUSES (frontend dropdown) offers "on_hold" and
+	// "opgeleverd" as project statuses — they must be recognised (and stay
+	// open, since a delivered project can still move through sla/evolution
+	// phases) or every project update to either value 400s in the UI.
+	for _, s := range []string{"on_hold", "opgeleverd"} {
+		ok(s)
+		if !isOpenStatus(s) {
+			t.Fatalf("%q should be an open status", s)
+		}
+		if isClosedStatus(s) {
+			t.Fatalf("%q should not be a closed status", s)
+		}
+	}
+
 	// The won/lost terminal states must count as closed so they leave open lists.
 	for _, s := range []string{"gewonnen", "verloren", "gediskwalificeerd"} {
 		if !isClosedStatus(s) {
