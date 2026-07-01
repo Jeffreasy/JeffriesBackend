@@ -226,6 +226,7 @@ func registerRoutes(
 				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)
 				r.Get("/activity", lcH.ListActivityEvents)
 				r.With(authMw).Post("/activity", lcH.CreateActivityEvent)
+				r.With(authMw).Patch("/activity/{id}", lcH.UpdateActivityEvent)
 				r.Get("/decisions", lcH.ListDecisions)
 				r.With(authMw).Post("/decisions", lcH.CreateDecision)
 				r.With(authMw).Patch("/decisions/{id}/status", lcH.UpdateDecisionStatus)

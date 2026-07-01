@@ -34,6 +34,7 @@ var (
 	ErrInvalidDossierAdviceTarget   = errors.New("choose exactly one dossier context")
 	ErrInvalidStatus                = errors.New("unknown status")
 	ErrInvalidStatusTransition      = errors.New("illegal status transition for a finalized record")
+	ErrInvalidOccurredAt            = errors.New("invalid occurred_at")
 	dossierAdviceResponseSampleSize = 25
 )
 
@@ -2459,6 +2460,42 @@ func (s *LaventeCareStore) CreateActivityEvent(ctx context.Context, userID strin
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
+}
+
+// UpdateActivityEvent corrects an already-logged moment (title, body,
+// event_type, channel, occurred_at). Company/contact/lead/project/workstream/
+// action_item links are intentionally NOT editable here — moving a moment to
+// a different scope would need re-validation against that new scope; a
+// content/timing correction on the existing scope is the supported case.
+func (s *LaventeCareStore) UpdateActivityEvent(ctx context.Context, userID string, id uuid.UUID, input model.LCActivityEventUpdate) error {
+	now := time.Now().UTC()
+	var occurredAt *time.Time
+	if input.OccurredAt != nil {
+		parsed := parseDateTimePtr(input.OccurredAt)
+		if parsed == nil {
+			return ErrInvalidOccurredAt
+		}
+		utc := parsed.UTC()
+		occurredAt = &utc
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_activity_events SET
+			title = COALESCE($3, title),
+			body = COALESCE($4, body),
+			event_type = COALESCE($5, event_type),
+			channel = COALESCE($6, channel),
+			occurred_at = COALESCE($7, occurred_at),
+			updated_at = $8
+		 WHERE id = $1 AND user_id = $2`,
+		id, userID, cleanStringPtr(input.Title), cleanStringPtr(input.Body), cleanStringPtr(input.EventType),
+		cleanStringPtr(input.Channel), occurredAt, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *LaventeCareStore) CreateDossierDocument(ctx context.Context, userID string, input model.LCDossierDocumentCreate) (*model.LCDossierDocument, error) {

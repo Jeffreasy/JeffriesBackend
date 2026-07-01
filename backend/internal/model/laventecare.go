@@ -536,6 +536,14 @@ type LCActivityEvent struct {
 	LinkedActionStatus *string    `json:"linked_action_status,omitempty"`
 }
 
+type LCActivityEventUpdate struct {
+	Title      *string `json:"title,omitempty"`
+	Body       *string `json:"body,omitempty"`
+	EventType  *string `json:"event_type,omitempty"`
+	Channel    *string `json:"channel,omitempty"`
+	OccurredAt *string `json:"occurred_at,omitempty"`
+}
+
 type LCActivityEventCreate struct {
 	CompanyID    uuid.UUID  `json:"company_id"`
 	ContactID    *uuid.UUID `json:"contact_id"`

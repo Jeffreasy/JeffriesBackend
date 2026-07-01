@@ -2352,6 +2352,35 @@ func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.
 	JSON(w, http.StatusCreated, event)
 }
 
+// UpdateActivityEvent corrects an already-logged moment (title/body/event_type/channel/occurred_at).
+func (h *LaventeCareHandler) UpdateActivityEvent(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Invalid activity ID")
+		return
+	}
+
+	var input model.LCActivityEventUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.store.UpdateActivityEvent(r.Context(), h.userID, id, input); err != nil {
+		if err == pgx.ErrNoRows {
+			Error(w, http.StatusNotFound, "Moment niet gevonden")
+			return
+		}
+		if err == store.ErrInvalidOccurredAt {
+			Error(w, http.StatusBadRequest, "Ongeldige occurred_at")
+			return
+		}
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ConvertSignalToLead creates a lead from a business signal.
 // @Summary Convert Signal to Lead
 // @Description Converts a business signal into a CRM lead
