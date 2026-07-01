@@ -209,6 +209,11 @@ func (h *PersonalEventHandler) tryProcessPendingCalendarEventNow(parent context.
 	client := google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 	if err := processPendingCalendarEvent(ctx, client, h.store, event); err != nil {
 		result["syncError"] = err.Error()
+		// Tell the caller whether this can ever succeed on retry, so the UI can
+		// give an honest message instead of a reassuring "blijft in de wachtrij"
+		// for something that is guaranteed to fail identically every time (e.g.
+		// editing a Google-generated birthday event).
+		result["permanent"] = google.IsPermanentCalendarError(err)
 		return result
 	}
 
