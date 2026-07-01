@@ -2363,14 +2363,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			EindIso              string `json:"eindIso"`
 			EindTijd             string `json:"eindTijd"`
 			EindTijdDB           string `json:"eind_tijd"`
-			Heledag              *bool  `json:"heledag"`
-			AllDay               *bool  `json:"allDay"`
-			Locatie              string `json:"locatie"`
-			Beschrijving         string `json:"beschrijving"`
-			Symbol               string `json:"symbol"`
-			BusinessContextType  string `json:"businessContextType"`
-			BusinessContextID    string `json:"businessContextId"`
-			BusinessContextTitle string `json:"businessContextTitle"`
+			Heledag              *bool   `json:"heledag"`
+			AllDay               *bool   `json:"allDay"`
+			Locatie              *string `json:"locatie"`
+			Beschrijving         *string `json:"beschrijving"`
+			Symbol               *string `json:"symbol"`
+			BusinessContextType  string  `json:"businessContextType"`
+			BusinessContextID    string  `json:"businessContextId"`
+			BusinessContextTitle string  `json:"businessContextTitle"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -2408,14 +2408,20 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			event.StartTijd = nil
 			event.EindTijd = nil
 		}
-		if strings.TrimSpace(args.Locatie) != "" {
-			event.Locatie = optionalStringPtr(args.Locatie)
+		// *string + nil-check (not a plain string + empty-check) so the model
+		// can explicitly CLEAR a field by sending "" — a plain string field
+		// makes "omitted" and "explicitly empty" indistinguishable, so
+		// "haal de locatie weg" had no way to actually take effect: the tool
+		// call would set locatie:"" but this used to only apply non-empty
+		// values, silently ignoring the clear while still reporting ok:true.
+		if args.Locatie != nil {
+			event.Locatie = optionalStringPtr(*args.Locatie)
 		}
-		if strings.TrimSpace(args.Beschrijving) != "" {
-			event.Beschrijving = optionalStringPtr(args.Beschrijving)
+		if args.Beschrijving != nil {
+			event.Beschrijving = optionalStringPtr(*args.Beschrijving)
 		}
-		if strings.TrimSpace(args.Symbol) != "" {
-			event.Symbol = optionalStringPtr(args.Symbol)
+		if args.Symbol != nil {
+			event.Symbol = optionalStringPtr(*args.Symbol)
 		}
 		if strings.TrimSpace(args.BusinessContextType) != "" {
 			event.BusinessContextType = optionalStringPtr(args.BusinessContextType)
@@ -2999,7 +3005,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
 		}
 		if err := e.laventeCareStore.UpdateCompany(ctx, e.userID, id, model.LCCompanyUpdate{
 			Naam:           args.Naam,
@@ -3077,7 +3083,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
@@ -3115,7 +3121,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		leadID, err := uuid.Parse(args.LeadID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige lead_id: %w", err))
 		}
 		project, err := e.laventeCareStore.ConvertLeadToProject(ctx, e.userID, model.LCConvertLeadToProject{
 			LeadID:       leadID,
@@ -3216,7 +3222,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
@@ -3262,7 +3268,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		workstreamID, err := uuid.Parse(args.WorkstreamID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige workstream_id: %w", err))
 		}
 		projectID, err := parseOptionalUUID(args.ProjectID)
 		if err != nil {
@@ -3324,7 +3330,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
 		}
 		companyID, err := parseOptionalUUID(args.CompanyID)
 		if err != nil {
@@ -3377,28 +3383,28 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if args.LinkedLeadID != nil && strings.TrimSpace(*args.LinkedLeadID) != "" {
 			id, err := uuid.Parse(*args.LinkedLeadID)
 			if err != nil {
-				return e.jsonResponse(nil, err)
+				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_lead_id: %w", err))
 			}
 			linkedLeadID = &id
 		}
 		if args.LinkedProjectID != nil && strings.TrimSpace(*args.LinkedProjectID) != "" {
 			id, err := uuid.Parse(*args.LinkedProjectID)
 			if err != nil {
-				return e.jsonResponse(nil, err)
+				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_project_id: %w", err))
 			}
 			linkedProjectID = &id
 		}
 		if args.LinkedWorkstreamID != nil && strings.TrimSpace(*args.LinkedWorkstreamID) != "" {
 			id, err := uuid.Parse(*args.LinkedWorkstreamID)
 			if err != nil {
-				return e.jsonResponse(nil, err)
+				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_workstream_id: %w", err))
 			}
 			linkedWorkstreamID = &id
 		}
 		if args.LinkedCompanyID != nil && strings.TrimSpace(*args.LinkedCompanyID) != "" {
 			id, err := uuid.Parse(*args.LinkedCompanyID)
 			if err != nil {
-				return e.jsonResponse(nil, err)
+				return e.jsonResponse(nil, fmt.Errorf("ongeldige linked_company_id: %w", err))
 			}
 			linkedCompanyID = &id
 		}
@@ -3427,7 +3433,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return e.jsonResponse(nil, err)
+			return e.jsonResponse(nil, fmt.Errorf("ongeldige id: %w", err))
 		}
 		status := strings.TrimSpace(args.Status)
 		if status == "" {

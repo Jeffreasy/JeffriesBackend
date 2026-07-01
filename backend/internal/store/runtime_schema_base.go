@@ -412,6 +412,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trx_user_rek_volgnr ON transactions (user_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_user_periode ON salary (user_id, periode);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_loon_user_jr_per ON loonstroken (user_id, jaar, periode);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_user_source ON sync_status (user_id, source);
+CREATE INDEX IF NOT EXISTS idx_ai_pending_user_status ON ai_pending_actions (user_id, status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_pending_user_code_pending ON ai_pending_actions (user_id, code) WHERE status = 'pending';
 `)
 	return err
 }

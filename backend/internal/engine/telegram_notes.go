@@ -251,10 +251,38 @@ func noteUrgencyScore(note model.Note, now time.Time, loc *time.Location) int {
 	return score
 }
 
+// noteSymbolEmoji maps inferNoteSymbol's internal English codewords to a
+// real emoji for display. These codewords were never meant to be
+// user-facing vocabulary — rendering "symbool warning"/"symbool note"
+// verbatim (as this used to) fires on essentially every note shown,
+// leaking internal plumbing into an otherwise all-Dutch UI.
+func noteSymbolEmoji(symbol string) string {
+	switch strings.ToLower(strings.TrimSpace(symbol)) {
+	case "warning":
+		return "⚠️"
+	case "check":
+		return "✅"
+	case "calendar":
+		return "📅"
+	case "work":
+		return "💼"
+	case "finance":
+		return "💰"
+	case "habit":
+		return "🔁"
+	case "shield":
+		return "🔒"
+	case "sparkles":
+		return "✨"
+	default:
+		return "📝"
+	}
+}
+
 func formatNoteListLine(note model.Note, now time.Time, loc *time.Location) string {
 	parts := []string{}
 	if note.Symbol != nil && strings.TrimSpace(*note.Symbol) != "" {
-		parts = append(parts, strings.TrimSpace(*note.Symbol))
+		parts = append(parts, noteSymbolEmoji(*note.Symbol))
 	}
 	if note.IsPinned {
 		parts = append(parts, "📌")
@@ -844,13 +872,15 @@ func buildNoteCaptureReply(note model.Note, capture noteCapture, loc *time.Locat
 	if capture.TriageFlag != nil && *capture.TriageFlag {
 		meta = append(meta, "triage")
 	}
+
+	icon := "📝"
 	if capture.Symbol != nil {
-		meta = append(meta, "symbool "+*capture.Symbol)
+		icon = noteSymbolEmoji(*capture.Symbol)
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "✅ Notitie opgeslagen\n")
-	fmt.Fprintf(&b, "📝 %s", noteTitle(note))
+	fmt.Fprintf(&b, "%s %s", icon, noteTitle(note))
 	if len(meta) > 0 {
 		fmt.Fprintf(&b, "\nAI herkend: %s", strings.Join(meta, " · "))
 	}

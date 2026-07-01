@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -45,6 +46,14 @@ func (c *Client) apiURL(method string) string {
 	return fmt.Sprintf("%s%s/%s", tgBase, c.token, method)
 }
 
+// post is the single choke point every public Client method routes through.
+// Every call site across the codebase historically did `_ = client.SendMessage(...)`
+// with no error check, so a failed send (transient network error, Telegram
+// 429, "message is too long" after escaping) left zero diagnostic trail —
+// nothing to explain why a reply, note-action confirmation, or pending-action
+// outcome silently never arrived. Logging here once, rather than requiring
+// every one of the ~30+ call sites to check and log individually, means new
+// call sites get this for free too.
 func (c *Client) post(method string, body any) (json.RawMessage, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -52,6 +61,7 @@ func (c *Client) post(method string, body any) (json.RawMessage, error) {
 	}
 	resp, err := c.httpClient.Do(mustReq("POST", c.apiURL(method), data))
 	if err != nil {
+		slog.Warn("telegram API request failed", "method", method, "chatID", extractChatID(body), "error", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -62,12 +72,24 @@ func (c *Client) post(method string, body any) (json.RawMessage, error) {
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Warn("telegram API response parse failed", "method", method, "chatID", extractChatID(body), "error", err)
 		return nil, fmt.Errorf("telegram parse: %w", err)
 	}
 	if !result.OK {
+		slog.Warn("telegram API returned not-ok", "method", method, "chatID", extractChatID(body), "response", safeTruncateBytes(string(raw), 300))
 		return nil, fmt.Errorf("telegram API: %s", string(raw))
 	}
 	return result.Result, nil
+}
+
+// extractChatID best-effort pulls chat_id out of a request body for log
+// context — every relevant Client method builds body as map[string]any with
+// a chat_id key, but this stays nil-safe for the few that don't (setMyCommands).
+func extractChatID(body any) any {
+	if m, ok := body.(map[string]any); ok {
+		return m["chat_id"]
+	}
+	return nil
 }
 
 // SendMessage sends a plain text message (HTML parse mode), splitting into

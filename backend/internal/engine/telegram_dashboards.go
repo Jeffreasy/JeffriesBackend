@@ -102,15 +102,16 @@ func (e *Engine) buildStartSnapshot(ctx context.Context) telegramStartSnapshot {
 
 	noteStore := store.NewNoteStore(e.db)
 	if notes, err := noteStore.List(sCtx, userID); err == nil {
-		for _, note := range notes {
-			if note.IsArchived {
-				continue
-			}
-			snapshot.ActiveNotes++
-			if note.Aangemaakt.In(loc).Format("2006-01-02") == today || note.Gewijzigd.In(loc).Format("2006-01-02") == today {
-				snapshot.TodayNotes++
-			}
-		}
+		// Reuse buildNoteStats (the same computation /notities uses) instead
+		// of a separate inline loop, so "actief" means the same thing on
+		// both screens. This loop previously counted every non-archived note
+		// as active regardless of IsCompleted, while buildNoteStats excludes
+		// completed-but-not-yet-archived notes — a note checked off via the
+		// ✅ button inflated /start's count above what /notities showed for
+		// the identical underlying data.
+		stats := buildNoteStats(activeNotes(notes), now, loc)
+		snapshot.ActiveNotes = stats.Active
+		snapshot.TodayNotes = stats.Today
 	}
 
 	habitStore := store.NewHabitStore(e.db)

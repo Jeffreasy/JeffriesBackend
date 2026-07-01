@@ -4,12 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// maxCodeGenerationAttempts bounds the collision-retry loop in Create. Codes
+// are 6 hex chars (16.7M possibilities) scoped to a single user's pending
+// rows, so a collision on the first attempt is already rare; this is a
+// backstop against an unlucky run, not an expected path.
+const maxCodeGenerationAttempts = 5
 
 // PendingAction represents an AI action awaiting user confirmation.
 type PendingAction struct {
@@ -37,21 +44,31 @@ func NewPendingStore(pool *pgxpool.Pool) *PendingStore {
 }
 
 // Create inserts a new pending action and returns it with generated code.
+// The code is only unique among a user's other *pending* rows (enforced by
+// idx_ai_pending_user_code_pending), so a collision is retried with a fresh
+// code rather than surfaced as an error.
 func (s *PendingStore) Create(ctx context.Context, userID, agentID, toolName, argsJSON, summary string) (*PendingAction, error) {
-	code := generateCode()
 	expiresAt := time.Now().Add(10 * time.Minute)
 
-	var pa PendingAction
-	err := s.pool.QueryRow(ctx,
-		`INSERT INTO ai_pending_actions (user_id, agent_id, tool_name, args_json, summary, code, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at`,
-		userID, agentID, toolName, argsJSON, summary, code, expiresAt,
-	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
-	if err != nil {
-		return nil, err
+	for attempt := 0; attempt < maxCodeGenerationAttempts; attempt++ {
+		code := generateCode()
+
+		var pa PendingAction
+		err := s.pool.QueryRow(ctx,
+			`INSERT INTO ai_pending_actions (user_id, agent_id, tool_name, args_json, summary, code, expires_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 RETURNING id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at`,
+			userID, agentID, toolName, argsJSON, summary, code, expiresAt,
+		).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
+		if err != nil {
+			if isUniqueViolation(err) {
+				continue
+			}
+			return nil, err
+		}
+		return &pa, nil
 	}
-	return &pa, nil
+	return nil, fmt.Errorf("kon geen unieke bevestigingscode genereren na %d pogingen", maxCodeGenerationAttempts)
 }
 
 // ListPending returns all pending actions for a user.
@@ -157,12 +174,17 @@ func (s *PendingStore) MarkStatus(ctx context.Context, id, status string, result
 // expired, matching FindPendingByToolArgs's convention above so callers
 // can show a specific "code onbekend/verlopen" message instead of
 // forwarding a raw pgx.ErrNoRows ("no rows in result set") to the user.
+// ORDER BY/LIMIT 1 is a defensive backstop for rows created before
+// idx_ai_pending_user_code_pending existed — it picks the most recent match
+// rather than erroring on multiple rows.
 func (s *PendingStore) FindByCode(ctx context.Context, userID, code string) (*PendingAction, error) {
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at
 		 FROM ai_pending_actions
-		 WHERE user_id = $1 AND code = $2 AND status = 'pending' AND expires_at > now()`,
+		 WHERE user_id = $1 AND code = $2 AND status = 'pending' AND expires_at > now()
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
 		userID, strings.ToUpper(code),
 	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)
 	if err != nil {
