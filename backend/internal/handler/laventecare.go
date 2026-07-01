@@ -1757,11 +1757,14 @@ func (h *LaventeCareHandler) ConvertLeadToProject(w http.ResponseWriter, r *http
 
 	project, err := h.store.ConvertLeadToProject(r.Context(), h.userID, input)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		switch err {
+		case pgx.ErrNoRows:
 			Error(w, http.StatusNotFound, "Lead niet gevonden")
-			return
+		case store.ErrInvalidStatusTransition:
+			Error(w, http.StatusConflict, "Lead is al gesloten (gewonnen/verloren/gediskwalificeerd) en kan niet nogmaals omgezet worden")
+		default:
+			Error(w, http.StatusInternalServerError, err.Error())
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	JSON(w, http.StatusCreated, project)

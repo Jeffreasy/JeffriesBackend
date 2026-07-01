@@ -977,6 +977,12 @@ func (s *LaventeCareStore) ConvertLeadToProject(ctx context.Context, userID stri
 	if err != nil {
 		return nil, err
 	}
+	// A closed lead (won/lost/disqualified) can't be converted again — without
+	// this guard, a double-click or an AI-tool retry after a perceived timeout
+	// silently creates a second, duplicate project from the same lead.
+	if isClosedStatus(lead.Status) {
+		return nil, ErrInvalidStatusTransition
+	}
 	fase := "intake"
 	if input.Fase != nil {
 		fase = *input.Fase
