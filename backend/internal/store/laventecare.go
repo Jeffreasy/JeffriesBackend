@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -121,6 +123,35 @@ func validateLCStatus(status *string) error {
 		return nil
 	}
 	return ErrInvalidStatus
+}
+
+// Decisions, change requests and SLA incidents each have their own small,
+// distinct status vocabulary (confirmed against the actual frontend dropdowns/
+// action buttons in LaventeCareOperationsView.tsx) — narrower than the shared
+// lead/project/workstream vocabulary above, so they get their own checks
+// rather than reusing lcKnownStatus.
+func isKnownDecisionStatus(status string) bool {
+	switch status {
+	case "genomen", "voorstel", "herzien":
+		return true
+	}
+	return false
+}
+
+func isKnownChangeRequestStatus(status string) bool {
+	switch status {
+	case "nieuw", "beoordeeld", "goedgekeurd", "afgewezen", "afgehandeld":
+		return true
+	}
+	return false
+}
+
+func isKnownSlaIncidentStatus(status string) bool {
+	switch status {
+	case "open", "in_behandeling", "wacht_op_klant", "gesloten":
+		return true
+	}
+	return false
 }
 
 // ─── Companies & contacts ───────────────────────────────────────────────────
@@ -1370,6 +1401,9 @@ func (s *LaventeCareStore) CreateAction(ctx context.Context, userID string, inpu
 }
 
 func (s *LaventeCareStore) UpdateActionStatus(ctx context.Context, userID string, id uuid.UUID, status string) error {
+	if !lcKnownStatus(status) {
+		return ErrInvalidStatus
+	}
 	now := time.Now().UTC()
 	var title string
 	var summary *string
@@ -2769,7 +2803,7 @@ func (s *LaventeCareStore) getBillingSummary(ctx context.Context, userID string,
 	err := s.db.Pool.QueryRow(ctx,
 		`SELECT
 		    (SELECT COUNT(*) FROM lc_quotes q WHERE q.user_id = $1 AND ($2::uuid IS NULL OR q.company_id = $2)),
-		    (SELECT COUNT(*) FROM lc_quotes q WHERE q.user_id = $1 AND ($2::uuid IS NULL OR q.company_id = $2) AND q.status NOT IN ('vervallen','geweigerd','geaccepteerd')),
+		    (SELECT COUNT(*) FROM lc_quotes q WHERE q.user_id = $1 AND ($2::uuid IS NULL OR q.company_id = $2) AND q.status NOT IN ('afgewezen','verlopen','geaccepteerd')),
 		    (SELECT COUNT(*) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
 		    (SELECT COALESCE(SUM(t.minutes) FILTER (WHERE t.billable), 0) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
 		    (SELECT COALESCE(SUM(t.minutes) FILTER (WHERE t.billable AND t.invoice_id IS NULL AND t.status <> 'afgeschreven'), 0) FROM lc_time_entries t WHERE t.user_id = $1 AND ($2::uuid IS NULL OR t.company_id = $2)),
@@ -3498,25 +3532,31 @@ func (s *LaventeCareStore) GenerateInvoiceDocument(ctx context.Context, userID s
 	ublXML := buildInvoiceUBL(invoice, company, lines)
 	documentURL := fmt.Sprintf("/api/v1/laventecare/invoices/%s/document", id.String())
 
-	tag, err := s.db.Pool.Exec(ctx,
-		`UPDATE lc_invoices
-		    SET document_url = $3,
-		        document_generated_at = $4,
-		        ubl_xml = $5,
-		        ubl_generated_at = $4,
-		        updated_at = $4
-		  WHERE id = $1 AND user_id = $2`,
-		id, userID, documentURL, generatedAt, ublXML)
-	if err != nil {
-		return nil, err
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, pgx.ErrNoRows
-	}
-
-	updated, err := s.GetInvoice(ctx, userID, id)
-	if err != nil {
-		return nil, err
+	// A concept (draft) invoice can still change amounts/lines before it's
+	// sent, so its HTML/UBL is only a preview here — it must NOT be persisted
+	// as document_url/ubl_xml/*_generated_at, which would make a draft look
+	// like an officially issued legal (UBL/e-invoicing) document.
+	updated := invoice
+	if invoice.Status != "concept" {
+		tag, err := s.db.Pool.Exec(ctx,
+			`UPDATE lc_invoices
+			    SET document_url = $3,
+			        document_generated_at = $4,
+			        ubl_xml = $5,
+			        ubl_generated_at = $4,
+			        updated_at = $4
+			  WHERE id = $1 AND user_id = $2`,
+			id, userID, documentURL, generatedAt, ublXML)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, pgx.ErrNoRows
+		}
+		updated, err = s.GetInvoice(ctx, userID, id)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &model.LCInvoiceDocument{
 		Invoice:      *updated,
@@ -4376,11 +4416,50 @@ func buildSignalTerms(companies []model.LCCompany, leads []model.LCLead, project
 
 func matchTerm(haystack string, terms []string) string {
 	for _, t := range terms {
-		if strings.Contains(haystack, t) {
+		if containsWordBoundary(haystack, t) {
 			return t
 		}
 	}
 	return ""
+}
+
+// containsWordBoundary reports whether term occurs in haystack as a whole
+// word/phrase rather than as a substring of a larger word — e.g. a
+// workstream named "wonen" must not match "voorwonen" or "bewonen" in an
+// unrelated email/note.
+func containsWordBoundary(haystack, term string) bool {
+	if term == "" {
+		return false
+	}
+	for idx := 0; idx <= len(haystack); {
+		rel := strings.Index(haystack[idx:], term)
+		if rel < 0 {
+			return false
+		}
+		start := idx + rel
+		end := start + len(term)
+		beforeOK := start == 0 || !isWordRune(lastRuneBefore(haystack, start))
+		afterOK := end == len(haystack) || !isWordRune(firstRuneAfter(haystack, end))
+		if beforeOK && afterOK {
+			return true
+		}
+		idx = start + 1
+	}
+	return false
+}
+
+func lastRuneBefore(s string, idx int) rune {
+	r, _ := utf8.DecodeLastRuneInString(s[:idx])
+	return r
+}
+
+func firstRuneAfter(s string, idx int) rune {
+	r, _ := utf8.DecodeRuneInString(s[idx:])
+	return r
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func businessSignalDateUrgency(date string, fallback string) string {
@@ -4451,6 +4530,8 @@ func (s *LaventeCareStore) CreateSlaIncident(ctx context.Context, userID string,
 	}
 	if strings.TrimSpace(input.Status) == "" {
 		input.Status = "open"
+	} else if !isKnownSlaIncidentStatus(input.Status) {
+		return nil, ErrInvalidStatus
 	}
 	if strings.TrimSpace(input.Kanaal) == "" {
 		input.Kanaal = "telegram"
@@ -4474,6 +4555,9 @@ func (s *LaventeCareStore) UpdateSlaIncidentStatus(ctx context.Context, userID s
 	status = strings.TrimSpace(status)
 	if status == "" {
 		return fmt.Errorf("status is verplicht")
+	}
+	if !isKnownSlaIncidentStatus(status) {
+		return ErrInvalidStatus
 	}
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_sla_incidents
@@ -4519,6 +4603,8 @@ func (s *LaventeCareStore) CreateChangeRequest(ctx context.Context, userID strin
 	input.UpdatedAt = now
 	if strings.TrimSpace(input.Status) == "" {
 		input.Status = "nieuw"
+	} else if !isKnownChangeRequestStatus(input.Status) {
+		return nil, ErrInvalidStatus
 	}
 
 	_, err := s.db.Pool.Exec(ctx,
@@ -4537,6 +4623,9 @@ func (s *LaventeCareStore) UpdateChangeRequestStatus(ctx context.Context, userID
 	status = strings.TrimSpace(status)
 	if status == "" {
 		return fmt.Errorf("status is verplicht")
+	}
+	if !isKnownChangeRequestStatus(status) {
+		return ErrInvalidStatus
 	}
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_change_requests
@@ -4580,6 +4669,8 @@ func (s *LaventeCareStore) CreateDecision(ctx context.Context, userID string, in
 	input.CreatedAt = now
 	if strings.TrimSpace(input.Status) == "" {
 		input.Status = "genomen"
+	} else if !isKnownDecisionStatus(input.Status) {
+		return nil, ErrInvalidStatus
 	}
 	if strings.TrimSpace(input.Datum) == "" {
 		input.Datum = now.Format("2006-01-02")
@@ -4601,6 +4692,9 @@ func (s *LaventeCareStore) UpdateDecisionStatus(ctx context.Context, userID stri
 	status = strings.TrimSpace(status)
 	if status == "" {
 		return fmt.Errorf("status is verplicht")
+	}
+	if !isKnownDecisionStatus(status) {
+		return ErrInvalidStatus
 	}
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_decisions

@@ -1111,6 +1111,10 @@ func (h *LaventeCareHandler) UpdateDecisionStatus(w http.ResponseWriter, r *http
 		return
 	}
 	if err := h.store.UpdateDecisionStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1196,6 +1200,10 @@ func (h *LaventeCareHandler) UpdateChangeRequestStatus(w http.ResponseWriter, r 
 		return
 	}
 	if err := h.store.UpdateChangeRequestStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1312,6 +1320,10 @@ func (h *LaventeCareHandler) UpdateSlaIncidentStatus(w http.ResponseWriter, r *h
 		return
 	}
 	if err := h.store.UpdateSlaIncidentStatus(r.Context(), h.userID, id, input.Status); err != nil {
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
+			return
+		}
 		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -2110,6 +2122,10 @@ func (h *LaventeCareHandler) UpdateActionStatus(w http.ResponseWriter, r *http.R
 	if err := h.store.UpdateActionStatus(r.Context(), h.userID, id, input.Status); err != nil {
 		if err == pgx.ErrNoRows {
 			Error(w, http.StatusNotFound, "Actie niet gevonden")
+			return
+		}
+		if err == store.ErrInvalidStatus {
+			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
 		Error(w, http.StatusInternalServerError, err.Error())
