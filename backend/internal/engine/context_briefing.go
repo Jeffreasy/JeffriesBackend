@@ -197,6 +197,7 @@ func compactNextPlanning(schedules []model.Schedule, events []model.PersonalEven
 			"type":     "dienst",
 			"title":    firstNonEmpty(schedule.ShiftType, schedule.Titel),
 			"date":     schedule.StartDatum,
+			"weekday":  weekdayLabel(schedule.StartDatum),
 			"start":    schedule.StartTijd,
 			"end":      schedule.EindTijd,
 			"duration": schedule.Duur,
@@ -206,13 +207,14 @@ func compactNextPlanning(schedules []model.Schedule, events []model.PersonalEven
 	}
 	for _, event := range events {
 		items = append(items, map[string]any{
-			"type":   "afspraak",
-			"id":     event.EventID,
-			"title":  event.Titel,
-			"date":   event.StartDatum,
-			"start":  optionalPtrValue(event.StartTijd),
-			"end":    optionalPtrValue(event.EindTijd),
-			"allDay": event.Heledag,
+			"type":    "afspraak",
+			"id":      event.EventID,
+			"title":   event.Titel,
+			"date":    event.StartDatum,
+			"weekday": weekdayLabel(event.StartDatum),
+			"start":   optionalPtrValue(event.StartTijd),
+			"end":     optionalPtrValue(event.EindTijd),
+			"allDay":  event.Heledag,
 			"businessContext": map[string]any{
 				"type":  optionalPtrValue(event.BusinessContextType),
 				"id":    optionalPtrValue(event.BusinessContextID),
@@ -228,6 +230,20 @@ func compactNextPlanning(schedules []model.Schedule, events []model.PersonalEven
 		items = items[:limit]
 	}
 	return items
+}
+
+// weekdayLabel returns the Dutch weekday name for an ISO date, or "" if it
+// doesn't parse. This is defense-in-depth beyond the prompt-level 14-day
+// lookup table (ai/prompt.go): the model can read the day directly off the
+// tool payload instead of having to cross-reference a bare date against that
+// table itself.
+func weekdayLabel(dateIso string) string {
+	loc := amsterdamLocation()
+	d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(dateIso), loc)
+	if err != nil {
+		return ""
+	}
+	return dutchDayName(d.Weekday())
 }
 
 func planningSortKey(item map[string]any) string {
@@ -334,44 +350,129 @@ func takeBriefingItems[T any](items []T, limit int) []T {
 	return items[:limit]
 }
 
-func recommendedContextActions(notes []model.Note, events []model.PersonalEvent, cockpit *model.LCCockpit, unread int, now time.Time, loc *time.Location, limit int) []map[string]string {
-	actions := make([]map[string]string, 0, limit)
-	add := func(domain, title, reason string) {
-		if len(actions) >= limit {
-			return
-		}
-		actions = append(actions, map[string]string{"domain": domain, "title": title, "reason": reason})
-	}
+type scoredContextAction struct {
+	domain string
+	title  string
+	reason string
+	score  int
+}
 
-	for _, note := range selectFocusNotes(activeNotes(notes), now, loc, limit) {
-		if noteNeedsAttention(note, now, loc) {
-			add("notities", noteTitle(note), "triage/deadline/checklist vraagt aandacht")
+// recommendedContextActions gathers ALL candidate attention-items across
+// every domain first, scores each on a shared urgency scale, and only THEN
+// truncates to limit. Previously this appended in a fixed domain order
+// (notes, then email, then LaventeCare, then agenda) and hard-stopped the
+// moment `limit` candidates existed — so on a day with several
+// notes-needing-attention, a same-day LaventeCare deadline could be dropped
+// from the pool before the model ever saw it, purely due to domain order,
+// not actual urgency.
+func recommendedContextActions(notes []model.Note, events []model.PersonalEvent, cockpit *model.LCCockpit, unread int, now time.Time, loc *time.Location, limit int) []map[string]string {
+	var candidates []scoredContextAction
+
+	for _, note := range activeNotes(notes) {
+		if !noteNeedsAttention(note, now, loc) {
+			continue
 		}
+		candidates = append(candidates, scoredContextAction{
+			domain: "notities",
+			title:  noteTitle(note),
+			reason: "triage/deadline/checklist vraagt aandacht",
+			score:  noteUrgencyScore(note, now, loc),
+		})
 	}
 	if unread > 0 {
-		add("email", "Inbox review", "er staan ongelezen Gmail-items open")
+		candidates = append(candidates, scoredContextAction{
+			domain: "email",
+			title:  "Inbox review",
+			reason: "er staan ongelezen Gmail-items open",
+			score:  20,
+		})
 	}
 	if cockpit != nil {
 		for _, followUp := range cockpit.FollowUps {
-			add("laventecare", followUp.Title, followUp.ActionHint)
+			candidates = append(candidates, scoredContextAction{
+				domain: "laventecare",
+				title:  followUp.Title,
+				reason: followUp.ActionHint,
+				score:  domainUrgencyScore(followUp.Priority, "", now, loc, 15),
+			})
 		}
 		for _, signal := range cockpit.BusinessSignals {
-			add("laventecare", signal.Title, signal.ActionHint)
+			candidates = append(candidates, scoredContextAction{
+				domain: "laventecare",
+				title:  signal.Title,
+				reason: signal.ActionHint,
+				score:  domainUrgencyScore(signal.Urgency, "", now, loc, 15),
+			})
 		}
 		for _, action := range cockpit.ActionItems {
 			reason := action.Priority
+			dueIso := ""
 			if action.DueDate != nil {
-				reason += " · deadline " + *action.DueDate
+				dueIso = *action.DueDate
+				reason += " · deadline " + dueIso
 			}
-			add("laventecare", action.Title, reason)
+			candidates = append(candidates, scoredContextAction{
+				domain: "laventecare",
+				title:  action.Title,
+				reason: reason,
+				score:  domainUrgencyScore(action.Priority, dueIso, now, loc, 15),
+			})
 		}
 	}
 	for _, event := range events {
 		if event.Status == store.PersonalEventStatusPendingCreate || event.Status == store.PersonalEventStatusPendingUpdate || event.Status == store.PersonalEventStatusPendingDelete {
-			add("agenda", event.Titel, "staat nog in Google Calendar sync-wachtrij")
+			candidates = append(candidates, scoredContextAction{
+				domain: "agenda",
+				title:  event.Titel,
+				reason: "staat nog in Google Calendar sync-wachtrij",
+				score:  25,
+			})
 		}
 	}
+
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	actions := make([]map[string]string, 0, len(candidates))
+	for _, c := range candidates {
+		actions = append(actions, map[string]string{"domain": c.domain, "title": c.title, "reason": c.reason})
+	}
 	return actions
+}
+
+// domainUrgencyScore scores a non-note candidate on the same rough scale as
+// noteUrgencyScore (telegram_notes.go), so items from different domains are
+// comparable before truncation. baseline lets a domain be weighted relative
+// to others even with no priority/due-date signal.
+func domainUrgencyScore(priority, dueDateIso string, now time.Time, loc *time.Location, baseline int) int {
+	score := baseline
+	switch strings.ToLower(strings.TrimSpace(priority)) {
+	case "hoog", "high", "urgent":
+		score += 45
+	case "normaal", "normal", "medium":
+		score += 15
+	case "laag", "low":
+		score += 5
+	}
+	if dueDateIso = strings.TrimSpace(dueDateIso); dueDateIso != "" {
+		if due, err := time.ParseInLocation("2006-01-02", dueDateIso, loc); err == nil {
+			hours := due.Sub(startOfLocalDay(now)).Hours()
+			switch {
+			case hours < 0:
+				score += 100
+			case hours <= 24:
+				score += 80
+			case hours <= 72:
+				score += 55
+			case hours <= 168:
+				score += 30
+			default:
+				score += 10
+			}
+		}
+	}
+	return score
 }
 
 func optionalPtrValue(value *string) string {

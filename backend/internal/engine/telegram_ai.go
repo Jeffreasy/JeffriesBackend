@@ -39,24 +39,24 @@ func (e *Engine) handleVoice(ctx context.Context, client *tg.Client, chatID int6
 
 	filePath, err := client.GetFile(fileID)
 	if err != nil {
-		_ = client.SendMessage(chatID, fmt.Sprintf("Fout: %s", err.Error()))
+		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 	audio, err := client.DownloadFile(filePath)
 	if err != nil {
-		_ = client.SendMessage(chatID, fmt.Sprintf("Fout: %s", err.Error()))
+		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 
 	groqKey := e.cfg.GroqAPIKey
 	if groqKey == "" {
-		_ = client.SendMessage(chatID, "GROQ_API_KEY niet geconfigureerd")
+		_ = client.SendMessage(chatID, "❌ GROQ_API_KEY niet geconfigureerd")
 		return
 	}
 
 	transcript, err := tg.TranscribeVoice(groqKey, audio, "voice.ogg")
 	if err != nil {
-		_ = client.SendMessage(chatID, fmt.Sprintf("Fout: %s", err.Error()))
+		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 
@@ -107,7 +107,113 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 		}
 	}
 
+	// The specialist agents below are directly selectable in Telegram (not
+	// just reachable via brain), but previously got nothing but {"status":
+	// "Go backend"} here — forcing a mandatory extra tool round-trip for
+	// even the most common question in their own domain. Seed a small
+	// compact snapshot for each, mirroring the notes pattern above.
+	switch agentID {
+	case "rooster":
+		if snapshot, err := e.buildRoosterAISnapshot(ctx); err == nil {
+			live["rooster"] = snapshot
+		} else {
+			live["roosterError"] = err.Error()
+		}
+	case "agenda":
+		if snapshot, err := e.buildAgendaAISnapshot(ctx); err == nil {
+			live["agenda"] = snapshot
+		} else {
+			live["agendaError"] = err.Error()
+		}
+	case "finance":
+		if snapshot, err := e.buildFinanceAISnapshot(ctx); err == nil {
+			live["finance"] = snapshot
+		} else {
+			live["financeError"] = err.Error()
+		}
+	case "habits":
+		if snapshot, err := e.buildHabitsAISnapshot(ctx); err == nil {
+			live["habits"] = snapshot
+		} else {
+			live["habitsError"] = err.Error()
+		}
+	}
+
 	return live
+}
+
+// buildRoosterAISnapshot gives the rooster agent the next couple of shifts
+// and their combined hours without a mandatory dienstenOpvragen round-trip.
+func (e *Engine) buildRoosterAISnapshot(ctx context.Context) (map[string]any, error) {
+	events, err := store.NewScheduleStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, 2)
+	if err != nil {
+		return nil, err
+	}
+	events = visibleSchedules(events)
+	var totaalUur float64
+	for _, ev := range events {
+		totaalUur += ev.Duur
+	}
+	return map[string]any{
+		"source":         "server-side live rooster snapshot",
+		"aantalDiensten": len(events),
+		"totaalUur":      totaalUur,
+		"diensten":       events,
+		"instruction":    "Compacte snapshot van de eerstvolgende 2 diensten. Gebruik dienstenOpvragen voor een specifieke periode of langere lijst.",
+	}, nil
+}
+
+// buildAgendaAISnapshot gives the agenda agent the next few appointments
+// without a mandatory afsprakenOpvragen round-trip.
+func (e *Engine) buildAgendaAISnapshot(ctx context.Context) (map[string]any, error) {
+	events, err := store.NewPersonalEventStore(e.db).ListUpcoming(ctx, e.cfg.HomeappUserID, 3)
+	if err != nil {
+		return nil, err
+	}
+	events = visiblePersonalEvents(events)
+	return map[string]any{
+		"source":          "server-side live agenda snapshot",
+		"aantalAfspraken": len(events),
+		"afspraken":       events,
+		"instruction":     "Compacte snapshot van de eerstvolgende 3 afspraken. Gebruik afsprakenOpvragen voor een specifieke periode of langere lijst.",
+	}, nil
+}
+
+// buildFinanceAISnapshot gives the finance agent current saldo + this-month
+// summary without a mandatory saldoOpvragen round-trip.
+func (e *Engine) buildFinanceAISnapshot(ctx context.Context) (map[string]any, error) {
+	txStore := store.NewTransactionStore(e.db)
+	stats, err := txStore.GetStats(ctx, e.cfg.HomeappUserID)
+	if err != nil {
+		return nil, err
+	}
+	_, _, from, to := currentFinanceMonthToDate(time.Now())
+	filter := store.TransactionFilter{ExcludeIntern: true, DatumVan: from, DatumTot: to, Limit: 20000}
+	currentMonthTxs, _, err := txStore.ListFiltered(ctx, e.cfg.HomeappUserID, filter)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"source":         "server-side live finance snapshot",
+		"stats":          stats,
+		"defaultSummary": summarizeFinanceTransactions(currentMonthTxs),
+		"instruction":    "stats = huidig totaalsaldo/dataset. defaultSummary = huidige maand tot nu. Gebruik saldoOpvragen/transactiesZoeken voor een andere periode of zoekterm.",
+	}, nil
+}
+
+// buildHabitsAISnapshot gives the habits agent today's due habits without a
+// mandatory habitsOverzicht/habitRapport round-trip.
+func (e *Engine) buildHabitsAISnapshot(ctx context.Context) (map[string]any, error) {
+	due, err := store.NewHabitStore(e.db).ListDueForDate(ctx, e.cfg.HomeappUserID, todayAmsterdamISO())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"source":      "server-side live habits snapshot",
+		"vandaagDue":  len(due),
+		"habits":      due,
+		"instruction": "habits bevat de vandaag-verschuldigde habits (frequentie/pauze/roosterfilter toegepast). Gebruik habitRapport voor streaks/badges/historie.",
+	}, nil
 }
 
 func (e *Engine) buildNotesAISnapshot(ctx context.Context, limit int) (map[string]any, error) {
@@ -260,6 +366,15 @@ func buildVoiceHelpText() string {
 
 // ProcessAIPrompt routes a prompt to Grok AI, executes tools, saves the history, and sends the reply.
 func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string, agentID string, showTyping bool) (string, error) {
+	// Serialize all processing for this chat. Without this, two updates for
+	// the same chat (a rapid follow-up message, or a message arriving while
+	// the cron briefing is mid-flight) could each load history, save their
+	// own turn, and interleave — previously masked by a "drop the last row"
+	// heuristic below that assumed single-writer and could silently discard
+	// the WRONG concurrent turn.
+	unlock := e.lockChat(chatID)
+	defer unlock()
+
 	client := tg.NewClient(e.cfg.TelegramBotToken)
 	chatStore := store.NewChatStore(e.db.Pool)
 
@@ -274,7 +389,9 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		agentID = "brain"
 	}
 
-	// Load chat history
+	// Load PRIOR history, then persist the current turn — in that order, so
+	// the current turn is never in the result set and there is nothing to
+	// drop positionally. (Callers no longer save the user message themselves.)
 	history, _ := chatStore.GetHistory(ctx, chatID, 10)
 	var aiHistory []ai.Message
 	for _, m := range history {
@@ -283,15 +400,12 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 			aiHistory = append(aiHistory, ai.Message{Role: m.Role, Content: &content})
 		}
 	}
-	// Remove the last one (current user msg already in history)
-	if len(aiHistory) > 0 {
-		aiHistory = aiHistory[:len(aiHistory)-1]
-	}
+	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
 
 	grokKey := e.cfg.GrokAPIKey
 	if grokKey == "" {
 		err := fmt.Errorf("GROK_API_KEY niet geconfigureerd")
-		_ = client.SendMessage(chatID, err.Error())
+		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return "", err
 	}
 
@@ -309,7 +423,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		if result.OK && result.Antwoord != "" {
 			reply = normalizeAssistantText(result.Antwoord)
 		} else {
-			reply = "❌ " + result.Error
+			reply = "❌ " + classifyUserFacingError(result.Error)
 		}
 		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
 		_ = client.SendMessage(chatID, reply)
@@ -332,7 +446,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 	if result.OK && result.Antwoord != "" {
 		reply = normalizeAssistantText(result.Antwoord)
 	} else {
-		reply = "❌ " + result.Error
+		reply = "❌ " + classifyUserFacingError(result.Error)
 	}
 
 	_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)

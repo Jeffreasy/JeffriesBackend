@@ -248,8 +248,8 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		agentID = agentHint
 	}
 
-	// Persist only the conversational text that actually reaches the model.
-	_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
+	// ProcessAIPrompt persists the user turn itself (after loading prior
+	// history), so it's never saved here — see telegram_ai.go.
 	_, _ = e.ProcessAIPrompt(ctx, chatID, text, agentID, true)
 }
 

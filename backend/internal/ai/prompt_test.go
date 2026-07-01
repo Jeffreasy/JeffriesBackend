@@ -3,7 +3,39 @@ package ai
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestDateContextBlockWeekdays pins down the exact bug reported in production:
+// the Telegram assistant told the user "vandaag is 30 juni 2026 (maandag)" and
+// then proposed wrong dates for "volgende week", because the prompt only ever
+// gave the model a bare ISO date ("2026-06-30") and let it guess the weekday.
+// 2026-06-30 is in fact a Tuesday — verified against the real calendar.
+func TestDateContextBlockWeekdays(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	now := time.Date(2026, time.June, 30, 9, 0, 0, 0, loc)
+
+	block := dateContextBlockAt(now)
+
+	if !strings.Contains(block, "Vandaag is dinsdag 30 juni 2026 (2026-06-30)") {
+		t.Fatalf("expected today's line to say dinsdag 30 juni 2026, got:\n%s", block)
+	}
+
+	// The dates Salih proposed in the reported conversation.
+	for date, weekday := range map[string]string{
+		"2026-07-07": "dinsdag",
+		"2026-07-08": "woensdag",
+		"2026-07-09": "donderdag",
+	} {
+		needle := date + ": " + weekday
+		if !strings.Contains(block, needle) {
+			t.Fatalf("expected table to contain %q, got:\n%s", needle, block)
+		}
+	}
+}
 
 func TestBuildSystemPromptAddsNotesGuardrails(t *testing.T) {
 	agent := GetAgent("notes")

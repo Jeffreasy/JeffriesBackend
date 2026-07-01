@@ -30,7 +30,14 @@ type GrokClient struct {
 	model           string
 	reasoningEffort string
 	httpClient      *http.Client
-	cb              *gobreaker.CircuitBreaker
+
+	// Separate breakers per endpoint: Chat (tool-calling, the primary path
+	// for nearly every daily interaction) and SearchWeb (Responses API,
+	// only used for news/actuality intent) hit different xAI endpoints and
+	// can fail independently. A single shared breaker would let an isolated
+	// SearchWeb outage lock Jeffrey out of the primary assistant for 30s.
+	chatBreaker   *gobreaker.CircuitBreaker
+	searchBreaker *gobreaker.CircuitBreaker
 }
 
 func NewGrokClient(apiKey string) *GrokClient {
@@ -45,18 +52,20 @@ func NewGrokClientWithOptions(apiKey, model, reasoningEffort string) *GrokClient
 		reasoningEffort = DefaultReasoningEffort
 	}
 
-	// Configure Circuit Breaker: 3 consecutive failures -> open state for 30s
-	st := gobreaker.Settings{
-		Name:        "GrokAPI",
-		MaxRequests: 1, // When half-open, allow 1 request to test
-		Interval:    0,
-		Timeout:     30 * time.Second, // Time before transitioning from Open to Half-Open
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= 3
-		},
-		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			slog.Warn("CircuitBreaker state changed", "name", name, "from", from.String(), "to", to.String())
-		},
+	newBreaker := func(name string) *gobreaker.CircuitBreaker {
+		// 3 consecutive failures -> open state for 30s
+		return gobreaker.NewCircuitBreaker(gobreaker.Settings{
+			Name:        name,
+			MaxRequests: 1, // When half-open, allow 1 request to test
+			Interval:    0,
+			Timeout:     30 * time.Second, // Time before transitioning from Open to Half-Open
+			ReadyToTrip: func(counts gobreaker.Counts) bool {
+				return counts.ConsecutiveFailures >= 3
+			},
+			OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+				slog.Warn("CircuitBreaker state changed", "name", name, "from", from.String(), "to", to.String())
+			},
+		})
 	}
 
 	return &GrokClient{
@@ -64,7 +73,8 @@ func NewGrokClientWithOptions(apiKey, model, reasoningEffort string) *GrokClient
 		model:           model,
 		reasoningEffort: reasoningEffort,
 		httpClient:      &http.Client{Timeout: 60 * time.Second},
-		cb:              gobreaker.NewCircuitBreaker(st),
+		chatBreaker:     newBreaker("GrokChatAPI"),
+		searchBreaker:   newBreaker("GrokSearchAPI"),
 	}
 }
 
@@ -185,7 +195,7 @@ func (c *GrokClient) Chat(
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		// Execute request through Circuit Breaker
-		respInterface, cbErr := c.cb.Execute(func() (interface{}, error) {
+		respInterface, cbErr := c.chatBreaker.Execute(func() (interface{}, error) {
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				return nil, err
@@ -240,6 +250,12 @@ func (c *GrokClient) Chat(
 			if msg.Content != nil {
 				content = *msg.Content
 			}
+			if choice.FinishReason == "length" {
+				// The completion was cut off mid-generation (token budget hit),
+				// not a clean stop. Without this the reply just trails off with
+				// no indication anything was truncated.
+				content = strings.TrimSpace(content) + "\n\n(antwoord ingekort door lengte — vraag door voor meer detail)"
+			}
 			return ChatResult{
 				OK:           true,
 				Antwoord:     content,
@@ -275,19 +291,26 @@ func (c *GrokClient) Chat(
 		}
 	}
 
-	// Max rounds reached
+	// Max rounds reached without Grok returning a natural-language finish.
+	// The last appended message here is always a {Role:"tool"} result (raw
+	// JSON from the executor, e.g. {"ok":true,"emails":[...]}), never
+	// assistant text — shipping it directly used to leak a raw tool-result
+	// blob straight into Telegram. Force one final no-tools completion so
+	// Grok must synthesize everything gathered so far into a real answer.
 	duration := time.Since(start)
-	slog.Warn("[Grok] MAX_ROUNDS",
+	slog.Warn("[Grok] MAX_ROUNDS, forcing final synthesis",
 		"duration", duration.Round(time.Millisecond),
 		"tools", toolsUsed,
-		"tokens", totalUsage.TotalTokens,
 	)
 
-	last := messages[len(messages)-1]
-	content := "Ik heb te veel data moeten ophalen. Probeer een specifiekere vraag."
-	if last.Content != nil {
-		content = *last.Content
+	content, synthUsage, synthErr := c.finalSynthesis(ctx, messages)
+	if synthErr != nil {
+		slog.Warn("[Grok] MAX_ROUNDS synthesis failed", "error", synthErr)
+		content = "Ik heb te veel data moeten ophalen om dit in één keer te verwerken. Probeer een specifiekere vraag."
+	} else if synthUsage != nil {
+		totalUsage = synthUsage
 	}
+
 	return ChatResult{
 		OK:           true,
 		Antwoord:     content,
@@ -295,8 +318,76 @@ func (c *GrokClient) Chat(
 		Rounds:       MaxToolRounds,
 		ToolsUsed:    toolsUsed,
 		FinishReason: "max_rounds",
-		DurationMs:   duration.Milliseconds(),
+		DurationMs:   time.Since(start).Milliseconds(),
 	}
+}
+
+// finalSynthesis issues one last completion call with tools omitted, forcing
+// Grok to answer in natural language using everything gathered so far
+// instead of leaving the caller holding a raw tool-result message.
+func (c *GrokClient) finalSynthesis(ctx context.Context, messages []Message) (string, *Usage, error) {
+	msgs := make([]Message, 0, len(messages)+1)
+	msgs = append(msgs, messages...)
+	msgs = append(msgs, Message{
+		Role:    "user",
+		Content: strPtr("Je hebt genoeg informatie verzameld. Geef nu een definitief, samenvattend antwoord in het Nederlands voor Telegram plain text, zonder nog een tool aan te roepen."),
+	})
+
+	reqBody := map[string]any{
+		"model":       c.model,
+		"messages":    msgs,
+		"stream":      false,
+		"temperature": Temperature,
+		"max_tokens":  MaxTokens,
+	}
+	if c.reasoningEffort != "" {
+		reqBody["reasoning_effort"] = c.reasoningEffort
+	}
+	// Deliberately omit "tools" so the model cannot request another round.
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal error: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GrokChatAPIURL, bytes.NewReader(data))
+	if err != nil {
+		return "", nil, fmt.Errorf("request error: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	respInterface, cbErr := c.chatBreaker.Execute(func() (interface{}, error) {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 500 {
+			defer resp.Body.Close()
+			return nil, fmt.Errorf("server error: %d", resp.StatusCode)
+		}
+		return resp, nil
+	})
+	if cbErr != nil {
+		return "", nil, cbErr
+	}
+
+	resp := respInterface.(*http.Response)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("grok %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var grokResp GrokResponse
+	if err := json.Unmarshal(body, &grokResp); err != nil {
+		return "", nil, fmt.Errorf("parse error: %w", err)
+	}
+	if len(grokResp.Choices) == 0 || grokResp.Choices[0].Message.Content == nil {
+		return "", nil, fmt.Errorf("empty synthesis response")
+	}
+	return *grokResp.Choices[0].Message.Content, &grokResp.Usage, nil
 }
 
 // SearchWeb answers current-events questions through xAI Responses API web_search.
@@ -338,7 +429,7 @@ Regels:
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	respInterface, cbErr := c.cb.Execute(func() (interface{}, error) {
+	respInterface, cbErr := c.searchBreaker.Execute(func() (interface{}, error) {
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, err
@@ -352,7 +443,7 @@ Regels:
 
 	if cbErr != nil {
 		if cbErr == gobreaker.ErrOpenState {
-			return ChatResult{Error: "De AI server is tijdelijk onbereikbaar wegens overbelasting. Probeer het later opnieuw."}
+			return ChatResult{Error: "De AI zoekfunctie is tijdelijk onbereikbaar wegens overbelasting. Probeer het later opnieuw."}
 		}
 		return ChatResult{Error: fmt.Sprintf("API error: %v", cbErr)}
 	}

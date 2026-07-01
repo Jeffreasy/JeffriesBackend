@@ -44,9 +44,30 @@ func (e *ConfirmingExecutor) Execute(ctx context.Context, toolName string, argsJ
 		})
 	}
 	if ai.IsMutatingTool(toolName) && ai.RequiresConfirmation(toolName) {
+		// Reuse an existing identical pending action instead of creating a
+		// duplicate. Without this, a retried tool call, a repeated user
+		// request, or a multi-step plan issuing the same mutating call twice
+		// in one turn leaves several near-identical pending actions with
+		// different confirmation codes cluttering /pending — confusing to
+		// scan on a phone and risking confirmation of the wrong (stale) one.
+		if existing, err := e.pending.FindPendingByToolArgs(ctx, e.userID, toolName, argsJSON); err == nil && existing != nil {
+			return jsonString(map[string]any{
+				"confirmationRequired": true,
+				"pendingActionId":      existing.ID,
+				"code":                 existing.Code,
+				"toolName":             existing.ToolName,
+				"summary":              existing.Summary,
+				"expiresAt":            existing.ExpiresAt,
+				"message":              fmt.Sprintf("Deze actie staat al klaar ter bevestiging. Gebruik /approve %s, /reject %s of open Settings.", existing.Code, existing.Code),
+			})
+		}
+
 		summary := summarizePendingTool(toolName, argsJSON)
-		if toolName == "laventecareBetaalverzoekMaken" {
+		switch toolName {
+		case "laventecareBetaalverzoekMaken":
 			summary = e.enrichPaymentRequestSummary(ctx, argsJSON, summary)
+		case "afspraakMaken", "afspraakBewerken":
+			summary = e.enrichAppointmentSummary(ctx, argsJSON, summary)
 		}
 		action, err := e.pending.Create(ctx, e.userID, e.agentID, toolName, argsJSON, summary)
 		if err != nil {
@@ -169,6 +190,42 @@ func (e *ConfirmingExecutor) enrichPaymentRequestSummary(ctx context.Context, ar
 	return fmt.Sprintf("Betaalverzoek factuur %s (€%.2f)%s", inv.InvoiceNumber, float64(inv.TotalCents)/100, who)
 }
 
+// enrichAppointmentSummary appends a work-shift conflict warning (if any) to
+// the confirmation summary shown BEFORE the user approves — not just to the
+// eventual DB record — so a double-booking is visible at the moment they
+// decide, not only discoverable afterward in the executed result.
+func (e *ConfirmingExecutor) enrichAppointmentSummary(ctx context.Context, argsJSON, fallback string) string {
+	var args struct {
+		StartDatum   string `json:"startDatum"`
+		StartDatumDB string `json:"start_datum"`
+		StartIso     string `json:"startIso"`
+		StartTijd    string `json:"startTijd"`
+		StartTijdDB  string `json:"start_tijd"`
+		EindDatum    string `json:"eindDatum"`
+		EindDatumDB  string `json:"eind_datum"`
+		EindIso      string `json:"eindIso"`
+		EindTijd     string `json:"eindTijd"`
+		EindTijdDB   string `json:"eind_tijd"`
+		Heledag      *bool  `json:"heledag"`
+		AllDay       *bool  `json:"allDay"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fallback
+	}
+	startDatum := firstNonEmpty(args.StartDatum, args.StartDatumDB, args.StartIso)
+	eindDatum := firstNonEmpty(args.EindDatum, args.EindDatumDB, args.EindIso, startDatum)
+	startTijd := firstNonEmpty(args.StartTijd, args.StartTijdDB)
+	eindTijd := firstNonEmpty(args.EindTijd, args.EindTijdDB)
+	heledag := (args.Heledag != nil && *args.Heledag) || (args.AllDay != nil && *args.AllDay)
+
+	scheduleStore := store.NewScheduleStore(&store.DB{Pool: e.pool})
+	conflict := findDienstConflict(ctx, scheduleStore, e.userID, startDatum, startTijd, eindDatum, eindTijd, heledag)
+	if conflict == "" {
+		return fallback
+	}
+	return fallback + " — ⚠️ " + conflict
+}
+
 func summarizePendingTool(toolName, argsJSON string) string {
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
@@ -198,9 +255,9 @@ func summarizePendingTool(toolName, argsJSON string) string {
 	case "verwijderEmail":
 		return cleanSummary("Email verwijderen", value("gmailId", "emailId", "id"))
 	case "emailVersturen":
-		return cleanSummary("Email versturen", value("to"), value("subject"))
+		return cleanSummary("Email versturen", value("to"), value("subject"), bodyPreview(value("body")))
 	case "emailBeantwoorden":
-		return cleanSummary("Email beantwoorden", value("gmailId", "emailId", "id"))
+		return cleanSummary("Email beantwoorden", value("gmailId", "emailId", "id"), bodyPreview(value("body")))
 	case "bulkMarkeerGelezen":
 		return cleanSummary("Meerdere emails gelezen-status wijzigen", value("query"))
 	case "bulkVerwijder":
@@ -254,6 +311,19 @@ func summarizePendingTool(toolName, argsJSON string) string {
 	default:
 		return cleanSummary("AI-mutatie bevestigen", toolName)
 	}
+}
+
+// bodyPreview renders a short, single-line preview of a mail body so the
+// /approve confirmation actually shows what will be sent, not just the
+// recipient/subject — the AI drafts real emails to real clients/leads, and
+// approving blind on subject alone means a typo, wrong tone, or wrong price
+// in the body would otherwise go out with only a subject-line rubber stamp.
+func bodyPreview(body string) string {
+	body = collapseWhitespace(body)
+	if body == "" {
+		return ""
+	}
+	return `"` + truncateRunes(body, 350) + `"`
 }
 
 func cleanSummary(parts ...string) string {

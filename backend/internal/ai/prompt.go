@@ -80,9 +80,9 @@ wijzigen.
 
 ## TOOL GEBRUIK (VERPLICHT)
 - WANNEER DE GEBRUIKER VRAAGT OM EEN EMAIL TE "LEZEN", "OPENEN", "VOORLEZEN" OF "BEKIJKEN":
-  → Je MOET de leesEmail tool aanroepen met het gmailId uit de Live Data hierboven.
+  → Zoek eerst in Live Data (indien aanwezig) naar het gmailId. Staat het er niet in of ben je onzeker, roep dan EERST zoekEmails aan om het juiste gmailId te vinden. Roep pas daarna leesEmail aan. Verzin NOOIT een gmailId.
 - Als de gebruiker vraagt wat er vandaag/morgen/deze week "op de planning" staat → gebruik planningOpvragen. Dit combineert werkdiensten en persoonlijke afspraken.
-- Als de gebruiker een brede dagbriefing/status/focusvraag stelt of meerdere domeinen tegelijk noemt → gebruik contextBriefingOpvragen als eerste overzicht.
+- Als de gebruiker een brede dagbriefing/status/focusvraag stelt of meerdere domeinen tegelijk noemt: check eerst of Live Data.briefing al aanwezig is (standaard scope "vandaag", 2 dagen) — gebruik dat DIRECT zonder extra tool call. Roep contextBriefingOpvragen alleen aan wanneer de gebruiker een ANDERE scope vraagt (week, morgen, laventecare) of Live Data.briefing ontbreekt.
 - Als de gebruiker diensten/rooster vraagt → gebruik dienstenOpvragen en VERMELD ALTIJD het 'totaalUur' in je antwoord.
 - Als de gebruiker vraagt over zijn 16-uren contract, plus/min uren, of urensaldo → gebruik contractAnalyseOpvragen
 - Als de gebruiker alleen agenda/afspraken vraagt → gebruik afsprakenOpvragen
@@ -96,16 +96,18 @@ wijzigen.
 ## ANTI-HALLUCINATIE (KRITIEK)
 VERZIN NOOIT data. Toon PRECIES de aantallen, bedragen en namen uit het tool-resultaat.
 Rapporteer een sync (Gmail/agenda) ALLEEN als 'ok' wanneer het bijbehorende status-veld (bijv. gmailSyncStatus) gelijk is aan 'ok'; staat het op 'failed', meld dan de storing met de bijbehorende last-error. Tellingen zoals lastSuccessfulCount/totalSynced zijn historisch (laatste succes) en bewijzen NIET dat de sync nu werkt.
+ALGEMEEN PRINCIPE: een count- of timestamp-veld (bijv. totalSynced, scheduleTotalRows, documentsSeeded, lastSuccessfulCount) bewijst NOOIT de HUIDIGE status van iets — het bewijst alleen dat iets ooit is gebeurd. Vertrouw voor uitspraken over of iets NU werkt/klopt/actueel is ALTIJD alleen op een expliciet status/health-veld, nooit op een telling of tijdstempel.
 
 ## DATUM
-Vandaag is %s.`,
+%s
+Gebruik bovenstaande tabel als absolute waarheid. Bereken een dag-van-de-week NOOIT zelf vanuit een kale ISO-datum (bijv. "2026-07-07") — dat gaat regelmatig fout. Zoek de juiste dag op in de tabel hierboven. Valt de gevraagde datum buiten die 14 dagen, zeg dan dat je het niet zeker weet en vraag de gebruiker om de datum te bevestigen in plaats van te gokken.`,
 		agent.Naam, agent.Emoji,
 		agent.Beschrijving,
 		strings.Join(caps, "\n"),
 		toolList,
 		brainBlock,
 		string(contextJSON),
-		todayCET(),
+		dateContextBlock(),
 	)
 }
 
@@ -124,12 +126,54 @@ func buildToolList(tools []ToolDefinition) string {
 	return strings.Join(lines, "\n")
 }
 
-func todayCET() string {
+func nowCET() time.Time {
 	loc, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
 		loc = time.UTC
 	}
-	return time.Now().In(loc).Format("2006-01-02")
+	return time.Now().In(loc)
+}
+
+// dutchDayName returns the Dutch weekday name. LLMs are unreliable at
+// computing a day-of-week from a bare ISO date, so the prompt must never
+// ask the model to do that math itself — it gets fed the answer instead.
+func dutchDayName(d time.Weekday) string {
+	names := [...]string{"zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"}
+	return names[d]
+}
+
+func dutchMonthName(m time.Month) string {
+	names := [...]string{
+		"", "januari", "februari", "maart", "april", "mei", "juni",
+		"juli", "augustus", "september", "oktober", "november", "december",
+	}
+	return names[m]
+}
+
+// dateContextBlock renders today's date plus a 14-day weekday lookup table
+// so the model can always answer "welke dag valt op X" / "volgende week
+// dinsdag" by table lookup instead of mental calendar arithmetic.
+func dateContextBlock() string {
+	return dateContextBlockAt(nowCET())
+}
+
+func dateContextBlockAt(now time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Vandaag is %s %d %s %d (%s).\n",
+		dutchDayName(now.Weekday()), now.Day(), dutchMonthName(now.Month()), now.Year(), now.Format("2006-01-02"))
+	b.WriteString("Komende 14 dagen (datum: weekdag):\n")
+	for i := 0; i < 14; i++ {
+		d := now.AddDate(0, 0, i)
+		label := dutchDayName(d.Weekday())
+		switch i {
+		case 0:
+			label += " — vandaag"
+		case 1:
+			label += " — morgen"
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", d.Format("2006-01-02"), label)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 const brainOrchestration = `## BRAIN ORCHESTRATIE
@@ -138,7 +182,7 @@ Je bent de centrale regiekamer. Behandel specialistische agents als interne dome
 Werkvolgorde:
 1. Begrijp de vraag als geheel: planning, welzijn, geld, email, notities, lampen, LaventeCare en systeemstatus kunnen tegelijk relevant zijn.
 2. Gebruik de compacte Live Data als eerste totaalbeeld.
-3. Bij brede vragen gebruik je contextBriefingOpvragen om planning, mail, notities en LaventeCare samen te zien.
+3. Voor de STANDAARD dagbriefing (vandaag, 2 dagen) staat het antwoord al in Live Data.briefing — gebruik dat direct. Roep contextBriefingOpvragen alleen aan voor een ANDERE scope (week, morgen, laventecare) of een langere periode/limiet.
 4. Gebruik read-tools voor exacte details, IDs, perioden, email bodies of zoekresultaten.
 5. Combineer signalen expliciet wanneer ze elkaar raken.
 6. Prioriteer: wat is nu belangrijk, wat kan wachten, wat is risicovol?
@@ -163,6 +207,7 @@ const agendaOrchestration = `## AGENDA ORCHESTRATIE
 Je bent de agenda-regisseur.
 
 Werkvolgorde:
+0. Voor een simpele "wat is mijn volgende afspraak"-vraag staat het antwoord al in Live Data.agenda — gebruik dat direct zonder tool call.
 1. Bij "planning", "vandaag", "morgen" of gecombineerde vragen gebruik je planningOpvragen, want die combineert diensten en afspraken.
 2. Bij alleen persoonlijke afspraken gebruik je afsprakenOpvragen.
 3. Als de gebruiker geen periode noemt, gebruik de backend-defaults; verzin geen datums.
@@ -175,6 +220,7 @@ const roosterOrchestration = `## ROOSTER ORCHESTRATIE
 Je bent de rooster-regisseur.
 
 Werkvolgorde:
+0. Voor een simpele "wat is mijn volgende dienst"-vraag staat het antwoord al in Live Data.rooster — gebruik dat direct zonder tool call.
 1. Bij diensten/rooster gebruik je dienstenOpvragen en vermeld altijd aantalDiensten en totaalUur.
 2. Bij planning waar afspraken ook relevant zijn gebruik je planningOpvragen.
 3. Bij contracturen, plus/min uren of urensaldo gebruik je contractAnalyseOpvragen.
@@ -187,6 +233,7 @@ const financeOrchestration = `## FINANCE ORCHESTRATIE
 Je bent de finance-regisseur.
 
 Werkvolgorde:
+0. Voor een simpele saldo/status-vraag staat stats + defaultSummary al in Live Data.finance — gebruik dat direct zonder tool call.
 1. Bij status, overzicht, saldo of cashflow gebruik je saldoOpvragen als eerste bron. Behandel stats als huidig totaalsaldo/dataset en defaultSummary als huidige maand tot nu.
 2. Bij salaris, loonstroken, urenprognose of roosterwaarde gebruik je salarisOpvragen; combineer met dienstenOpvragen of contractAnalyseOpvragen wanneer uren leidend zijn.
 3. Bij transacties zoeken gebruik je transactiesZoeken. Zonder zoekterm geeft dit alleen een beperkte recente selectie; zeg dat expliciet.
@@ -223,6 +270,7 @@ const habitsOrchestration = `## HABITS ORCHESTRATIE
 Je bent de habit-coach en data-regisseur.
 
 Werkvolgorde:
+0. Voor een simpele "wat moet ik vandaag doen"-vraag staat vandaagDue al in Live Data.habits — gebruik dat direct zonder tool call.
 1. Bij status, vandaag, streaks of advies gebruik je habitRapport als eerste bron.
 2. Bij alleen lijstvragen gebruik je habitsOverzicht; bij badges gebruik je habitBadges; bij streaks gebruik je habitStreaks.
 3. Bij "afvinken", "gedaan", "voltooid", "water gedronken", "gelezen" of meetbare voortgang gebruik je habitVoltooien. Gebruik naam alleen als er geen ID is.

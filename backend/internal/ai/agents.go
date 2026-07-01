@@ -127,9 +127,10 @@ var Policies = map[string]ToolPolicy{
 	"laventecareProjectBijwerken":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareActieMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareActieAfronden":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareBesluitMaken":        {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareChangeRequestMaken":  {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"laventecareSlaIncidentMaken":    {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	// Pure additive log entries — same risk tier as notitieAanmaken, no destructive potential.
+	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
 }
 
 // IsToolAllowed checks if the given agent may use the tool.

@@ -7,10 +7,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const tgBase = "https://api.telegram.org/bot"
+
+const (
+	// telegramHardLimit is Telegram's actual max message length (post-escaping).
+	telegramHardLimit = 4096
+	// telegramChunkTarget is the raw (pre-escaping) chunk size splitForTelegram
+	// aims for, leaving headroom so HTML-entity expansion (&/</>) can't push a
+	// chunk over telegramHardLimit.
+	telegramChunkTarget = 3500
+)
 
 // Client wraps the Telegram Bot API.
 type Client struct {
@@ -54,27 +65,33 @@ func (c *Client) post(method string, body any) (json.RawMessage, error) {
 	return result.Result, nil
 }
 
-// SendMessage sends a plain text message (HTML parse mode).
+// SendMessage sends a plain text message (HTML parse mode), splitting into
+// multiple sequential messages if it exceeds Telegram's length limit instead
+// of silently hard-truncating. This matters most for the densest replies
+// (dagbriefing, LaventeCare cockpit) — those are exactly the ones most
+// likely to get cut off mid-sentence with no indication anything was lost.
 func (c *Client) SendMessage(chatID int64, text string) error {
-	if len(text) > 4000 {
-		text = text[:3997] + "..."
+	for _, chunk := range splitForTelegram(text) {
+		if _, err := c.post("sendMessage", map[string]any{
+			"chat_id":    chatID,
+			"text":       escapeAndCapForTelegram(chunk),
+			"parse_mode": "HTML",
+		}); err != nil {
+			return err
+		}
 	}
-	_, err := c.post("sendMessage", map[string]any{
-		"chat_id":    chatID,
-		"text":       escapeHTML(text),
-		"parse_mode": "HTML",
-	})
-	return err
+	return nil
 }
 
-// SendMessageWithKeyboard sends a text message with an inline keyboard.
+// SendMessageWithKeyboard sends a text message with an inline keyboard. Not
+// chunked (a keyboard belongs to exactly one message), so long text is
+// safety-truncated after escaping rather than before — escaping first and
+// truncating the escaped string means entity expansion can never push the
+// payload past Telegram's real limit.
 func (c *Client) SendMessageWithKeyboard(chatID int64, text string, keyboard InlineKeyboardMarkup) error {
-	if len(text) > 4000 {
-		text = text[:3997] + "..."
-	}
 	_, err := c.post("sendMessage", map[string]any{
 		"chat_id":      chatID,
-		"text":         escapeHTML(text),
+		"text":         escapeAndCapForTelegram(text),
 		"parse_mode":   "HTML",
 		"reply_markup": keyboard,
 	})
@@ -110,13 +127,10 @@ func (c *Client) AnswerCallbackQuery(callbackQueryID string, text string) error 
 
 // EditMessageText replaces the text and optionally keyboard of an existing message.
 func (c *Client) EditMessageText(chatID int64, messageID int64, text string, keyboard *InlineKeyboardMarkup) error {
-	if len(text) > 4000 {
-		text = text[:3997] + "..."
-	}
 	payload := map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
-		"text":       escapeHTML(text),
+		"text":       escapeAndCapForTelegram(text),
 		"parse_mode": "HTML",
 	}
 	if keyboard != nil {
@@ -306,6 +320,84 @@ func escapeHTML(text string) string {
 	r = bytes.ReplaceAll(r, []byte("<"), []byte("&lt;"))
 	r = bytes.ReplaceAll(r, []byte(">"), []byte("&gt;"))
 	return string(r)
+}
+
+// escapeAndCapForTelegram escapes HTML first, THEN caps the result to
+// Telegram's real limit. Escaping expands &, <, > by 3-4 bytes each, so
+// truncating the raw text first (as this used to do) could push an
+// already-near-limit message over 4096 after escaping, causing Telegram to
+// reject the send outright instead of merely truncating it.
+func escapeAndCapForTelegram(text string) string {
+	escaped := escapeHTML(text)
+	if len(escaped) <= telegramHardLimit {
+		return escaped
+	}
+	return safeTruncateBytes(escaped, telegramHardLimit-3) + "..."
+}
+
+// safeTruncateBytes truncates to at most maxBytes without splitting a
+// multi-byte UTF-8 rune (Dutch text has €/é/ë, plus emoji). A naive check
+// for "is this byte a rune-start byte" is NOT sufficient here — a lead byte
+// with its continuation byte(s) cut off still passes that check while
+// leaving an invalid dangling sequence; DecodeLastRuneInString correctly
+// detects an incomplete trailing sequence via (RuneError, size==1).
+func safeTruncateBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	b := s[:maxBytes]
+	for len(b) > 0 {
+		r, size := utf8.DecodeLastRuneInString(b)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+// splitForTelegram splits text into rune-safe chunks around telegramChunkTarget
+// runes, preferring to break at the last newline within the window so a
+// chunk doesn't cut off mid-sentence any more than necessary. Leading/
+// trailing blank lines at a break point are trimmed.
+func splitForTelegram(text string) []string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+	if len(runes) <= telegramChunkTarget {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(runes) > telegramChunkTarget {
+		window := runes[:telegramChunkTarget]
+		breakAt := lastIndexRune(window, '\n')
+		if breakAt < telegramChunkTarget/2 {
+			breakAt = telegramChunkTarget // no good boundary nearby — hard (but rune-safe) cut
+		}
+		chunk := strings.TrimRight(string(runes[:breakAt]), "\n")
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = []rune(strings.TrimLeft(string(runes[breakAt:]), "\n"))
+	}
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+	if len(chunks) == 0 {
+		chunks = append(chunks, "")
+	}
+	return chunks
+}
+
+func lastIndexRune(runes []rune, target rune) int {
+	for i := len(runes) - 1; i >= 0; i-- {
+		if runes[i] == target {
+			return i
+		}
+	}
+	return -1
 }
 
 func mustReq(method, url string, body []byte) *http.Request {

@@ -273,6 +273,32 @@ func TestParseNoteCaptureEnrichesTelegramNote(t *testing.T) {
 	}
 }
 
+func TestClassifyUserFacingErrorMapsToDutch(t *testing.T) {
+	cases := map[string]string{
+		"context deadline exceeded":                     "De AI reageerde niet op tijd. Probeer het nog eens.",
+		"Grok 429: rate limit exceeded":                  "Te veel aanvragen bij de AI. Wacht even en probeer het opnieuw.",
+		"request error: dial tcp: i/o timeout":           "De AI reageerde niet op tijd. Probeer het nog eens.",
+		"parse error: unexpected end of JSON input":      "Onverwacht antwoord van de AI-server. Probeer het opnieuw.",
+		"some totally unrecognized go internal error :(": "Er ging iets mis bij het verwerken van je bericht. Probeer het opnieuw.",
+	}
+	for raw, want := range cases {
+		if got := classifyUserFacingError(raw); got != want {
+			t.Errorf("classifyUserFacingError(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestClassifyUserFacingErrorPassesThroughFriendlyDutchMessages(t *testing.T) {
+	friendly := "De AI server is tijdelijk onbereikbaar wegens overbelasting. Probeer het later opnieuw."
+	if got := classifyUserFacingError(friendly); got != friendly {
+		t.Errorf("expected friendly Dutch message to pass through unchanged, got %q", got)
+	}
+	configMsg := "GROK_API_KEY niet geconfigureerd"
+	if got := classifyUserFacingError(configMsg); got != configMsg {
+		t.Errorf("expected config message to pass through unchanged, got %q", got)
+	}
+}
+
 func TestParseOptionalNoteDeadline(t *testing.T) {
 	parsed, err := parseOptionalNoteDeadline("05-06-2026 11:45")
 	if err != nil {

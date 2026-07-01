@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -218,13 +220,40 @@ func boolifyToolArg(value any) any {
 
 func (e *HomeBotExecutor) jsonResponse(data any, err error) string {
 	if err != nil {
-		return fmt.Sprintf(`{"error": "Database fout: %v"}`, err)
+		b, _ := json.Marshal(map[string]string{"error": classifyStoreError(err)})
+		return string(b)
 	}
 	if data == nil {
 		return `{"error": "Niet gevonden"}`
 	}
 	b, _ := json.Marshal(data)
 	return string(b)
+}
+
+// classifyStoreError maps common pgx/Postgres error classes to short, Dutch,
+// user-safe messages instead of leaking raw driver/SQLSTATE text (e.g.
+// "ERROR: duplicate key value violates unique constraint ...") into a tool
+// result the model has no grounded way to explain sensibly to the user.
+// Unrecognized errors are logged server-side and given a generic fallback.
+func classifyStoreError(err error) string {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "Niet gevonden."
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation
+			return "Dit bestaat al (dubbele waarde)."
+		case "23503": // foreign_key_violation
+			return "Verwijst naar iets dat niet (meer) bestaat."
+		case "23502": // not_null_violation
+			return "Een verplicht veld ontbreekt."
+		case "22P02": // invalid_text_representation
+			return "Ongeldige waarde meegegeven."
+		}
+	}
+	slog.Warn("store error", "error", err)
+	return "Er ging iets mis bij het opslaan/ophalen. Probeer het opnieuw."
 }
 
 func (e *HomeBotExecutor) resolveHabit(ctx context.Context, idValue, nameValue string) (model.Habit, error) {
@@ -257,12 +286,105 @@ func (e *HomeBotExecutor) resolveHabit(ctx context.Context, idValue, nameValue s
 			return habit, nil
 		}
 	}
+	// Fuzzy fallback: collect ALL substring matches rather than returning the
+	// first one found. A silent first-match pick against e.g. "Water drinken"
+	// vs "Water drinken avond" would log completion/incident/note against the
+	// wrong habit with no indication a different one than intended was hit —
+	// and habitVoltooien/habitIncident are not confirmation-gated, so this
+	// writes immediately.
+	var matches []model.Habit
 	for _, habit := range habits {
 		if strings.Contains(strings.ToLower(habit.Naam), needle) {
-			return habit, nil
+			matches = append(matches, habit)
 		}
 	}
-	return model.Habit{}, fmt.Errorf("habit niet gevonden: %s", needle)
+	switch len(matches) {
+	case 0:
+		return model.Habit{}, fmt.Errorf("habit niet gevonden: %s", needle)
+	case 1:
+		return matches[0], nil
+	default:
+		names := make([]string, len(matches))
+		for i, m := range matches {
+			names[i] = m.Naam
+		}
+		return model.Habit{}, fmt.Errorf("meerdere habits gevonden voor '%s': %s — wees specifieker of geef het id op", needle, strings.Join(names, ", "))
+	}
+}
+
+// findDienstConflict checks whether a personal-event time range overlaps any
+// work shift, returning a short Dutch description of the first conflict
+// found, or "" if there's none (or there isn't enough time info to compare —
+// e.g. an all-day event or a missing time). Best-effort: returns "" on any
+// lookup/parse failure rather than blocking the appointment, since a missed
+// warning is far better than a broken afspraakMaken/afspraakBewerken call.
+func findDienstConflict(ctx context.Context, scheduleStore *store.ScheduleStore, userID, startDatum, startTijd, eindDatum, eindTijd string, heledag bool) string {
+	startDatum = strings.TrimSpace(startDatum)
+	startTijd = strings.TrimSpace(startTijd)
+	if heledag || startDatum == "" || startTijd == "" {
+		return ""
+	}
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		loc = time.UTC
+	}
+	eventStart, err := time.ParseInLocation("2006-01-02 15:04", startDatum+" "+startTijd, loc)
+	if err != nil {
+		return ""
+	}
+	eindDatum = strings.TrimSpace(eindDatum)
+	if eindDatum == "" {
+		eindDatum = startDatum
+	}
+	eindTijd = strings.TrimSpace(eindTijd)
+	if eindTijd == "" {
+		eindTijd = "23:59"
+	}
+	eventEnd, err := time.ParseInLocation("2006-01-02 15:04", eindDatum+" "+eindTijd, loc)
+	if err != nil {
+		return ""
+	}
+	if !eventEnd.After(eventStart) {
+		eventEnd = eventEnd.AddDate(0, 0, 1) // crosses midnight
+	}
+
+	// Widen the lookup a day either side to also catch overnight shifts that
+	// start the day before (or run into) the event's date.
+	lookupFrom := eventStart.AddDate(0, 0, -1).Format("2006-01-02")
+	lookupTo := eventEnd.AddDate(0, 0, 1).Format("2006-01-02")
+	diensten, err := scheduleStore.ListRange(ctx, userID, lookupFrom, lookupTo)
+	if err != nil {
+		return ""
+	}
+
+	for _, d := range visibleSchedules(diensten) {
+		if d.Heledag || strings.TrimSpace(d.StartTijd) == "" {
+			continue
+		}
+		dStart, err := time.ParseInLocation("2006-01-02 15:04", d.StartDatum+" "+d.StartTijd, loc)
+		if err != nil {
+			continue
+		}
+		dEindDatum := d.EindDatum
+		if dEindDatum == "" {
+			dEindDatum = d.StartDatum
+		}
+		dEindTijd := d.EindTijd
+		if dEindTijd == "" {
+			dEindTijd = "23:59"
+		}
+		dEnd, err := time.ParseInLocation("2006-01-02 15:04", dEindDatum+" "+dEindTijd, loc)
+		if err != nil {
+			continue
+		}
+		if !dEnd.After(dStart) {
+			dEnd = dEnd.AddDate(0, 0, 1)
+		}
+		if eventStart.Before(dEnd) && dStart.Before(eventEnd) {
+			return fmt.Sprintf("Overlapt met dienst %s-%s (%s)", d.StartTijd, d.EindTijd, d.StartDatum)
+		}
+	}
+	return ""
 }
 
 func optionalStringPtr(value string) *string {
@@ -2002,18 +2124,31 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if len(args.IDs) > 20 {
 			args.IDs = args.IDs[:20]
 		}
+		// Continue on a per-id failure instead of aborting: each UpdateForUser
+		// is its own statement (not a shared transaction), so an early return
+		// on a mid-list bad id previously discarded earlier successful
+		// archives from the response — the user saw a bare error and
+		// reasonably assumed nothing happened, when in fact it had.
 		archived := 0
+		var failed []string
 		for _, rawID := range args.IDs {
-			id, err := uuid.Parse(strings.TrimSpace(rawID))
+			rawID = strings.TrimSpace(rawID)
+			id, err := uuid.Parse(rawID)
 			if err != nil {
-				return e.jsonResponse(nil, fmt.Errorf("ongeldig notitie-id: %s", rawID))
+				failed = append(failed, rawID)
+				continue
 			}
 			if _, err := e.noteStore.UpdateForUser(ctx, e.userID, id, map[string]any{"is_archived": true}); err != nil {
-				return e.jsonResponse(nil, err)
+				failed = append(failed, rawID)
+				continue
 			}
 			archived++
 		}
-		return e.jsonResponse(map[string]any{"ok": true, "archived": archived}, nil)
+		return e.jsonResponse(map[string]any{
+			"ok":       len(failed) == 0,
+			"archived": archived,
+			"failed":   failed,
+		}, nil)
 
 	case "notitiesVandaag":
 		notes, err := e.noteStore.List(ctx, e.userID)
@@ -2186,15 +2321,22 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			event.StartTijd = nil
 			event.EindTijd = nil
 		}
+		if conflict := findDienstConflict(ctx, e.scheduleStore, e.userID, event.StartDatum, optionalPtrValue(event.StartTijd), event.EindDatum, optionalPtrValue(event.EindTijd), event.Heledag); conflict != "" {
+			event.ConflictMetDienst = &conflict
+		}
 		if err := e.personalEvStore.Upsert(ctx, event); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		return e.jsonResponse(map[string]any{
+		resp := map[string]any{
 			"ok":      true,
 			"eventId": eventID,
 			"status":  store.PersonalEventStatusPendingCreate,
 			"message": "Afspraak staat klaar voor Google Calendar sync.",
-		}, nil)
+		}
+		if event.ConflictMetDienst != nil {
+			resp["conflictWaarschuwing"] = *event.ConflictMetDienst
+		}
+		return e.jsonResponse(resp, nil)
 
 	case "afspraakBewerken":
 		var args struct {
@@ -2291,15 +2433,24 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			event.BusinessContextTitle = optionalStringPtr(businessContextTitle)
 		}
 		event.Status = store.PersonalEventStatusPendingUpdate
+		if conflict := findDienstConflict(ctx, e.scheduleStore, e.userID, event.StartDatum, optionalPtrValue(event.StartTijd), event.EindDatum, optionalPtrValue(event.EindTijd), event.Heledag); conflict != "" {
+			event.ConflictMetDienst = &conflict
+		} else {
+			event.ConflictMetDienst = nil
+		}
 		if err := e.personalEvStore.Upsert(ctx, event); err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		return e.jsonResponse(map[string]any{
+		resp := map[string]any{
 			"ok":      true,
 			"eventId": event.EventID,
 			"status":  store.PersonalEventStatusPendingUpdate,
 			"message": "Afspraakwijziging staat klaar voor Google Calendar sync.",
-		}, nil)
+		}
+		if event.ConflictMetDienst != nil {
+			resp["conflictWaarschuwing"] = *event.ConflictMetDienst
+		}
+		return e.jsonResponse(resp, nil)
 
 	case "afspraakVerwijderen":
 		var args struct {
@@ -3378,7 +3529,57 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	// ── SMART HOME ───────────────────────────────────────────────────
 	case "lampBedien":
-		return `{"status": "Geef de actie direct door via de chat, bijv: 'lampen uit' of 'scene ocean'. De bot pikt dit automatisch op voor het AI verzoek."}`
+		var args struct {
+			Actie   string   `json:"actie"`
+			Dimming *float64 `json:"dimming"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		actie := strings.ToLower(strings.TrimSpace(args.Actie))
+		if actie == "" {
+			return e.jsonResponse(nil, fmt.Errorf("actie is verplicht"))
+		}
+
+		var command map[string]any
+		switch actie {
+		case "aan", "on":
+			command = map[string]any{"on": true}
+		case "uit", "off":
+			command = map[string]any{"on": false}
+		default:
+			sceneDef, ok := SceneDefinitions[actie]
+			if !ok {
+				return e.jsonResponse(nil, fmt.Errorf("onbekende actie/scene '%s'. Bekende scenes: %s", actie, strings.Join(knownSceneKeys(), ", ")))
+			}
+			command = commandFromStateOpts(sceneDef)
+		}
+		if args.Dimming != nil {
+			dimming := int(*args.Dimming)
+			if dimming < 10 {
+				dimming = 10
+			}
+			if dimming > 100 {
+				dimming = 100
+			}
+			command["on"] = true
+			command["brightness"] = dimming
+		}
+
+		raw, err := json.Marshal(command)
+		if err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		// deviceID=nil enqueues a broadcast command (all devices), same
+		// convention used by the direct-text lamp interceptor.
+		if _, err := store.NewDeviceCommandStore(&store.DB{Pool: e.pool}).Create(ctx, e.userID, nil, raw); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		return e.jsonResponse(map[string]any{
+			"ok":      true,
+			"actie":   actie,
+			"message": "Lampopdracht in de wachtrij gezet voor alle lampen.",
+		}, nil)
 
 	default:
 		return fmt.Sprintf(`{"error": "Tool '%s' niet geïmplementeerd in Go."}`, toolName)

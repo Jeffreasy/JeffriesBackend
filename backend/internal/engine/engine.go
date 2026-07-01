@@ -92,6 +92,31 @@ type Engine struct {
 	// condition (e.g. Google invalid_grant) does not notify every cron tick.
 	alertMu      sync.Mutex
 	alertFiredAt map[string]time.Time
+
+	// chatLocks serializes ProcessAIPrompt per Telegram chat ID, so concurrent
+	// updates for the same chat (rapid follow-up messages, or a message
+	// arriving while the cron briefing is still running) can never race on
+	// chat-history reads/writes or send replies out of order.
+	chatMu    sync.Mutex
+	chatLocks map[int64]*sync.Mutex
+}
+
+// lockChat acquires the per-chat mutex for chatID (creating it on first use)
+// and returns the unlock function.
+func (e *Engine) lockChat(chatID int64) func() {
+	e.chatMu.Lock()
+	if e.chatLocks == nil {
+		e.chatLocks = make(map[int64]*sync.Mutex)
+	}
+	mu, ok := e.chatLocks[chatID]
+	if !ok {
+		mu = &sync.Mutex{}
+		e.chatLocks[chatID] = mu
+	}
+	e.chatMu.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
 }
 
 // shouldFireAlert reports whether an alert keyed by `key` may fire now, given it

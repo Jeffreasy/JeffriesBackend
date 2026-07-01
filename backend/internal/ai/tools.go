@@ -1439,13 +1439,13 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "lampBedien",
-			Description: "Bedient de smart home lampen.",
+			Description: "Bedient alle smart home lampen tegelijk (aan/uit/scene). Voor losse kamers/lampen is er nog geen tool — meld dat expliciet als de gebruiker dat vraagt.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"actie": {
 						"type": "string",
-						"description": "aan, uit, of een scene (bijv. ocean, romance)."
+						"description": "aan, uit, of een scene: helder, avond, nacht, film, focus, ochtend."
 					},
 					"dimming": {
 						"type": "number",

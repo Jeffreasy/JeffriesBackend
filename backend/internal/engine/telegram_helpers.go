@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -21,6 +22,42 @@ var (
 
 func telegramLocation() *time.Location {
 	return amsterdamLocation()
+}
+
+// classifyUserFacingError maps common technical error text (timeouts,
+// network failures, malformed API responses) into short, actionable Dutch
+// messages instead of forwarding a raw Go/API error string straight into a
+// Telegram reply — a bot that otherwise speaks fluent, friendly Dutch
+// breaking character with e.g. "parse error: unexpected EOF" right when the
+// user most needs reassurance undermines trust in the whole assistant. The
+// original text is always logged server-side so nothing is lost for
+// debugging.
+func classifyUserFacingError(raw string) string {
+	lower := strings.ToLower(raw)
+
+	// Already a friendly, actionable Dutch message (circuit-breaker-open or
+	// missing-config messages built elsewhere) — pass through unchanged.
+	if strings.Contains(lower, "tijdelijk onbereikbaar") || strings.Contains(lower, "niet geconfigureerd") {
+		return raw
+	}
+
+	var dutch string
+	switch {
+	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout"):
+		dutch = "De AI reageerde niet op tijd. Probeer het nog eens."
+	case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit"):
+		dutch = "Te veel aanvragen bij de AI. Wacht even en probeer het opnieuw."
+	case strings.Contains(lower, "dial tcp") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") || strings.Contains(lower, "network"):
+		dutch = "Kon geen verbinding maken met de AI-server. Probeer het zo nog eens."
+	case strings.Contains(lower, "parse error") || strings.Contains(lower, "marshal error"):
+		dutch = "Onverwacht antwoord van de AI-server. Probeer het opnieuw."
+	case strings.Contains(lower, "download") || strings.Contains(lower, "getfile") || strings.Contains(lower, "transcri"):
+		dutch = "Kon je spraakbericht niet verwerken. Probeer het opnieuw of typ je bericht."
+	default:
+		dutch = "Er ging iets mis bij het verwerken van je bericht. Probeer het opnieuw."
+	}
+	slog.Warn("AI/telegram error shown to user", "raw", raw, "shown", dutch)
+	return dutch
 }
 
 func dutchMonthName(m time.Month) string {

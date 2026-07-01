@@ -1,6 +1,10 @@
 package engine
 
-import "github.com/Jeffreasy/JeffriesBackend/internal/wiz"
+import (
+	"sort"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/wiz"
+)
 
 // SceneDefinitions maps scene keys to WiZ state options.
 // Mirrors lib/automations.ts SCENE_DEFINITIONS from the frontend.
@@ -11,6 +15,15 @@ var SceneDefinitions = map[string]wiz.StateOpts{
 	"film":    withOnBrightRGB(30, 100, 0, 180),
 	"focus":   withOnBrightTemp(90, miredsToKelvin(165)),
 	"ochtend": withOnBrightTemp(40, miredsToKelvin(400)),
+}
+
+func knownSceneKeys() []string {
+	keys := make([]string, 0, len(SceneDefinitions))
+	for k := range SceneDefinitions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func miredsToKelvin(m int) int {

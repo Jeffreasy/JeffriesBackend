@@ -624,10 +624,9 @@ func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) e
 		// 3. Trigger Grok AI to generate the briefing
 		briefingQuery := "Geef mij een compacte dagbriefing voor vandaag. Combineer planning, werkrooster, afspraken, notities, habits, email, lampen en systeemstatus. Sluit af met maximaal drie concrete aandachtspunten."
 
-		// Save the user intent message in history first to keep context clean
-		chatStore := store.NewChatStore(e.db.Pool)
-		_ = chatStore.SaveMessage(ctx, chatID, "user", briefingQuery, nil)
-
+		// ProcessAIPrompt persists the user turn itself (after loading prior
+		// history) and serializes per chat, so it's safe even if a live
+		// Telegram message arrives while this briefing is mid-flight.
 		_, err = e.ProcessAIPrompt(ctx, chatID, briefingQuery, "brain", false)
 		if err != nil {
 			// Release the day's claim so a later tick can retry today.
