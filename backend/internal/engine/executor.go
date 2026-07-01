@@ -2458,7 +2458,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			event.BusinessContextID = optionalStringPtr(businessContextID)
 			event.BusinessContextTitle = optionalStringPtr(businessContextTitle)
 		}
-		event.Status = store.PersonalEventStatusPendingUpdate
+		if event.Status != store.PersonalEventStatusPendingCreate {
+			event.Status = store.PersonalEventStatusPendingUpdate
+		}
 		if conflict := findDienstConflict(ctx, e.scheduleStore, e.userID, event.StartDatum, optionalPtrValue(event.StartTijd), event.EindDatum, optionalPtrValue(event.EindTijd), event.Heledag); conflict != "" {
 			event.ConflictMetDienst = &conflict
 		} else {
@@ -2595,7 +2597,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
-		log, err := e.habitStore.UpsertLog(ctx, model.HabitLog{
+		// UpsertIncident preserves an existing completion on the same day (R2) —
+		// the generic UpsertLog would overwrite voltooid/waarde/xp with zeroes.
+		log, err := e.habitStore.UpsertIncident(ctx, model.HabitLog{
 			UserID:     e.userID,
 			HabitID:    habit.ID,
 			Datum:      todayAmsterdamISO(),
@@ -2635,7 +2639,14 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		}
 		logInput.Notitie = optionalStringPtr(args.Notitie)
 		logInput.Bron = "telegram"
-		log, err := e.habitStore.UpsertLog(ctx, logInput)
+		// An incident row must go through the incident upsert so a completion on
+		// the same day is preserved (UpsertLog would flatten voltooid/xp to 0).
+		var log model.HabitLog
+		if logInput.IsIncident {
+			log, err = e.habitStore.UpsertIncident(ctx, logInput)
+		} else {
+			log, err = e.habitStore.UpsertLog(ctx, logInput)
+		}
 		return e.jsonResponse(map[string]any{"ok": true, "scope": "habit lognotitie", "habit": habitSummary(habit), "log": log}, err)
 
 	case "habitsOverzicht":
@@ -2975,10 +2986,41 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			}, nil)
 		}
 
-		request, err := createBunqPaymentRequestForInvoice(ctx, invoice)
+		monetaryAccountID, err := requiredEnvInt("BUNQ_MONETARY_ACCOUNT_ID")
 		if err != nil {
 			return e.jsonResponse(nil, err)
 		}
+		userID, _ := optionalEnvInt("BUNQ_USER_ID")
+		cfg := bunq.Config{
+			Environment:       envOrDefault("BUNQ_ENVIRONMENT", "sandbox"),
+			APIKey:            strings.TrimSpace(os.Getenv("BUNQ_API_KEY")),
+			DeviceDescription: envOrDefault("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
+		}
+		requests, err := bunq.ListPaymentRequests(ctx, cfg, userID, monetaryAccountID)
+		if err != nil {
+			return e.jsonResponse(nil, fmt.Errorf("bunq betaalverzoeken ophalen mislukt: %w", err))
+		}
+		var existingReq *bunq.PaymentRequest
+		for _, req := range requests {
+			if req.MerchantReference != nil && strings.TrimSpace(*req.MerchantReference) == invoice.InvoiceNumber {
+				existingReq = &req
+				break
+			}
+		}
+
+		var request *bunq.PaymentRequest
+		var message string
+		if existingReq != nil {
+			request = existingReq
+			message = "Bestaand bunq betaalverzoek gevonden en gekoppeld."
+		} else {
+			request, err = createBunqPaymentRequestForInvoice(ctx, invoice)
+			if err != nil {
+				return e.jsonResponse(nil, err)
+			}
+			message = "Bunq betaalverzoek aangemaakt en factuur gemarkeerd als verstuurd."
+		}
+
 		providerID := strconv.Itoa(request.ID)
 		paymentProvider := "bunq"
 		merchantReference := invoice.InvoiceNumber
@@ -3005,8 +3047,9 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"ok":             true,
 			"invoice":        updated,
 			"paymentRequest": request,
-			"message":        "Bunq betaalverzoek aangemaakt en factuur gemarkeerd als verstuurd.",
+			"message":        message,
 		}, nil)
+
 
 	case "laventecareKlantMaken":
 		var args model.LCCompanyCreate

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
 
 // maxCodeGenerationAttempts bounds the collision-retry loop in Create. Codes
 // are 6 hex chars (16.7M possibilities) scoped to a single user's pending
@@ -61,7 +63,9 @@ func NewPendingStore(pool *pgxpool.Pool) *PendingStore {
 // idx_ai_pending_user_code_pending), so a collision is retried with a fresh
 // code rather than surfaced as an error.
 func (s *PendingStore) Create(ctx context.Context, userID, agentID, toolName, argsJSON, summary string) (*PendingAction, error) {
+	argsJSON = normalizeJSON(argsJSON)
 	expiresAt := time.Now().Add(10 * time.Minute)
+
 
 	for attempt := 0; attempt < maxCodeGenerationAttempts; attempt++ {
 		code := generateCode()
@@ -118,8 +122,10 @@ func (s *PendingStore) ListPending(ctx context.Context, userID string) ([]Pendin
 
 // FindPendingByToolArgs returns an existing pending action for the same tool call.
 func (s *PendingStore) FindPendingByToolArgs(ctx context.Context, userID, toolName, argsJSON string) (*PendingAction, error) {
+	argsJSON = normalizeJSON(argsJSON)
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
+
 		`SELECT id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at
 		 FROM ai_pending_actions
 		 WHERE user_id = $1 AND tool_name = $2 AND args_json = $3 AND status = 'pending' AND expires_at > now()
@@ -240,3 +246,16 @@ func generateCode() string {
 	rand.Read(b)
 	return strings.ToUpper(hex.EncodeToString(b))
 }
+
+func normalizeJSON(js string) string {
+	var val any
+	if err := json.Unmarshal([]byte(js), &val); err != nil {
+		return js
+	}
+	normalized, err := json.Marshal(val)
+	if err != nil {
+		return js
+	}
+	return string(normalized)
+}
+

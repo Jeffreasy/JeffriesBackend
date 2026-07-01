@@ -10,6 +10,9 @@ import "context"
 // created by the ensureLaventeCare* functions, not here.
 func ensureBaseTables(ctx context.Context, db *DB) error {
 	_, err := db.Pool.Exec(ctx, `
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
 CREATE TABLE IF NOT EXISTS rooms (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(100) NOT NULL,
@@ -432,6 +435,38 @@ WHERE a.status = 'pending'
   );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_pending_user_code_pending ON ai_pending_actions (user_id, code) WHERE status = 'pending';
+
+-- Basic table performance indexes
+CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices (ip_address);
+CREATE INDEX IF NOT EXISTS idx_device_events_time ON device_events (time);
+CREATE INDEX IF NOT EXISTS idx_device_events_device ON device_events (device_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_user_date ON schedule (user_id, start_datum);
+CREATE INDEX IF NOT EXISTS idx_trx_user_datum ON transactions (user_id, datum);
+CREATE INDEX IF NOT EXISTS idx_trx_user_cat ON transactions (user_id, categorie);
+CREATE INDEX IF NOT EXISTS idx_pe_user_date ON personal_events (user_id, start_datum);
+CREATE INDEX IF NOT EXISTS idx_audit_user_created ON audit_logs (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_emails_user ON emails (user_id);
+CREATE INDEX IF NOT EXISTS idx_emails_user_datum ON emails (user_id, datum DESC);
+CREATE INDEX IF NOT EXISTS idx_emails_user_thread ON emails (user_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_emails_user_gelezen ON emails (user_id, is_gelezen);
+CREATE INDEX IF NOT EXISTS idx_emails_user_categorie ON emails (user_id, categorie);
+CREATE INDEX IF NOT EXISTS idx_emails_user_verwijderd ON emails (user_id, is_verwijderd);
+CREATE INDEX IF NOT EXISTS idx_emails_search ON emails USING GIN (to_tsvector('dutch', search_text));
+CREATE INDEX IF NOT EXISTS idx_notes_user ON notes (user_id);
+CREATE INDEX IF NOT EXISTS idx_notes_user_pinned ON notes (user_id, is_pinned) WHERE NOT is_archived;
+CREATE INDEX IF NOT EXISTS idx_notes_user_deadline ON notes (user_id, deadline) WHERE deadline IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notes_search ON notes USING GIN (to_tsvector('dutch', COALESCE(titel, '') || ' ' || inhoud));
+CREATE INDEX IF NOT EXISTS idx_note_links_source ON note_links (source_id);
+CREATE INDEX IF NOT EXISTS idx_note_links_target ON note_links (target_id);
+CREATE INDEX IF NOT EXISTS idx_habits_user ON habits (user_id);
+CREATE INDEX IF NOT EXISTS idx_habits_user_actief ON habits (user_id, is_actief);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_user ON habit_logs (user_id);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_habit ON habit_logs (habit_id);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_datum ON habit_logs (habit_id, datum);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_user_datum ON habit_logs (user_id, datum);
+CREATE INDEX IF NOT EXISTS idx_habit_badges_user ON habit_badges (user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages (chat_id, created_at DESC);
 `)
 	return err
+
 }

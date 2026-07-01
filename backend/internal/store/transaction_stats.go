@@ -68,7 +68,12 @@ type TopMerchant struct {
 
 // GetFullStats returns the complete finance dashboard statistics,
 // replicating the Convex getStats query with full aggregation.
-func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, ibanFilter, jaarFilter *string) (*TransactionStats, error) {
+// datumVan/datumTot (YYYY-MM-DD, optional) constrain every aggregation that is
+// computed over the filtered transaction set — so the stats finally match the
+// period the list view shows ("huidige selectie"). The point-in-time balance
+// fields (huidigSaldo etc.) and the jaren/ibannen index lists intentionally
+// stay unfiltered.
+func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, ibanFilter, jaarFilter, datumVan, datumTot *string) (*TransactionStats, error) {
 	// Load all transactions once
 	allTxs, err := s.List(ctx, userID, nil, nil)
 	if err != nil {
@@ -128,6 +133,15 @@ func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, iban
 	// Filter on year if set
 	if jaarFilter != nil && *jaarFilter != "" {
 		txs = filterByJaar(txs, *jaarFilter)
+	}
+
+	// Optional explicit date range (YYYY-MM-DD) — constrains all aggregations
+	// below, matching the period filter of the transaction list.
+	if datumVan != nil && *datumVan != "" {
+		txs = filterFromDate(txs, *datumVan)
+	}
+	if datumTot != nil && *datumTot != "" {
+		txs = filterToDate(txs, *datumTot)
 	}
 	stats.AantalTxs = len(txs)
 
@@ -301,6 +315,26 @@ func filterByJaar(txs []model.Transaction, jaar string) []model.Transaction {
 	var out []model.Transaction
 	for _, t := range txs {
 		if len(t.Datum) >= 4 && t.Datum[:4] == jaar {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func filterFromDate(txs []model.Transaction, from string) []model.Transaction {
+	var out []model.Transaction
+	for _, t := range txs {
+		if t.Datum >= from {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func filterToDate(txs []model.Transaction, to string) []model.Transaction {
+	var out []model.Transaction
+	for _, t := range txs {
+		if t.Datum <= to {
 			out = append(out, t)
 		}
 	}

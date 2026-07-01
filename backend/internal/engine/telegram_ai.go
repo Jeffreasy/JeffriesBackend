@@ -421,7 +421,7 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 	if grokKey == "" {
 		err := fmt.Errorf("GROK_API_KEY niet geconfigureerd")
 		reply := "❌ " + classifyUserFacingError(err.Error())
-		_ = client.SendMessage(chatID, reply)
+		sendErrorReply(client, chatID, reply)
 		_ = chatStore.SaveMessage(ctx, chatID, "user", text, nil)
 		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
 		return "", err
@@ -453,11 +453,15 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 		var reply string
 		if result.OK && result.Antwoord != "" {
 			reply = normalizeAssistantText(result.Antwoord)
+			_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+			_ = client.SendMessage(chatID, reply)
 		} else {
 			reply = "❌ " + classifyUserFacingError(result.Error)
+			_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+			// Error replies keep a menu escape so a failed button-tap command
+			// (briefing/planning/...) is never a dead end (T2).
+			sendErrorReply(client, chatID, reply)
 		}
-		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
-		_ = client.SendMessage(chatID, reply)
 		return reply, nil
 	}
 
@@ -476,12 +480,15 @@ func (e *Engine) ProcessAIPrompt(ctx context.Context, chatID int64, text string,
 	var reply string
 	if result.OK && result.Antwoord != "" {
 		reply = normalizeAssistantText(result.Antwoord)
+		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+		_ = client.SendMessage(chatID, reply)
 	} else {
 		reply = "❌ " + classifyUserFacingError(result.Error)
+		_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
+		// Error replies keep a menu escape so a failed button-tap command is
+		// never a dead end (T2).
+		sendErrorReply(client, chatID, reply)
 	}
-
-	_ = chatStore.SaveMessage(ctx, chatID, "assistant", reply, &agentID)
-	_ = client.SendMessage(chatID, reply)
 
 	return reply, nil
 }

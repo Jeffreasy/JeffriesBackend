@@ -105,9 +105,12 @@ func RateLimiter(trustedHops int) func(http.Handler) http.Handler {
 			limiter := getClient(key, limit, burst)
 			if !limiter.Allow() {
 				slog.Warn("Rate limit exceeded", "ip", ip, "path", r.URL.Path)
+				// Standard error envelope ({"detail": ...}, Dutch) + Retry-After so
+				// clients can back off instead of parsing a one-off shape.
 				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"Too Many Requests"}`))
+				_, _ = w.Write([]byte(`{"detail":"Te veel verzoeken — probeer het over een paar seconden opnieuw."}`))
 				return
 			}
 

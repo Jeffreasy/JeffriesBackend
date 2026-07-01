@@ -31,7 +31,7 @@ func (h *LoonstrookHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.store.List(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, list)
@@ -67,7 +67,7 @@ func (h *LoonstrookHandler) Import(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.UseNumber()
 	if err := decoder.Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if body.UserID == "" || len(body.Items) == 0 {
@@ -76,7 +76,7 @@ func (h *LoonstrookHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 	inserted, err := h.store.ImportBatch(r.Context(), body.UserID, body.Items)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"ok": true, "inserted": inserted, "total": len(body.Items)})

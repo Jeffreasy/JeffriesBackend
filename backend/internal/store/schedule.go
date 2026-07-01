@@ -159,6 +159,29 @@ func (s *ScheduleStore) PruneMissingInDateRange(ctx context.Context, userID, sta
 	return int(tag.RowsAffected()), nil
 }
 
+// DeleteAll removes every schedule row for a user, plus the import metadata so
+// the UI's "geïmporteerd" state resets with it. Backs the "Rooster wissen"
+// action — the only way to get a wrongly imported dienst out of the system.
+func (s *ScheduleStore) DeleteAll(ctx context.Context, userID string) (int, error) {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `DELETE FROM schedule WHERE user_id = $1`, userID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM schedule_meta WHERE user_id = $1`, userID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // GetMeta returns the schedule import metadata for a user.
 func (s *ScheduleStore) GetMeta(ctx context.Context, userID string) (*model.ScheduleMeta, error) {
 	var m model.ScheduleMeta

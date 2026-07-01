@@ -106,13 +106,16 @@ func (s *DeviceCommandStore) MarkDone(ctx context.Context, id uuid.UUID, status 
 
 // RequeueOrFail increments the attempt counter and either requeues the command
 // to 'pending' for another try, or marks it 'failed' once maxAttempts is reached.
-// Returns whether the command was requeued. Use for transient send failures so a
-// one-off LAN/bridge blip does not become a permanent failure.
-func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, maxAttempts int) (bool, error) {
+// Returns whether the command was requeued plus the target device id (nil for
+// broadcast commands), so a terminal failure can flip that device offline. Use
+// for transient send failures so a one-off LAN/bridge blip does not become a
+// permanent failure.
+func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, maxAttempts int) (bool, *uuid.UUID, error) {
 	if maxAttempts < 1 {
 		maxAttempts = 3
 	}
 	var requeued bool
+	var deviceID *uuid.UUID
 	err := s.db.Pool.QueryRow(ctx,
 		`UPDATE device_commands
 		    SET attempts = attempts + 1,
@@ -122,13 +125,13 @@ func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, ma
 		        updated_at = now()
 		  WHERE id = $1
 		    AND status IN ('pending', 'processing')
-		  RETURNING (status = 'pending')`,
+		  RETURNING (status = 'pending'), device_id`,
 		id, maxAttempts,
-	).Scan(&requeued)
+	).Scan(&requeued, &deviceID)
 	if err == pgx.ErrNoRows {
-		return false, nil
+		return false, nil, nil
 	}
-	return requeued, err
+	return requeued, deviceID, err
 }
 
 // TouchBridge bumps the bridge liveness heartbeat. Called on every authenticated

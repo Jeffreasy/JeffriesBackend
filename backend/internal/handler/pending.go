@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ func (h *PendingActionHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	actions, err := h.store.ListPending(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	views := make([]pendingActionView, 0, len(actions))
@@ -67,7 +68,12 @@ func (h *PendingActionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := engine.ConfirmPendingAction(r.Context(), h.pool.Pool, userID, chi.URLParam(r, "id"), h.googleClient())
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, engine.ErrPendingActionNotFound) {
+			// User-fixable state (already confirmed/cancelled or expired) — not a 500.
+			Error(w, http.StatusConflict, err.Error())
+			return
+		}
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, result)
@@ -81,7 +87,11 @@ func (h *PendingActionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := engine.CancelPendingAction(r.Context(), h.pool.Pool, userID, chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, engine.ErrPendingActionNotFound) {
+			Error(w, http.StatusConflict, err.Error())
+			return
+		}
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, result)

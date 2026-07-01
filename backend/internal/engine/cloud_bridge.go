@@ -196,6 +196,7 @@ func (b *CloudBridge) pollCloudDeviceStatus(ctx context.Context) {
 					"r":          state.R,
 					"g":          state.G,
 					"b":          state.B,
+					"scene_id":   state.SceneID,
 				}
 			}
 

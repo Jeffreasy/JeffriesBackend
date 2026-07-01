@@ -59,11 +59,13 @@ type OAuthClient struct {
 	clientID     string
 	clientSecret string
 	refreshToken string
+	httpClient   *http.Client
 
 	mu          sync.Mutex
 	accessToken string
 	expiresAt   time.Time
 }
+
 
 // NewOAuthClient creates a new Google OAuth client.
 func NewOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
@@ -71,8 +73,10 @@ func NewOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		refreshToken: refreshToken,
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
 	}
 }
+
 
 var (
 	sharedClientOnce sync.Once
@@ -120,7 +124,7 @@ func (c *OAuthClient) getAccessToken(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("token request: %w", err)
 	}
@@ -167,7 +171,7 @@ func (c *OAuthClient) Do(ctx context.Context, method, url string, body io.Reader
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return http.DefaultClient.Do(req)
+	return c.httpClient.Do(req)
 }
 
 // GetJSON performs a GET request and decodes the JSON response into result.

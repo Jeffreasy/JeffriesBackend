@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -104,7 +105,7 @@ func (h *TransactionHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	txs, totalCount, err := h.store.ListFiltered(r.Context(), userID, f)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -141,7 +142,7 @@ func (h *TransactionHandler) Import(w http.ResponseWriter, r *http.Request) {
 		Transactions []model.TransactionImport `json:"transactions"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if body.UserID == "" || len(body.Transactions) == 0 {
@@ -151,7 +152,7 @@ func (h *TransactionHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	inserted, err := h.store.ImportBatch(r.Context(), body.UserID, body.Transactions)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{
@@ -191,12 +192,12 @@ func (h *TransactionHandler) UpdateCategorie(w http.ResponseWriter, r *http.Requ
 		Categorie string `json:"categorie"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	rows, err := h.store.UpdateCategorie(r.Context(), userID, id, body.Categorie)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if rows == 0 {
@@ -225,17 +226,33 @@ func (h *TransactionHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var ibanFilter, jaarFilter *string
+	var ibanFilter, jaarFilter, datumVan, datumTot *string
 	if v := r.URL.Query().Get("ibanFilter"); v != "" {
 		ibanFilter = &v
 	}
 	if v := r.URL.Query().Get("jaarFilter"); v != "" {
 		jaarFilter = &v
 	}
+	// Optional period bounds (YYYY-MM-DD) — same params the transaction list
+	// uses, so "huidige selectie" in the stats copy is finally true.
+	if v := r.URL.Query().Get("datumVan"); v != "" {
+		if _, err := time.Parse("2006-01-02", v); err != nil {
+			Error(w, http.StatusBadRequest, "Ongeldige datumVan (verwacht YYYY-MM-DD).")
+			return
+		}
+		datumVan = &v
+	}
+	if v := r.URL.Query().Get("datumTot"); v != "" {
+		if _, err := time.Parse("2006-01-02", v); err != nil {
+			Error(w, http.StatusBadRequest, "Ongeldige datumTot (verwacht YYYY-MM-DD).")
+			return
+		}
+		datumTot = &v
+	}
 
-	stats, err := h.store.GetFullStats(r.Context(), userID, ibanFilter, jaarFilter)
+	stats, err := h.store.GetFullStats(r.Context(), userID, ibanFilter, jaarFilter, datumVan, datumTot)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, stats)

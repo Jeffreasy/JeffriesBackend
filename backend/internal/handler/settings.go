@@ -208,7 +208,7 @@ func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
 	for _, table := range exportTables {
 		rows, err := h.dumpUserTable(r.Context(), table, userID)
 		if err != nil {
-			Error(w, http.StatusInternalServerError, fmt.Sprintf("export %s: %v", table, err))
+			InternalError(w, r, fmt.Errorf("export %s: %w", table, err))
 			return
 		}
 		data[table] = rows

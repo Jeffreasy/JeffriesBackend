@@ -87,10 +87,33 @@ func scanNoteRevision(row pgx.Row) (model.NoteRevision, error) {
 
 // List returns all notes for a user (sorted by pinned then newest).
 func (s *NoteStore) List(ctx context.Context, userID string) ([]model.Note, error) {
-	rows, err := s.db.Pool.Query(ctx, fmt.Sprintf(`
+	return s.ListPaged(ctx, userID, 0, 0, false)
+}
+
+// ListPaged returns notes for a user with optional pagination and a summary
+// mode that skips the (potentially large) inhoud column. limit/offset of 0 keep
+// the historical unlimited/full behaviour; summary=true returns inhoud as "".
+func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset int, summary bool) ([]model.Note, error) {
+	cols := noteCols
+	if summary {
+		// Same column list/order as noteCols, but with inhoud replaced by an
+		// empty literal so scanNote keeps working and payloads stay small.
+		cols = strings.Replace(noteCols, "inhoud", "'' AS inhoud", 1)
+	}
+	q := fmt.Sprintf(`
 		SELECT %s FROM notes WHERE user_id = $1
 		ORDER BY is_pinned DESC, gewijzigd DESC
-	`, noteCols), userID)
+	`, cols)
+	args := []any{userID}
+	if limit > 0 {
+		args = append(args, limit)
+		q += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		q += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+	rows, err := s.db.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

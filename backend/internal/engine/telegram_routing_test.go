@@ -10,6 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestDetectLampCommandWholeWordOnly(t *testing.T) {
+	// T4: "aanpassen" contains "aan" — must NOT trigger "alles aan" but go to AI.
+	if cmd := detectLampCommand("lampen aanpassen naar blauw"); cmd != nil && cmd.beschrijving == "Lampen aanzetten" {
+		t.Fatalf("detectLampCommand matched 'aan' inside 'aanpassen': %v", cmd.beschrijving)
+	}
+	if cmd := detectLampCommand("lampen aan"); cmd == nil || cmd.beschrijving != "Lampen aanzetten" {
+		t.Fatalf("detectLampCommand('lampen aan') = %v, want Lampen aanzetten", cmd)
+	}
+	if cmd := detectLampCommand("doe de lampen uit"); cmd == nil || cmd.beschrijving != "Lampen uitzetten" {
+		t.Fatalf("detectLampCommand('doe de lampen uit') = %v, want Lampen uitzetten", cmd)
+	}
+	// "buiten" contains "uit" — must not turn everything off.
+	if cmd := detectLampCommand("lampen buitenshuis graag feller"); cmd != nil && cmd.beschrijving == "Lampen uitzetten" {
+		t.Fatal("detectLampCommand matched 'uit' inside 'buitenshuis'")
+	}
+}
+
 func TestRouteFreeTextPlanningGoesToAgenda(t *testing.T) {
 	got := routeFreeText("wat staat er vandaag op mijn planning?")
 	if got != "agenda" {

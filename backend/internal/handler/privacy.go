@@ -25,12 +25,12 @@ func NewPrivacyHandler(s *store.PrivacyStore) *PrivacyHandler { return &PrivacyH
 func (h *PrivacyHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	p, err := h.store.Get(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, p)
@@ -52,16 +52,16 @@ func (h *PrivacyHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *PrivacyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	var body model.PrivacySettings
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if err := h.store.Update(r.Context(), userID, body); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})

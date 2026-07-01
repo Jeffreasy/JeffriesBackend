@@ -37,7 +37,7 @@ func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	rooms, err := h.rooms.GetAll(r.Context(), skip, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, rooms)
@@ -57,17 +57,17 @@ func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "roomID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid room ID")
+		Error(w, http.StatusBadRequest, "Ongeldig kamer-id.")
 		return
 	}
 
 	room, err := h.rooms.GetByID(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if room == nil {
-		Error(w, http.StatusNotFound, "Room not found")
+		Error(w, http.StatusNotFound, "Kamer niet gevonden.")
 		return
 	}
 	JSON(w, http.StatusOK, room)
@@ -88,17 +88,17 @@ func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var input model.RoomCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Name == "" {
-		Error(w, http.StatusBadRequest, "Name is required")
+		Error(w, http.StatusBadRequest, "Naam is verplicht.")
 		return
 	}
 
 	room, err := h.rooms.Create(r.Context(), input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, room)
@@ -121,23 +121,23 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *RoomHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "roomID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid room ID")
+		Error(w, http.StatusBadRequest, "Ongeldig kamer-id.")
 		return
 	}
 
 	var input model.RoomUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	room, err := h.rooms.Update(r.Context(), id, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if room == nil {
-		Error(w, http.StatusNotFound, "Room not found")
+		Error(w, http.StatusNotFound, "Kamer niet gevonden.")
 		return
 	}
 	JSON(w, http.StatusOK, room)
@@ -157,17 +157,17 @@ func (h *RoomHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *RoomHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "roomID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid room ID")
+		Error(w, http.StatusBadRequest, "Ongeldig kamer-id.")
 		return
 	}
 
 	deleted, err := h.rooms.Delete(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if !deleted {
-		Error(w, http.StatusNotFound, "Room not found")
+		Error(w, http.StatusNotFound, "Kamer niet gevonden.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

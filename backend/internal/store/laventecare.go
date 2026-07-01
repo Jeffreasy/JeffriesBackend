@@ -37,6 +37,7 @@ var (
 	ErrInvalidStatus                = errors.New("unknown status")
 	ErrInvalidStatusTransition      = errors.New("illegal status transition for a finalized record")
 	ErrInvalidOccurredAt            = errors.New("invalid occurred_at")
+	ErrTimeEntryInvoiced            = errors.New("time entry is invoiced and immutable")
 	dossierAdviceResponseSampleSize = 25
 )
 
@@ -2007,14 +2008,16 @@ func rankDossierDocumentRecommendations(documents []model.LCDocument, presentByK
 			priority = "laag"
 		}
 		usage := "interne referentie"
-		if doc.Categorie == "commercieel" {
+		switch doc.Categorie {
+		case "commercieel":
 			usage = "klantcommunicatie"
-		} else if doc.Categorie == "governance" {
+		case "governance":
 			usage = "controle en afspraken"
-		} else if doc.Categorie == "proces" {
+		case "proces":
 			usage = "delivery-dossier"
 		}
 		var dossierID *uuid.UUID
+
 		var dossierCreatedAt *time.Time
 		if alreadyInDossier {
 			id := present.ID
@@ -3102,6 +3105,82 @@ func (s *LaventeCareStore) CreateTimeEntry(ctx context.Context, userID string, i
 	return s.GetTimeEntry(ctx, userID, id)
 }
 
+// timeEntryStatuses lists the statuses a client may PATCH a time entry to;
+// "gefactureerd" is only ever set by invoice creation.
+var timeEntryStatuses = map[string]bool{"open": true, "afgeschreven": true, "concept": true}
+
+// UpdateTimeEntry patches description/minutes/status of an uninvoiced time
+// entry (N10). Invoiced entries (invoice_id set or status gefactureerd) are
+// immutable → ErrTimeEntryInvoiced.
+func (s *LaventeCareStore) UpdateTimeEntry(ctx context.Context, userID string, id uuid.UUID, input model.LCTimeEntryUpdate) (*model.LCTimeEntry, error) {
+	existing, err := s.GetTimeEntry(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.InvoiceID != nil || existing.Status == "gefactureerd" {
+		return nil, ErrTimeEntryInvoiced
+	}
+	description := existing.Description
+	if input.Omschrijving != nil {
+		trimmed := strings.TrimSpace(*input.Omschrijving)
+		if trimmed == "" {
+			return nil, errors.New("omschrijving mag niet leeg zijn")
+		}
+		description = trimmed
+	}
+	minutes := existing.Minutes
+	if input.Minuten != nil {
+		if *input.Minuten <= 0 {
+			return nil, errors.New("minuten moet groter zijn dan 0")
+		}
+		minutes = *input.Minuten
+	}
+	status := existing.Status
+	if input.Status != nil {
+		next := strings.ToLower(strings.TrimSpace(*input.Status))
+		if !timeEntryStatuses[next] {
+			return nil, ErrInvalidStatus
+		}
+		status = next
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE lc_time_entries
+		    SET description = $3, minutes = $4, status = $5, updated_at = now()
+		  WHERE user_id = $1 AND id = $2 AND invoice_id IS NULL AND status <> 'gefactureerd'`,
+		userID, id, description, minutes, status)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		// Raced with an invoice creation between the read and the write.
+		return nil, ErrTimeEntryInvoiced
+	}
+	return s.GetTimeEntry(ctx, userID, id)
+}
+
+// DeleteTimeEntry removes an uninvoiced time entry (N10). Invoiced entries are
+// immutable → ErrTimeEntryInvoiced; missing → pgx.ErrNoRows.
+func (s *LaventeCareStore) DeleteTimeEntry(ctx context.Context, userID string, id uuid.UUID) error {
+	existing, err := s.GetTimeEntry(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if existing.InvoiceID != nil || existing.Status == "gefactureerd" {
+		return ErrTimeEntryInvoiced
+	}
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM lc_time_entries
+		  WHERE user_id = $1 AND id = $2 AND invoice_id IS NULL AND status <> 'gefactureerd'`,
+		userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrTimeEntryInvoiced
+	}
+	return nil
+}
+
 func (s *LaventeCareStore) GetTimeEntry(ctx context.Context, userID string, id uuid.UUID) (*model.LCTimeEntry, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT t.id, t.user_id, t.company_id, t.project_id, t.workstream_id,
@@ -3316,15 +3395,16 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 		tag, err := tx.Exec(ctx,
 			`UPDATE lc_time_entries
 			    SET invoice_id = $3, status = 'gefactureerd', updated_at = $4
-			  WHERE user_id = $1 AND id = ANY($2)`,
+			  WHERE user_id = $1 AND id = ANY($2) AND invoice_id IS NULL`,
 			userID, input.TimeEntryIDs, id, now)
 		if err != nil {
 			return nil, err
 		}
 		if int(tag.RowsAffected()) != len(input.TimeEntryIDs) {
-			return nil, pgx.ErrNoRows
+			return nil, fmt.Errorf("sommige uren zijn al gefactureerd in een andere transactie")
 		}
 	}
+
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -3588,15 +3668,19 @@ func buildInvoiceHTML(invoice *model.LCInvoice, company *model.LCCompany, lines 
 
 	var rows strings.Builder
 	for _, line := range lines {
-		rows.WriteString("<tr>")
-		rows.WriteString("<td>" + html.EscapeString(line.Description) + "</td>")
-		rows.WriteString("<td>" + html.EscapeString(invoiceQuantityLabel(line.QuantityMinutes)) + "</td>")
-		rows.WriteString("<td>" + html.EscapeString(invoiceMoney(invoiceLineUnitCents(line), invoice.Currency)) + "</td>")
-		rows.WriteString("<td class=\"right\">" + html.EscapeString(invoiceMoney(line.TotalCents, invoice.Currency)) + "</td>")
-		rows.WriteString("</tr>")
+		rows.WriteString("<tr><td>")
+		rows.WriteString(html.EscapeString(line.Description))
+		rows.WriteString("</td><td>")
+		rows.WriteString(html.EscapeString(invoiceQuantityLabel(line.QuantityMinutes)))
+		rows.WriteString("</td><td>")
+		rows.WriteString(html.EscapeString(invoiceMoney(invoiceLineUnitCents(line), invoice.Currency)))
+		rows.WriteString("</td><td class=\"right\">")
+		rows.WriteString(html.EscapeString(invoiceMoney(line.TotalCents, invoice.Currency)))
+		rows.WriteString("</td></tr>")
 	}
 
 	var payButton string
+
 	if paymentLink != "" {
 		payButton = `<a class="button" href="` + html.EscapeString(paymentLink) + `">Factuur betalen</a>`
 	}
@@ -4098,6 +4182,25 @@ func (s *LaventeCareStore) GetCockpit(ctx context.Context, userID string) (*mode
 	// Follow-ups: leads, opdrachten and projects with upcoming deadlines
 	followUps := s.buildFollowUps(companies, activeLeads, activeProjects, activeWorkstreams)
 
+	// The frontend .map's over these directly — an empty CRM must serialize
+	// them as [] instead of null (M3). filterOpen/buildSignals return nil for
+	// zero matches.
+	if activeLeads == nil {
+		activeLeads = []model.LCLead{}
+	}
+	if activeWorkstreams == nil {
+		activeWorkstreams = []model.LCWorkstream{}
+	}
+	if activeProjects == nil {
+		activeProjects = []model.LCProject{}
+	}
+	if signals == nil {
+		signals = []model.LCBusinessSignal{}
+	}
+	if followUps == nil {
+		followUps = []model.LCFollowUpSignal{}
+	}
+
 	return &model.LCCockpit{
 		Summary: model.LCCockpitSummary{
 			Companies:         counts.companies,
@@ -4209,7 +4312,7 @@ func (s *LaventeCareStore) buildBusinessSignals(ctx context.Context, userID stri
 		        start_datum::text, COALESCE(business_context_title, ''), COALESCE(business_context_type, '')
 		   FROM personal_events
 		  WHERE user_id = $1
-		    AND COALESCE(status, '') <> 'cancelled'
+		    AND COALESCE(status, '') NOT IN ('VERWIJDERD', 'PendingDelete', 'PendingFailed')
 		    AND eind_datum >= CURRENT_DATE - INTERVAL '14 days'
 		  ORDER BY start_datum ASC
 		  LIMIT 100`, userID)

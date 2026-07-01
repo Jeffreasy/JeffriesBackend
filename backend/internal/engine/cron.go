@@ -94,10 +94,20 @@ func (s *CronScheduler) runJob(ctx context.Context, job CronJob) {
 }
 
 func (s *CronScheduler) execJob(ctx context.Context, job CronJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("🔥 cron job panicked!", "name", job.Name, "panic", r)
+		}
+	}()
+
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	start := time.Now()
-	if err := job.RunFunc(ctx); err != nil {
+	if err := job.RunFunc(runCtx); err != nil {
 		slog.Warn("❌ cron job failed", "name", job.Name, "error", err, "took", time.Since(start))
 	} else {
 		slog.Debug("✅ cron job done", "name", job.Name, "took", time.Since(start))
 	}
 }
+

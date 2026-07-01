@@ -3,10 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/google"
@@ -39,9 +42,21 @@ func (h *PersonalEventHandler) List(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
 	}
-	events, err := h.store.List(r.Context(), userID)
+	// Optional from/to (YYYY-MM-DD) bound the result; default stays the full list.
+	from, to, ranged, rerr := parseOptionalDateRange(r)
+	if rerr != nil {
+		Error(w, http.StatusBadRequest, rerr.Error())
+		return
+	}
+	var events []model.PersonalEvent
+	var err error
+	if ranged {
+		events, err = h.store.ListRange(r.Context(), userID, from, to)
+	} else {
+		events, err = h.store.List(r.Context(), userID)
+	}
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, events)
@@ -67,7 +82,7 @@ func (h *PersonalEventHandler) ListByDate(w http.ResponseWriter, r *http.Request
 	}
 	events, err := h.store.ListByDate(r.Context(), userID, date)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, events)
@@ -91,7 +106,7 @@ func (h *PersonalEventHandler) ListUpcoming(w http.ResponseWriter, r *http.Reque
 	}
 	events, err := h.store.ListUpcoming(r.Context(), userID, 50)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, events)
@@ -112,7 +127,7 @@ func (h *PersonalEventHandler) ListUpcoming(w http.ResponseWriter, r *http.Reque
 func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	var e model.PersonalEvent
 	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if e.UserID == "" || e.EventID == "" {
@@ -129,7 +144,7 @@ func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Upsert(r.Context(), e); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	result := map[string]any{"ok": true}
@@ -165,12 +180,22 @@ func (h *PersonalEventHandler) UpdateStatus(w http.ResponseWriter, r *http.Reque
 		Error(w, http.StatusBadRequest, "userId en eventID verplicht")
 		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Status == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// A malformed/oversized body is a decode problem, not a missing status —
+		// don't report every decode failure as "status verplicht".
+		RespondDecodeError(w, err)
+		return
+	}
+	if body.Status == "" {
 		Error(w, http.StatusBadRequest, "status verplicht")
 		return
 	}
 	if err := h.store.UpdateStatus(r.Context(), userID, eventID, body.Status); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Afspraak niet gevonden — mogelijk al verwijderd.")
+			return
+		}
+		InternalError(w, r, err)
 		return
 	}
 	result := map[string]any{"ok": true}
@@ -197,7 +222,10 @@ func (h *PersonalEventHandler) tryProcessPendingCalendarEventNow(parent context.
 
 	event, err := h.store.GetByUserEventID(ctx, userID, eventID)
 	if err != nil {
-		result["syncError"] = err.Error()
+		// Raw store/Google errors never reach the client (N12) — the queue-based
+		// cron retries the pending action regardless.
+		slog.Warn("instant calendar sync: pending event fetch failed", "userId", userID, "eventId", eventID, "error", err)
+		result["syncError"] = "Google Calendar-sync mislukt — actie staat in de wachtrij."
 		return result
 	}
 	if !isPendingCalendarStatus(event.Status) {
@@ -208,7 +236,8 @@ func (h *PersonalEventHandler) tryProcessPendingCalendarEventNow(parent context.
 
 	client := google.SharedOAuthClient(h.cfg.GoogleClientID, h.cfg.GoogleClientSecret, h.cfg.GoogleRefreshToken)
 	if err := processPendingCalendarEvent(ctx, client, h.store, event); err != nil {
-		result["syncError"] = err.Error()
+		slog.Warn("instant calendar sync failed", "userId", userID, "eventId", eventID, "error", err)
+		result["syncError"] = "Google Calendar-sync mislukt — actie staat in de wachtrij."
 		// Tell the caller whether this can ever succeed on retry, so the UI can
 		// give an honest message instead of a reassuring "blijft in de wachtrij"
 		// for something that is guaranteed to fail identically every time (e.g.

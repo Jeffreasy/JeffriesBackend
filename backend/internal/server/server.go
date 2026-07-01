@@ -86,10 +86,14 @@ func New(cfg *config.Config, db *store.DB) *Server {
 // ListenAndServe starts the HTTP server with graceful shutdown.
 func (s *Server) ListenAndServe() {
 	srv := &http.Server{
-		Addr:         s.cfg.Addr(),
-		Handler:      s.router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:        s.cfg.Addr(),
+		Handler:     s.router,
+		ReadTimeout: 15 * time.Second,
+		// Must exceed the longest handler budget (gmail sync 90s, calendar/todoist
+		// 60s) — at 30s the server killed the connection while the sync kept
+		// running and succeeded server-side, so the user saw a network error,
+		// retried, and did the work twice.
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

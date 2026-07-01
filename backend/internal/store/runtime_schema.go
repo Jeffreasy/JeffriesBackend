@@ -524,9 +524,20 @@ ALTER TABLE lc_action_items
 CREATE INDEX IF NOT EXISTS idx_lc_actions_company
     ON lc_action_items (linked_company_id, updated_at DESC)
     WHERE linked_company_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lc_contacts_user_email ON lc_contacts (user_id, email);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_user_next_action ON lc_leads (user_id, volgende_actie_datum);
+CREATE INDEX IF NOT EXISTS idx_lc_decisions_user ON lc_decisions (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_decisions_project ON lc_decisions (project_id);
+CREATE INDEX IF NOT EXISTS idx_lc_changes_user ON lc_change_requests (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_changes_project ON lc_change_requests (project_id);
+CREATE INDEX IF NOT EXISTS idx_lc_sla_user ON lc_sla_incidents (user_id);
+CREATE INDEX IF NOT EXISTS idx_lc_sla_project ON lc_sla_incidents (project_id);
+CREATE INDEX IF NOT EXISTS idx_lc_sla_user_status ON lc_sla_incidents (user_id, status);
 `)
 	return err
 }
+
 
 func ensureLaventeCareActivitySchema(ctx context.Context, db *DB) error {
 	_, err := db.Pool.Exec(ctx, `

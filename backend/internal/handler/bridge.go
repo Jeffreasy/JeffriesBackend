@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -56,7 +58,7 @@ func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
 	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	var input bridgeClaimRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Limit <= 0 || input.Limit > 100 {
@@ -65,7 +67,7 @@ func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
 
 	commands, err := h.commands.ClaimPending(r.Context(), input.Limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Command claim failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("command claim: %w", err))
 		return
 	}
 	if len(commands) == 0 {
@@ -75,7 +77,7 @@ func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
 
 	devices, err := h.devices.GetAll(r.Context(), 0, 500)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Device fetch failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("device fetch: %w", err))
 		return
 	}
 
@@ -123,36 +125,50 @@ func (h *BridgeHandler) CompleteCommand(w http.ResponseWriter, r *http.Request) 
 	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	id, err := uuid.Parse(chi.URLParam(r, "commandID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid command ID")
+		Error(w, http.StatusBadRequest, "Ongeldig command-id.")
 		return
 	}
 
 	var input bridgeCompleteRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Status == "" {
 		input.Status = store.DeviceCommandStatusDone
 	}
 	if input.Status != store.DeviceCommandStatusDone && input.Status != store.DeviceCommandStatusFailed {
-		Error(w, http.StatusBadRequest, "Invalid command status")
+		Error(w, http.StatusBadRequest, "Ongeldige commandostatus.")
 		return
 	}
 
 	// A reported failure is requeued for a few attempts before becoming terminal,
 	// so a transient LAN/UDP blip doesn't permanently fail the command.
 	if input.Status == store.DeviceCommandStatusFailed {
-		if _, err := h.commands.RequeueOrFail(r.Context(), id, 3); err != nil {
-			Error(w, http.StatusInternalServerError, "Command completion failed: "+err.Error())
+		requeued, deviceID, err := h.commands.RequeueOrFail(r.Context(), id, 3)
+		if err != nil {
+			InternalError(w, r, fmt.Errorf("command completion: %w", err))
 			return
+		}
+		// Terminal failure (3rd attempt): mark the target device offline so the
+		// UI stops showing the optimistic state as if the command landed (N7 —
+		// queue mode answers 204 before execution, so this is the only signal
+		// the frontend gets that the lamp never reacted).
+		if !requeued && deviceID != nil {
+			if serr := h.devices.SetStatus(r.Context(), *deviceID, "offline"); serr != nil {
+				slog.Warn("failed to mark device offline after terminal command failure",
+					"commandID", id, "deviceID", *deviceID, "error", serr)
+			} else {
+				slog.Warn("device command failed terminally; device marked offline",
+					"commandID", id, "deviceID", *deviceID)
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	if err := h.commands.MarkDone(r.Context(), id, input.Status); err != nil {
-		Error(w, http.StatusInternalServerError, "Command completion failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("command completion: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -162,25 +178,25 @@ func (h *BridgeHandler) UpdateDeviceStatus(w http.ResponseWriter, r *http.Reques
 	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid device ID")
+		Error(w, http.StatusBadRequest, "Ongeldig apparaat-id.")
 		return
 	}
 
 	var input bridgeDeviceStatusRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	if input.Status != "" {
 		if err := h.devices.SetStatus(r.Context(), id, input.Status); err != nil {
-			Error(w, http.StatusInternalServerError, "Status update failed: "+err.Error())
+			InternalError(w, r, fmt.Errorf("status update: %w", err))
 			return
 		}
 	}
 	if input.CurrentState != nil {
 		if err := h.devices.UpdateState(r.Context(), id, input.CurrentState); err != nil {
-			Error(w, http.StatusInternalServerError, "State update failed: "+err.Error())
+			InternalError(w, r, fmt.Errorf("state update: %w", err))
 			return
 		}
 	}

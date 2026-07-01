@@ -33,10 +33,11 @@ func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
 			"service": "homeapp-api",
 			"db":      "error",
 			"build":   buildInfo(),
-			"detail":  err.Error(),
+			"detail":  "database connection failed",
 		})
 		return
 	}
+
 
 	JSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",

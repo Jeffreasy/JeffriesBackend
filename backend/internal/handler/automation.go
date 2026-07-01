@@ -31,12 +31,12 @@ func NewAutomationHandler(s *store.AutomationStore) *AutomationHandler {
 func (h *AutomationHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	autos, err := h.store.List(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, autos)
@@ -58,12 +58,12 @@ func (h *AutomationHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	var body model.AutomationRow
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	body.UserID = userID
@@ -75,7 +75,7 @@ func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusConflict, "Er bestaat al een automatisering met deze naam")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, created)
@@ -97,17 +97,17 @@ func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *AutomationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	var body model.AutomationRow
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	updated, err := h.store.Update(r.Context(), id, body)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, updated)
@@ -126,11 +126,11 @@ func (h *AutomationHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *AutomationHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	if err := h.store.Toggle(r.Context(), id); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "toggled"})
@@ -149,11 +149,11 @@ func (h *AutomationHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 func (h *AutomationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	if err := h.store.Delete(r.Context(), id); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -174,11 +174,11 @@ func (h *AutomationHandler) DeleteByGroup(w http.ResponseWriter, r *http.Request
 	userID := r.URL.Query().Get("userId")
 	group := r.URL.Query().Get("group")
 	if userID == "" || group == "" {
-		Error(w, http.StatusBadRequest, "userId and group required")
+		Error(w, http.StatusBadRequest, "userId en group zijn verplicht")
 		return
 	}
 	if err := h.store.DeleteByGroup(r.Context(), userID, group); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})

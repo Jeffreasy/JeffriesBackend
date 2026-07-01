@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -48,7 +49,7 @@ func (h *SceneHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	scenes, err := h.scenes.GetAll(r.Context(), skip, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, scenes)
@@ -68,17 +69,17 @@ func (h *SceneHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *SceneHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "sceneID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid scene ID")
+		Error(w, http.StatusBadRequest, "Ongeldig scene-id.")
 		return
 	}
 
 	scene, err := h.scenes.GetByID(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if scene == nil {
-		Error(w, http.StatusNotFound, "Scene not found")
+		Error(w, http.StatusNotFound, "Scene niet gevonden.")
 		return
 	}
 	JSON(w, http.StatusOK, scene)
@@ -99,17 +100,17 @@ func (h *SceneHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *SceneHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var input model.SceneCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Name == "" {
-		Error(w, http.StatusBadRequest, "Name is required")
+		Error(w, http.StatusBadRequest, "Naam is verplicht.")
 		return
 	}
 
 	scene, err := h.scenes.Create(r.Context(), input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, scene)
@@ -129,17 +130,17 @@ func (h *SceneHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *SceneHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "sceneID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid scene ID")
+		Error(w, http.StatusBadRequest, "Ongeldig scene-id.")
 		return
 	}
 
 	deleted, err := h.scenes.Delete(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if !deleted {
-		Error(w, http.StatusNotFound, "Scene not found")
+		Error(w, http.StatusNotFound, "Scene niet gevonden.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -151,25 +152,27 @@ func (h *SceneHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // @Tags Scenes
 // @Security ApiKeyAuth
 // @Param sceneID path string true "Scene ID (UUID)"
-// @Success 204 "No Content"
+// @Success 200 {object} map[string]int "activated / failed device counts"
+// @Success 204 "No Content (scene has no actions or commands were queued)"
 // @Failure 400 {string} string "Invalid scene ID"
 // @Failure 404 {string} string "Scene not found"
 // @Failure 500 {string} string "Internal Server Error"
+// @Failure 502 {string} string "No device responded"
 // @Router /scenes/{sceneID}/activate [post]
 func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "sceneID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid scene ID")
+		Error(w, http.StatusBadRequest, "Ongeldig scene-id.")
 		return
 	}
 
 	scene, err := h.scenes.GetByID(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if scene == nil {
-		Error(w, http.StatusNotFound, "Scene not found")
+		Error(w, http.StatusNotFound, "Scene niet gevonden.")
 		return
 	}
 	if len(scene.Actions) == 0 {
@@ -187,7 +190,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if _, err := h.commands.Create(ctx, h.userID, &action.DeviceID, raw); err != nil {
-				Error(w, http.StatusInternalServerError, "Scene command queue mislukt: "+err.Error())
+				InternalError(w, r, fmt.Errorf("scene command queue: %w", err))
 				return
 			}
 			if len(statePatch) > 0 {
@@ -200,7 +203,16 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Track per-device results so the client hears about a scene where every
+	// lamp failed, instead of an unconditional 204 while the room stays dark.
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	activated, failed := 0, 0
+	markFailed := func() {
+		mu.Lock()
+		failed++
+		mu.Unlock()
+	}
 	for _, action := range scene.Actions {
 		wg.Add(1)
 		go func(a model.SceneAction) {
@@ -210,6 +222,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 			if err != nil || device == nil || device.IPAddress == nil {
 				slog.Warn("scene activation: device not found or no IP",
 					"scene", scene.Name, "device_id", a.DeviceID)
+				markFailed()
 				return
 			}
 
@@ -248,8 +261,13 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 			if err := h.wiz.SetState(*device.IPAddress, opts); err != nil {
 				slog.Error("WiZ command failed", "ip", *device.IPAddress, "error", err)
+				markFailed()
 				return
 			}
+
+			mu.Lock()
+			activated++
+			mu.Unlock()
 
 			if len(statePatch) > 0 {
 				if err := h.devices.UpdateState(context.Background(), a.DeviceID, statePatch); err != nil {
@@ -262,7 +280,11 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
-	w.WriteHeader(http.StatusNoContent)
+	if activated == 0 && failed > 0 {
+		Error(w, http.StatusBadGateway, "Geen enkele lamp reageerde — controleer de verbinding.")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"activated": activated, "failed": failed})
 }
 
 func (h *SceneHandler) queueLightCommands() bool {

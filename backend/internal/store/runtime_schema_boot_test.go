@@ -67,4 +67,58 @@ func TestEnsureRuntimeSchema_FreshDB(t *testing.T) {
 			t.Fatalf("missing UNIQUE index %s on %s — its ON CONFLICT upsert would 42P10 on a fresh DB", ru.index, ru.table)
 		}
 	}
+
+	requiredPerformance := []struct{ table, index string }{
+		{"devices", "idx_devices_ip"},
+		{"device_events", "idx_device_events_time"},
+		{"device_events", "idx_device_events_device"},
+		{"schedule", "idx_schedule_user_date"},
+		{"transactions", "idx_trx_user_datum"},
+		{"transactions", "idx_trx_user_cat"},
+		{"personal_events", "idx_pe_user_date"},
+		{"audit_logs", "idx_audit_user_created"},
+		{"emails", "idx_emails_user"},
+		{"emails", "idx_emails_user_datum"},
+		{"emails", "idx_emails_user_thread"},
+		{"emails", "idx_emails_user_gelezen"},
+		{"emails", "idx_emails_user_categorie"},
+		{"emails", "idx_emails_user_verwijderd"},
+		{"emails", "idx_emails_search"},
+		{"notes", "idx_notes_user"},
+		{"notes", "idx_notes_user_pinned"},
+		{"notes", "idx_notes_user_deadline"},
+		{"notes", "idx_notes_search"},
+		{"note_links", "idx_note_links_source"},
+		{"note_links", "idx_note_links_target"},
+		{"habits", "idx_habits_user"},
+		{"habits", "idx_habits_user_actief"},
+		{"habit_logs", "idx_habit_logs_user"},
+		{"habit_logs", "idx_habit_logs_habit"},
+		{"habit_logs", "idx_habit_logs_habit_datum"},
+		{"habit_logs", "idx_habit_logs_user_datum"},
+		{"habit_badges", "idx_habit_badges_user"},
+		{"chat_messages", "idx_chat_messages_chat_id"},
+		{"lc_contacts", "idx_lc_contacts_user_email"},
+		{"lc_leads", "idx_lc_leads_user_next_action"},
+		{"lc_decisions", "idx_lc_decisions_user"},
+		{"lc_decisions", "idx_lc_decisions_project"},
+		{"lc_change_requests", "idx_lc_changes_user"},
+		{"lc_change_requests", "idx_lc_changes_project"},
+		{"lc_sla_incidents", "idx_lc_sla_user"},
+		{"lc_sla_incidents", "idx_lc_sla_project"},
+		{"lc_sla_incidents", "idx_lc_sla_user_status"},
+	}
+	for _, rp := range requiredPerformance {
+		var ok bool
+		err := db.Pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE tablename = $1 AND indexname = $2)`,
+			rp.table, rp.index).Scan(&ok)
+		if err != nil {
+			t.Fatalf("checking performance index %s: %v", rp.index, err)
+		}
+		if !ok {
+			t.Fatalf("missing performance index %s on %s on a fresh DB", rp.index, rp.table)
+		}
+	}
 }
+

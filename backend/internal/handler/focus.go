@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -123,9 +124,10 @@ func (h *FocusHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	today := now.Format("2006-01-02")
 
 	errors := []string{}
-	health := h.focusHealth(ctx, now, &errors)
-	counts := h.focusCounts(ctx, userID, today, &errors)
-	business := h.focusBusiness(ctx, userID, today, &errors)
+	agg := h.focusAggregateCounts(ctx, userID, today, &errors)
+	health := h.focusHealth(ctx, now, agg, &errors)
+	counts := h.focusCounts(ctx, userID, agg, &errors)
+	business := focusBusinessFromAggregate(agg)
 	sync := h.focusSync(ctx, userID, counts.PersonalPending, counts.UnreadEmails, &errors)
 	attention := buildFocusAttention(health, counts, business, sync)
 
@@ -149,21 +151,86 @@ func (h *FocusHandler) Summary(w http.ResponseWriter, r *http.Request) {
 // bridge should never be silent for more than a few minutes.
 const bridgeOfflineThreshold = 3 * time.Minute
 
-func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, errors *[]string) FocusHealth {
-	health := FocusHealth{}
-	health.DevicesTotal = h.count(ctx, errors, "devices.total", `SELECT COUNT(*) FROM devices`)
-	health.DevicesOnline = h.count(ctx, errors, "devices.online", `SELECT COUNT(*) FROM devices WHERE status = 'online'`)
-	health.DevicesOn = h.count(ctx, errors, "devices.on", `SELECT COUNT(*) FROM devices WHERE current_state->>'on' = 'true'`)
+// focusAggregate carries every scalar count for the focus summary. All values
+// come from ONE SELECT with subqueries (see focusAggregateCounts) instead of
+// ~20 sequential round-trips per poll (M8).
+type focusAggregate struct {
+	devicesTotal, devicesOnline, devicesOn           int
+	commandsPending, commandsProcessing              int
+	commandsFailed                                   int
+	scheduleTotal, scheduleUpcoming                  int
+	personalUpcoming, personalPending                int
+	unreadEmails                                     int
+	notesActive, notesPinned, notesDueToday          int
+	notesOverdue, notesTriage                        int
+	lcLeads, lcWorkstreams, lcProjects               int
+	lcOpenActions, lcOverdueActions                  int
+	lcOpenQuotes, lcOpenInvoices, lcOutstandingCents int
+}
+
+func (h *FocusHandler) focusAggregateCounts(ctx context.Context, userID, today string, errs *[]string) focusAggregate {
+	var a focusAggregate
+	err := h.db.Pool.QueryRow(ctx, `
+SELECT
+  (SELECT COUNT(*) FROM devices),
+  (SELECT COUNT(*) FROM devices WHERE status = 'online'),
+  (SELECT COUNT(*) FROM devices WHERE current_state->>'on' = 'true'),
+  (SELECT COUNT(*) FROM device_commands WHERE status = 'pending'),
+  (SELECT COUNT(*) FROM device_commands WHERE status = 'processing'),
+  (SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'),
+  (SELECT COUNT(*) FROM schedule WHERE user_id = $1),
+  (SELECT COUNT(*) FROM schedule WHERE user_id = $1 AND start_datum >= $2::date AND UPPER(COALESCE(status, '')) <> 'VERWIJDERD'),
+  (SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND eind_datum >= $2::date AND status NOT IN ('VERWIJDERD', 'cancelled', 'PendingDelete')),
+  (SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND status IN ('PendingCreate', 'PendingUpdate', 'PendingDelete')),
+  (SELECT COUNT(*) FROM emails WHERE user_id = $1 AND NOT is_gelezen AND NOT is_verwijderd),
+  (SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed),
+  (SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND is_pinned),
+  (SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND deadline::date = $2::date),
+  (SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND deadline IS NOT NULL AND deadline::date < $2::date),
+  (SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND COALESCE(triage_flag, false) = true),
+  (SELECT COUNT(*) FROM lc_leads WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses+`),
+  (SELECT COUNT(*) FROM lc_workstreams WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses+`),
+  (SELECT COUNT(*) FROM lc_projects WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses+`),
+  (SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant')),
+  (SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant') AND due_date IS NOT NULL AND due_date::date <= $2::date),
+  (SELECT COUNT(*) FROM lc_quotes WHERE user_id = $1 AND status NOT IN ('afgewezen','verlopen','geaccepteerd')),
+  (SELECT COUNT(*) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd')),
+  (SELECT COALESCE(SUM(GREATEST(total_cents - paid_cents, 0)), 0) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd'))`,
+		userID, today).Scan(
+		&a.devicesTotal, &a.devicesOnline, &a.devicesOn,
+		&a.commandsPending, &a.commandsProcessing, &a.commandsFailed,
+		&a.scheduleTotal, &a.scheduleUpcoming,
+		&a.personalUpcoming, &a.personalPending,
+		&a.unreadEmails,
+		&a.notesActive, &a.notesPinned, &a.notesDueToday, &a.notesOverdue, &a.notesTriage,
+		&a.lcLeads, &a.lcWorkstreams, &a.lcProjects,
+		&a.lcOpenActions, &a.lcOverdueActions,
+		&a.lcOpenQuotes, &a.lcOpenInvoices, &a.lcOutstandingCents,
+	)
+	if err != nil {
+		// The raw pgx error stays server-side (N12): the kiosk renders this array.
+		slog.Error("focus aggregate counts failed", "error", err, "userId", userID)
+		*errs = append(*errs, "Statistieken tijdelijk niet beschikbaar")
+	}
+	return a
+}
+
+func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, agg focusAggregate, errors *[]string) FocusHealth {
+	health := FocusHealth{
+		DevicesTotal:       agg.devicesTotal,
+		DevicesOnline:      agg.devicesOnline,
+		DevicesOn:          agg.devicesOn,
+		CommandsPending:    agg.commandsPending,
+		CommandsProcessing: agg.commandsProcessing,
+		// Only recent failures matter — without a window, historical failures (e.g.
+		// from a past bridge-auth outage) would alert forever.
+		CommandsFailed: agg.commandsFailed,
+	}
 	health.DevicesOffline = maxInt(0, health.DevicesTotal-health.DevicesOnline)
-	health.CommandsPending = h.count(ctx, errors, "commands.pending", `SELECT COUNT(*) FROM device_commands WHERE status = 'pending'`)
-	health.CommandsProcessing = h.count(ctx, errors, "commands.processing", `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`)
-	// Only recent failures matter — without a window, historical failures (e.g.
-	// from a past bridge-auth outage) would alert forever.
-	health.CommandsFailed = h.count(ctx, errors, "commands.failed", `SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'`)
 	// Bridge liveness comes from the dedicated heartbeat (bumped on every /bridge/*
 	// call), NOT MAX(devices.last_seen) which only moves when a per-device UDP
 	// status POST lands — so it stays stale while the bridge is actively polling.
-	health.BridgeLastSeenAt = h.timePtr(ctx, errors, "bridge.heartbeat", `SELECT MAX(last_seen) FROM bridge_heartbeat`)
+	health.BridgeLastSeenAt = h.timePtr(ctx, errors, "Bridge-status", `SELECT MAX(last_seen) FROM bridge_heartbeat`)
 	health.BridgeOnline = health.BridgeLastSeenAt != nil && now.Sub(health.BridgeLastSeenAt.In(now.Location())) <= bridgeOfflineThreshold
 	if health.BridgeOnline {
 		health.BridgeStatus = "online"
@@ -173,21 +240,23 @@ func (h *FocusHandler) focusHealth(ctx context.Context, now time.Time, errors *[
 	return health
 }
 
-func (h *FocusHandler) focusCounts(ctx context.Context, userID, today string, errors *[]string) FocusCounts {
-	counts := FocusCounts{}
-	counts.ScheduleTotal = h.count(ctx, errors, "schedule.total", `SELECT COUNT(*) FROM schedule WHERE user_id = $1`, userID)
-	counts.ScheduleUpcoming = h.count(ctx, errors, "schedule.upcoming", `SELECT COUNT(*) FROM schedule WHERE user_id = $1 AND start_datum >= $2::date AND UPPER(COALESCE(status, '')) <> 'VERWIJDERD'`, userID, today)
-	counts.PersonalUpcoming = h.count(ctx, errors, "personal.upcoming", `SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND eind_datum >= $2::date AND status NOT IN ('VERWIJDERD', 'cancelled', 'PendingDelete')`, userID, today)
-	counts.PersonalPending = h.count(ctx, errors, "personal.pending", `SELECT COUNT(*) FROM personal_events WHERE user_id = $1 AND status IN ('PendingCreate', 'PendingUpdate', 'PendingDelete')`, userID)
-	counts.UnreadEmails = h.count(ctx, errors, "emails.unread", `SELECT COUNT(*) FROM emails WHERE user_id = $1 AND NOT is_gelezen AND NOT is_verwijderd`, userID)
-	counts.NotesActive = h.count(ctx, errors, "notes.active", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed`, userID)
-	counts.NotesPinned = h.count(ctx, errors, "notes.pinned", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND is_pinned`, userID)
-	counts.NotesDueToday = h.count(ctx, errors, "notes.dueToday", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND deadline::date = $2::date`, userID, today)
-	counts.NotesOverdue = h.count(ctx, errors, "notes.overdue", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND deadline IS NOT NULL AND deadline::date < $2::date`, userID, today)
-	counts.NotesTriage = h.count(ctx, errors, "notes.triage", `SELECT COUNT(*) FROM notes WHERE user_id = $1 AND NOT is_archived AND NOT is_completed AND COALESCE(triage_flag, false) = true`, userID)
+func (h *FocusHandler) focusCounts(ctx context.Context, userID string, agg focusAggregate, errors *[]string) FocusCounts {
+	counts := FocusCounts{
+		ScheduleTotal:    agg.scheduleTotal,
+		ScheduleUpcoming: agg.scheduleUpcoming,
+		PersonalUpcoming: agg.personalUpcoming,
+		PersonalPending:  agg.personalPending,
+		UnreadEmails:     agg.unreadEmails,
+		NotesActive:      agg.notesActive,
+		NotesPinned:      agg.notesPinned,
+		NotesDueToday:    agg.notesDueToday,
+		NotesOverdue:     agg.notesOverdue,
+		NotesTriage:      agg.notesTriage,
+	}
 	stats, err := store.NewHabitStore(h.db).Stats(ctx, userID)
 	if err != nil {
-		*errors = append(*errors, "habits.stats: "+err.Error())
+		slog.Error("focus habit stats failed", "error", err, "userId", userID)
+		*errors = append(*errors, "Habits tijdelijk niet beschikbaar")
 	} else {
 		counts.HabitsActive = stats.ActiveHabits
 		counts.HabitsTodayDue = stats.TodayDue
@@ -205,27 +274,27 @@ func (h *FocusHandler) focusCounts(ctx context.Context, userID, today string, er
 // what the CRM itself considers open/closed.
 const lcClosedStatuses = `('afgerond','done','gesloten','gearchiveerd','omgezet_project','gewonnen','verloren','gediskwalificeerd','geannuleerd')`
 
-func (h *FocusHandler) focusBusiness(ctx context.Context, userID, today string, errors *[]string) FocusBusinessStatus {
+// focusBusinessFromAggregate maps the consolidated counts onto the business
+// block. The action-item queries mirror the allow-list pattern used for action
+// items elsewhere in store/laventecare.go (e.g. GetCompanies' per-company
+// action count, ListActions) instead of an ad-hoc blacklist.
+func focusBusinessFromAggregate(agg focusAggregate) FocusBusinessStatus {
 	return FocusBusinessStatus{
-		ActiveLeads:       h.count(ctx, errors, "lc.leads", `SELECT COUNT(*) FROM lc_leads WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
-		ActiveWorkstreams: h.count(ctx, errors, "lc.workstreams", `SELECT COUNT(*) FROM lc_workstreams WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
-		ActiveProjects:    h.count(ctx, errors, "lc.projects", `SELECT COUNT(*) FROM lc_projects WHERE user_id = $1 AND status NOT IN `+lcClosedStatuses, userID),
-		// Mirrors the allow-list pattern already used for action items elsewhere
-		// in store/laventecare.go (e.g. GetCompanies' per-company action count,
-		// ListActions) instead of an ad-hoc blacklist that can miss statuses the
-		// shared lcKnownStatus validator otherwise accepts on this same table.
-		OpenActions:      h.count(ctx, errors, "lc.actions", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant')`, userID),
-		OverdueActions:   h.count(ctx, errors, "lc.actions.overdue", `SELECT COUNT(*) FROM lc_action_items WHERE user_id = $1 AND status IN ('open','bezig','wacht_op_klant') AND due_date IS NOT NULL AND due_date::date <= $2::date`, userID, today),
-		OpenQuotes:       h.count(ctx, errors, "lc.quotes", `SELECT COUNT(*) FROM lc_quotes WHERE user_id = $1 AND status NOT IN ('afgewezen','verlopen','geaccepteerd')`, userID),
-		OpenInvoices:     h.count(ctx, errors, "lc.invoices", `SELECT COUNT(*) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd')`, userID),
-		OutstandingCents: h.count(ctx, errors, "lc.outstanding", `SELECT COALESCE(SUM(GREATEST(total_cents - paid_cents, 0)), 0) FROM lc_invoices WHERE user_id = $1 AND status NOT IN ('betaald','geannuleerd')`, userID),
+		ActiveLeads:       agg.lcLeads,
+		ActiveWorkstreams: agg.lcWorkstreams,
+		ActiveProjects:    agg.lcProjects,
+		OpenActions:       agg.lcOpenActions,
+		OverdueActions:    agg.lcOverdueActions,
+		OpenQuotes:        agg.lcOpenQuotes,
+		OpenInvoices:      agg.lcOpenInvoices,
+		OutstandingCents:  agg.lcOutstandingCents,
 	}
 }
 
 func (h *FocusHandler) focusSync(ctx context.Context, userID string, pendingPersonal, unreadEmails int, errors *[]string) FocusSyncSummary {
 	googleConfigured := focusGoogleConfigured(h.cfg)
-	scheduleLast := h.timePtr(ctx, errors, "sync.schedule", `SELECT MAX(imported_at) FROM schedule_meta WHERE user_id = $1`, userID)
-	emailLast := h.timePtr(ctx, errors, "sync.gmail", `SELECT MAX(synced_at) FROM emails WHERE user_id = $1`, userID)
+	scheduleLast := h.timePtr(ctx, errors, "Rooster-syncstatus", `SELECT MAX(imported_at) FROM schedule_meta WHERE user_id = $1`, userID)
+	emailLast := h.timePtr(ctx, errors, "Gmail-syncstatus", `SELECT MAX(synced_at) FROM emails WHERE user_id = $1`, userID)
 
 	return FocusSyncSummary{
 		Schedule: FocusSyncTarget{
@@ -250,19 +319,14 @@ func (h *FocusHandler) focusSync(ctx context.Context, userID string, pendingPers
 	}
 }
 
-func (h *FocusHandler) count(ctx context.Context, errors *[]string, label, query string, args ...any) int {
-	var value int
-	if err := h.db.Pool.QueryRow(ctx, query, args...).Scan(&value); err != nil {
-		*errors = append(*errors, label+": "+err.Error())
-		return 0
-	}
-	return value
-}
-
+// timePtr fetches a nullable timestamp. On failure the errors array (rendered
+// verbatim on the kiosk) only gets a Dutch label — the raw pgx text is logged
+// server-side instead of leaking into the 200-payload (N12).
 func (h *FocusHandler) timePtr(ctx context.Context, errors *[]string, label, query string, args ...any) *time.Time {
 	var value sql.NullTime
 	if err := h.db.Pool.QueryRow(ctx, query, args...).Scan(&value); err != nil {
-		*errors = append(*errors, label+": "+err.Error())
+		slog.Error("focus summary query failed", "label", label, "error", err)
+		*errors = append(*errors, label+" tijdelijk niet beschikbaar")
 		return nil
 	}
 	if !value.Valid {
@@ -276,7 +340,9 @@ func buildFocusAttention(health FocusHealth, counts FocusCounts, business FocusB
 	if !health.BridgeOnline {
 		detail := "Geen recente bridge heartbeat"
 		if health.BridgeLastSeenAt != nil {
-			detail = "Laatste heartbeat " + health.BridgeLastSeenAt.UTC().Format(time.RFC3339)
+			// Format in local wall-clock time — a UTC RFC3339 stamp next to the
+			// Amsterdam times elsewhere on the kiosk reads as off-by-1/2-hours.
+			detail = "Laatste heartbeat " + health.BridgeLastSeenAt.In(amsterdamLoc).Format("02-01-2006 15:04")
 		}
 		items = append(items, FocusAttention{
 			ID: "bridge-offline", Domain: "home", Severity: "high",
@@ -298,13 +364,13 @@ func buildFocusAttention(health FocusHealth, counts FocusCounts, business FocusB
 	if sync.Schedule.Status != "success" {
 		items = append(items, FocusAttention{
 			ID: "schedule-sync", Domain: "sync", Severity: "medium",
-			Title: "Rooster sync controleren", Detail: sync.Schedule.Status, Href: "/settings",
+			Title: "Rooster sync controleren", Detail: focusStatusDutch(sync.Schedule.Status), Href: "/settings",
 		})
 	}
 	if sync.Gmail.Status != "success" {
 		items = append(items, FocusAttention{
 			ID: "gmail-sync", Domain: "sync", Severity: "medium",
-			Title: "Gmail sync controleren", Detail: sync.Gmail.Status, Href: "/settings",
+			Title: "Gmail sync controleren", Detail: focusStatusDutch(sync.Gmail.Status), Href: "/settings",
 		})
 	}
 	if counts.PersonalPending > 0 {
@@ -338,6 +404,24 @@ func buildFocusAttention(health FocusHealth, counts FocusCounts, business FocusB
 		})
 	}
 	return items
+}
+
+// focusStatusDutch translates the machine status enum (kept as-is in the JSON
+// contract) into a human Dutch detail for the attention list — the kiosk showed
+// literal "stale"/"missing_config" between otherwise-Dutch copy (N12).
+func focusStatusDutch(status string) string {
+	switch status {
+	case "stale":
+		return "verouderd"
+	case "missing_config":
+		return "niet geconfigureerd"
+	case "pending":
+		return "wacht op eerste sync"
+	case "disabled":
+		return "uitgeschakeld"
+	default:
+		return status
+	}
 }
 
 func focusSyncStatus(enabled, configured bool, lastSuccess *time.Time) string {

@@ -108,4 +108,84 @@ func TestCalculateNegativeHabitProgress(t *testing.T) {
 	}
 }
 
+func TestCalculateWeeklyHabitProgress(t *testing.T) {
+	goal := 2
+	habit := model.Habit{Type: "positief", Frequentie: "x_per_week", DoelAantal: &goal, XPPerVoltooiing: 10}
+	logs := []habitProgressLog{
+		// Week 2026-W23 (1-7 jun): 2 completions → satisfied
+		{Datum: "2026-06-01", Voltooid: true, XPVerdiend: 10},
+		{Datum: "2026-06-04", Voltooid: true, XPVerdiend: 10},
+		// Week 2026-W24 (8-14 jun): 2 completions → satisfied
+		{Datum: "2026-06-09", Voltooid: true, XPVerdiend: 10},
+		{Datum: "2026-06-13", Voltooid: true, XPVerdiend: 10},
+		// Week 2026-W25 (15-21 jun): current week, only 1 so far → in progress
+		{Datum: "2026-06-16", Voltooid: true, XPVerdiend: 10},
+	}
+	alwaysDue := func(string) bool { return true }
+	current, longest, total, xp := calculateHabitProgress(habit, logs, "2026-06-17", alwaysDue)
+	if current != 2 || longest != 2 || total != 5 || xp != 50 {
+		t.Fatalf("weekly progress = current %d longest %d total %d xp %d, want 2/2/5/50 (partial current week must not break the streak)", current, longest, total, xp)
+	}
+
+	// Once the current week reaches the goal it joins the streak.
+	logs = append(logs, habitProgressLog{Datum: "2026-06-17", Voltooid: true, XPVerdiend: 10})
+	current, longest, _, _ = calculateHabitProgress(habit, logs, "2026-06-17", alwaysDue)
+	if current != 3 || longest != 3 {
+		t.Fatalf("weekly progress after goal = current %d longest %d, want 3/3", current, longest)
+	}
+}
+
+func TestCalculateWeeklyHabitStreakBreaksOnMissedWeek(t *testing.T) {
+	habit := model.Habit{Type: "positief", Frequentie: "x_per_week"} // doel_aantal default 1
+	logs := []habitProgressLog{
+		{Datum: "2026-06-01", Voltooid: true}, // W23
+		// W24 (8-14 jun) skipped entirely
+		{Datum: "2026-06-16", Voltooid: true}, // W25
+	}
+	current, longest, _, _ := calculateHabitProgress(habit, logs, "2026-06-17", func(string) bool { return true })
+	if current != 1 || longest != 1 {
+		t.Fatalf("weekly progress = current %d longest %d, want 1/1 (missed week breaks the run)", current, longest)
+	}
+}
+
+func TestCalculateMonthlyHabitProgress(t *testing.T) {
+	goal := 3
+	habit := model.Habit{Type: "positief", Frequentie: "x_per_maand", DoelAantal: &goal}
+	logs := []habitProgressLog{
+		{Datum: "2026-04-02", Voltooid: true},
+		{Datum: "2026-04-15", Voltooid: true},
+		{Datum: "2026-04-28", Voltooid: true}, // april satisfied
+		{Datum: "2026-05-05", Voltooid: true},
+		{Datum: "2026-05-06", Voltooid: true},
+		{Datum: "2026-05-07", Voltooid: true}, // mei satisfied
+		{Datum: "2026-06-01", Voltooid: true}, // juni in progress
+	}
+	current, longest, total, _ := calculateHabitProgress(habit, logs, "2026-06-10", func(string) bool { return true })
+	if current != 2 || longest != 2 || total != 7 {
+		t.Fatalf("monthly progress = current %d longest %d total %d, want 2/2/7", current, longest, total)
+	}
+}
+
+func TestHabitDueOnDateNotBeforeCreation(t *testing.T) {
+	created := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	habit := model.Habit{IsActief: true, Frequentie: "dagelijks", Aangemaakt: created}
+	if habitDueOnDate(habit, "2026-06-05", habitScheduleContext{}) {
+		t.Fatal("habit must not be due before its creation date (heatmap rewrote history)")
+	}
+	if !habitDueOnDate(habit, "2026-06-10", habitScheduleContext{}) {
+		t.Fatal("habit must be due on its creation date")
+	}
+}
+
+func TestPeriodBoundsForDate(t *testing.T) {
+	ws, we, err := PeriodBoundsForDate("2026-07-01", true) // Wednesday
+	if err != nil || ws != "2026-06-29" || we != "2026-07-05" {
+		t.Fatalf("week bounds = %s..%s (%v), want 2026-06-29..2026-07-05", ws, we, err)
+	}
+	ms, me, err := PeriodBoundsForDate("2026-02-10", false)
+	if err != nil || ms != "2026-02-01" || me != "2026-02-28" {
+		t.Fatalf("month bounds = %s..%s (%v), want 2026-02-01..2026-02-28", ms, me, err)
+	}
+}
+
 func strPtr(value string) *string { return &value }

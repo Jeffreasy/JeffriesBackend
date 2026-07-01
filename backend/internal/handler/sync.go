@@ -39,7 +39,7 @@ func NewSyncHandler(db *store.DB, cfg *config.Config) *SyncHandler {
 func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 
@@ -57,7 +57,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 
 	scheduleSync, err := google.SyncScheduleDetailed(ctx, client, userID, h.cfg.SDBCalendarID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Schedule sync failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("schedule sync: %w", err))
 		return
 	}
 	diensten := scheduleSync.Diensten
@@ -126,7 +126,7 @@ func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
 
 	personalSync, err := google.SyncPersonalEventsDetailed(ctx, client, userID, calendarIDs, h.cfg.SDBCalendarID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Personal event sync failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("personal event sync: %w", err))
 		return
 	}
 	personalEvents := personalSync.Events
@@ -327,7 +327,7 @@ func resolvedPersonalEventStatus(event model.PersonalEvent) string {
 func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	if h.cfg.TodoistAPIToken == "" {
@@ -339,7 +339,7 @@ func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.pushTodoist(ctx, userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Todoist sync mislukt: "+err.Error())
+		InternalError(w, r, fmt.Errorf("todoist sync: %w", err))
 		return
 	}
 	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed, "deleted": res.Deleted, "failed": res.Failed})
@@ -368,12 +368,12 @@ func (h *SyncHandler) pushTodoist(ctx context.Context, userID string) (*todoist.
 func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 
 	if !googleOAuthConfigured(h.cfg) {
-		Error(w, http.StatusServiceUnavailable, "Google OAuth credentials missing")
+		Error(w, http.StatusServiceUnavailable, "Google OAuth is niet geconfigureerd.")
 		return
 	}
 
@@ -385,13 +385,13 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := emailStore.GetSyncMeta(ctx, userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Gmail sync meta failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail sync meta: %w", err))
 		return
 	}
 
 	storedBefore, err := emailStore.Count(ctx, userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Gmail count failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail count: %w", err))
 		return
 	}
 
@@ -406,13 +406,13 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 	result, parsedEmails, newHistoryID, err := google.SyncGmail(ctx, client, userID, historyID)
 	if err != nil {
 		_ = emailStore.MarkSyncFailed(ctx, userID, err.Error())
-		Error(w, http.StatusInternalServerError, "Gmail sync failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail sync: %w", err))
 		return
 	}
 
 	upserted, err := storeParsedEmails(ctx, emailStore, parsedEmails)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Gmail store failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail store: %w", err))
 		return
 	}
 
@@ -422,7 +422,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 
 	totalSynced, err := emailStore.Count(ctx, userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Gmail count update failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail count update: %w", err))
 		return
 	}
 
@@ -436,7 +436,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := emailStore.UpsertSyncMeta(ctx, userID, newHistoryID, lastFullSync, totalSynced); err != nil {
-		Error(w, http.StatusInternalServerError, "Gmail sync meta update failed: "+err.Error())
+		InternalError(w, r, fmt.Errorf("gmail sync meta update: %w", err))
 		return
 	}
 
