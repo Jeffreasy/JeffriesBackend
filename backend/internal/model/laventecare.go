@@ -244,6 +244,7 @@ type LCLeadUpdate struct {
 	Prioriteit         *string    `json:"prioriteit,omitempty"`
 	VolgendeStap       *string    `json:"volgende_stap,omitempty"`
 	VolgendeActieDatum *string    `json:"volgende_actie_datum,omitempty"`
+	Bron               *string    `json:"bron,omitempty"`
 }
 
 type LCProject struct {

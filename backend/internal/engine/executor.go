@@ -3088,6 +3088,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Prioriteit         *string `json:"prioriteit"`
 			VolgendeStap       *string `json:"volgende_stap"`
 			VolgendeActieDatum *string `json:"volgende_actie_datum"`
+			Bron               *string `json:"bron"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -3113,6 +3114,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Prioriteit:         args.Prioriteit,
 			VolgendeStap:       args.VolgendeStap,
 			VolgendeActieDatum: args.VolgendeActieDatum,
+			Bron:               args.Bron,
 		}
 		if err := e.laventeCareStore.UpdateLead(ctx, e.userID, id, input); err != nil {
 			return e.jsonResponse(nil, err)

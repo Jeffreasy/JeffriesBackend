@@ -1267,7 +1267,8 @@ var AllTools = []ToolDefinition{
 					"pijnpunt": {"type": "string"},
 					"prioriteit": {"type": "string"},
 					"volgende_stap": {"type": "string"},
-					"volgende_actie_datum": {"type": "string"}
+					"volgende_actie_datum": {"type": "string"},
+					"bron": {"type": "string"}
 				},
 				"required": ["id"]
 			}`),

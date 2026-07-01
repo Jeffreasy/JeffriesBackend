@@ -824,10 +824,11 @@ func (s *LaventeCareStore) UpdateLead(ctx context.Context, userID string, id uui
 			prioriteit = COALESCE($8, prioriteit),
 			volgende_stap = COALESCE($9, volgende_stap),
 			volgende_actie_datum = COALESCE($10, volgende_actie_datum),
-			updated_at = $11
+			bron = COALESCE($11, bron),
+			updated_at = $12
 		 WHERE id = $1 AND user_id = $2`,
 		id, userID, input.CompanyID, input.ContactID, input.Status, input.FitScore, input.Pijnpunt,
-		input.Prioriteit, input.VolgendeStap, input.VolgendeActieDatum, now)
+		input.Prioriteit, input.VolgendeStap, input.VolgendeActieDatum, input.Bron, now)
 	if err != nil {
 		return err
 	}
