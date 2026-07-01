@@ -105,6 +105,8 @@ func telegramMenuCommands() []tg.BotCommand {
 		{Command: "laventecare", Description: "LaventeCare cockpit"},
 		{Command: "email", Description: "Inbox en e-mailsignalen"},
 		{Command: "compose", Description: "Nieuwe email opstellen"},
+		{Command: "triage", Description: "Actielijst voor je inbox"},
+		{Command: "search", Description: "Zoeken in je email"},
 		{Command: "notities", Description: "Notities-overzicht"},
 		{Command: "noteer", Description: "Snel een notitie vastleggen"},
 		{Command: "zoeknote", Description: "Notities doorzoeken"},

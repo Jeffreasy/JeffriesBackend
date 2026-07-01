@@ -161,13 +161,15 @@ func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAc
 
 // Cancel marks a pending action as cancelled for a user. Returns (nil, nil)
 // — not an error — if no matching pending row exists, matching Claim/
-// FindByCode's convention.
+// FindByCode's convention. Also requires expires_at > now(), same as those
+// two, so an already-expired action reads as "not found" instead of being
+// mutable into 'cancelled' after the fact.
 func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingAction, error) {
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
 		`UPDATE ai_pending_actions
 		 SET status = 'cancelled', updated_at = now()
-		 WHERE id = $1 AND user_id = $2 AND status = 'pending'
+		 WHERE id = $1 AND user_id = $2 AND status = 'pending' AND expires_at > now()
 		 RETURNING id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at`,
 		id, userID,
 	).Scan(&pa.ID, &pa.UserID, &pa.AgentID, &pa.ToolName, &pa.ArgsJSON, &pa.Summary, &pa.Code, &pa.Status, &pa.ExpiresAt, &pa.CreatedAt)

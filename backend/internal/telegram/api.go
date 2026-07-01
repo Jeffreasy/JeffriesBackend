@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -62,8 +64,15 @@ func (c *Client) post(method string, body any) (json.RawMessage, error) {
 	}
 	resp, err := c.httpClient.Do(mustReq("POST", c.apiURL(method), data))
 	if err != nil {
-		slog.Warn("telegram API request failed", "method", method, "chatID", extractChatID(body), "error", err)
-		return nil, err
+		// Sanitize before both logging AND returning: apiURL() embeds the raw
+		// bot token, and net/http wraps a transport failure as *url.Error
+		// whose Error() includes the full request URL verbatim. If only the
+		// log line were sanitized, the raw token-bearing error would still
+		// reach every caller — including ones added later that log it again
+		// (e.g. the EditMessageText failure paths in engine/telegram_*.go).
+		sanitized := sanitizeTelegramError(err)
+		slog.Warn("telegram API request failed", "method", method, "chatID", extractChatID(body), "error", sanitized)
+		return nil, sanitized
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -91,6 +100,20 @@ func extractChatID(body any) any {
 		return m["chat_id"]
 	}
 	return nil
+}
+
+// sanitizeTelegramError strips the request URL from a failed http.Client.Do
+// error before it reaches a log line. apiURL() embeds the raw bot token
+// (".../bot<TOKEN>/sendMessage"), and a transport-level failure (DNS, refused
+// connection, timeout) is returned by net/http as a *url.Error whose Error()
+// includes that full URL verbatim — logging it unsanitized would put the
+// live bot token in plaintext logs on every network hiccup.
+func sanitizeTelegramError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("telegram %s: %w", urlErr.Op, urlErr.Err)
+	}
+	return err
 }
 
 // SendMessage sends a plain text message (HTML parse mode), splitting into

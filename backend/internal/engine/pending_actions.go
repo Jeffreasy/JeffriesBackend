@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -143,7 +144,15 @@ func executeClaimedPendingAction(ctx context.Context, pool *pgxpool.Pool, pendin
 	executor := NewHomeBotExecutorWithGoogle(pool, userID, googleClient)
 	result := executor.Execute(ctx, action.ToolName, action.ArgsJSON)
 	if message := toolResultError(result); message != "" {
-		_ = pending.MarkStatus(ctx, action.ID, userID, "failed", &result, &message)
+		// The tool failure (message) is the actionable error for the user —
+		// keep returning that even if persisting it also fails, rather than
+		// replacing it with a confusing DB-persistence error. But a failed
+		// MarkStatus here leaves the row stuck at 'confirmed' with no
+		// failure recorded (Claim already set 'confirmed' before this ran),
+		// so it silently vanishes from /pending with zero trail — log it.
+		if markErr := pending.MarkStatus(ctx, action.ID, userID, "failed", &result, &message); markErr != nil {
+			slog.Warn("pending action mark-failed also failed", "actionID", action.ID, "toolError", message, "markStatusError", markErr)
+		}
 		return pendingActionResult(action, &result, &message), fmt.Errorf("%s", message)
 	}
 	if err := pending.MarkStatus(ctx, action.ID, userID, "confirmed", &result, nil); err != nil {
