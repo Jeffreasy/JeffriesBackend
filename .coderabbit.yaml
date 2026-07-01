@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  finishing_touches:
+    # This codebase deliberately writes terse, comment-free Go — don't nudge
+    # every PR toward doc comments that clash with the established style.
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: true
+
+  tools:
+    golangci-lint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    semgrep:
+      enabled: true
+    osvScanner:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    hadolint:
+      enabled: true
+
+  path_filters:
+    - "!backend/api.exe"
+    - "!backend/tmp.exe"
+    - "!backend/bin/**"
+    - "!**/*.exe"
+
+  path_instructions:
+    - path: "backend/internal/ai/**"
+      instructions: |
+        This is the AI tool-calling layer (Grok/xAI). For every new or changed
+        tool case:
+        - Any tool that mutates data, sends external communication (email,
+          Telegram), or moves money MUST be registered in agents.go's Policies
+          map with Mutates:true and RequiresConfirmation:true, so it routes
+          through ConfirmingExecutor and requires /approve before executing.
+          Flag any new mutating tool case in executor.go that lacks a matching
+          policy entry.
+        - Tool results returned to the model must never leak raw Go/pgx errors
+          or English text — flag any fmt.Sprintf("...%v", err) style response
+          instead of a classified, Dutch, user-safe message (see
+          classifyStoreError/classifyUserFacingError for the established
+          pattern).
+        - Every store call must be scoped to the executor's own e.userID —
+          flag anything that accepts a caller-supplied user/owner id instead.
+
+    - path: "backend/internal/store/**"
+      instructions: |
+        This app is single-tenant but has a repeat history of IDOR bugs from
+        queries missing a user_id predicate. Flag any SELECT/UPDATE/DELETE
+        that filters by a record id alone without also scoping to user_id
+        (unless the table is genuinely global/unscoped, which is rare here).
+        Also flag raw pgx/Postgres errors (SQLSTATE text, driver internals)
+        returned unwrapped through public methods instead of being classified
+        or wrapped with context.
+
+    - path: "backend/internal/handler/**"
+      instructions: |
+        Flag any new route whose handler reads/writes user data without going
+        through the app's shared X-API-Key auth middleware (see
+        internal/server/routes.go — nearly the entire /api/v1 surface,
+        including GETs, is meant to sit inside the authenticated r.Group).
+        Flag any handler that trusts a client-supplied userId/ownerId query
+        param instead of the server-configured HomeappUserID.
+
+    - path: "backend/internal/telegram/**"
+      instructions: |
+        User-facing text here is read by a Dutch-speaking single owner over
+        Telegram. Flag: raw English Go/API error strings sent directly as a
+        reply; message construction that could exceed Telegram's real 4096-char
+        limit after HTML-escaping (escape before truncating, not after);
+        byte-level string slicing that could split a multi-byte UTF-8 rune
+        (€, é, ë, emoji are common in this content).
+
+    - path: "backend/migrations/**"
+      instructions: |
+        This directory is DEAD CODE — nothing runs these files. The real,
+        canonical schema is built idempotently at boot by EnsureRuntimeSchema
+        in backend/internal/store/runtime_schema.go. If a PR adds/changes a
+        migration file, flag that the equivalent CREATE/ALTER IF NOT EXISTS
+        change must also land in runtime_schema.go, or the migration has no
+        effect in production.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: "auto"
+  pull_requests:
+    scope: "auto"
