@@ -86,7 +86,17 @@ func (c *Client) post(method string, body any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("telegram parse: %w", err)
 	}
 	if !result.OK {
-		slog.Warn("telegram API returned not-ok", "method", method, "chatID", extractChatID(body), "response", safeTruncateBytes(string(raw), 300))
+		// "message is not modified" fires whenever an edit's text+keyboard is
+		// byte-identical to what's already shown (a double-tap on a button,
+		// a retried edit racing an earlier identical one) — harmless and,
+		// for the editMessageText call sites in this codebase, expected to
+		// happen occasionally. Still returned as an error (callers may want
+		// to fall back), just not at Warn level like a genuine API failure.
+		if strings.Contains(string(raw), "message is not modified") {
+			slog.Debug("telegram API edit was a no-op", "method", method, "chatID", extractChatID(body))
+		} else {
+			slog.Warn("telegram API returned not-ok", "method", method, "chatID", extractChatID(body), "response", safeTruncateBytes(string(raw), 300))
+		}
 		return nil, fmt.Errorf("telegram API: %s", string(raw))
 	}
 	return result.Result, nil

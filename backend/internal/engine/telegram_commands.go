@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -327,6 +328,11 @@ func knownCommandNames() []string {
 		"/pending", "/bevestigingen", "/approve", "/confirm", "/akkoord",
 		"/reject", "/cancel", "/annuleer",
 	)
+	// commandRegistry is a map, so its iteration order is randomized —
+	// without this sort, closestKnownCommand's tie-break ("first found
+	// wins") could pick a different, equally-close suggestion on different
+	// runs for the exact same typo.
+	sort.Strings(names)
 	return names
 }
 
