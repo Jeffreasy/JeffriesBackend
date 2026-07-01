@@ -2430,10 +2430,14 @@ func (s *LaventeCareStore) CreateActivityEvent(ctx context.Context, userID strin
 	}
 
 	if shouldActivityUpdateLastContact(eventType) {
+		// Backdating a moment (logging historical contact history) must not
+		// regress laatste_contact past a genuinely more recent one already
+		// on record — only advance it, never rewind it.
 		_, _ = s.db.Pool.Exec(ctx,
 			`UPDATE lc_companies
 			    SET laatste_contact = $1, updated_at = $2
-			  WHERE user_id = $3 AND id = $4`,
+			  WHERE user_id = $3 AND id = $4
+			    AND (laatste_contact IS NULL OR laatste_contact < $1)`,
 			occurredAt, now, userID, input.CompanyID)
 	}
 
