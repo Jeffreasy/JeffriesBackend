@@ -572,6 +572,9 @@ type LCMailbox struct {
 	Templates []LCMailTemplate   `json:"templates"`
 	Outbox    []LCMailOutboxItem `json:"outbox"`
 	Inbox     []LCMailInboxItem  `json:"inbox"`
+	// InboxError carries a Dutch message when the inbox could not be fetched —
+	// without it a fetch failure was indistinguishable from an empty inbox.
+	InboxError string `json:"inboxError,omitempty"`
 }
 
 // LCMailInboxItem is a received email (ingested from Microsoft Graph), linked to a
@@ -694,6 +697,14 @@ type LCMailSendRequest struct {
 	Variables    map[string]string  `json:"variables"`
 	Send         bool               `json:"send"`
 	Attachments  []LCMailAttachment `json:"attachments,omitempty"`
+	// Subject overrides the rendered template subject — used by the reply flow
+	// ("Re: <origineel onderwerp>"). Optional.
+	Subject *string `json:"subject,omitempty"`
+	// ConversationID links this outbound mail to the Graph conversation of the
+	// message being replied to, so the UI can thread them together. It is stored
+	// for grouping only; the mail is sent as a fresh message, not a true Graph
+	// reply. Optional.
+	ConversationID *string `json:"conversation_id,omitempty"`
 }
 
 type LCMailAttachment struct {
@@ -868,6 +879,14 @@ type LCTimeEntry struct {
 	CompanyName     *string    `json:"company_name,omitempty"`
 	ProjectName     *string    `json:"project_name,omitempty"`
 	WorkstreamTitle *string    `json:"workstream_title,omitempty"`
+}
+
+// LCTimeEntryUpdate patches an uninvoiced time entry (N10): description,
+// minutes and/or status ("open"/"afgeschreven"). Invoiced entries are immutable.
+type LCTimeEntryUpdate struct {
+	Omschrijving *string `json:"omschrijving,omitempty"`
+	Minuten      *int    `json:"minuten,omitempty"`
+	Status       *string `json:"status,omitempty"`
 }
 
 type LCTimeEntryCreate struct {

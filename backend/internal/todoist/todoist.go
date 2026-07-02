@@ -21,14 +21,21 @@ const baseURL = "https://api.todoist.com/api/v1/"
 
 // Client wraps the Todoist REST API.
 type Client struct {
-	token     string
-	projectID string
+	token      string
+	projectID  string
+	httpClient *http.Client
 }
+
 
 // NewClient creates a new Todoist API client.
 func NewClient(token, projectID string) *Client {
-	return &Client{token: token, projectID: projectID}
+	return &Client{
+		token:      token,
+		projectID:  projectID,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
 }
+
 
 // Task represents a Todoist task.
 type Task struct {
@@ -325,7 +332,7 @@ func (c *Client) doRequestRaw(ctx context.Context, method, endpoint string, payl
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +363,7 @@ func (c *Client) doForm(ctx context.Context, endpoint string, form url.Values) (
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, err
 		}

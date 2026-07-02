@@ -1,6 +1,10 @@
 package store
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
 
 // TestGovernanceStatusVocabularies locks the small, distinct status vocabularies
 // for decisions, change requests and SLA incidents — each narrower than the
@@ -78,7 +82,8 @@ func TestUpdateActionStatusRejectsUnknownStatus(t *testing.T) {
 			t.Fatalf("action status %q should be a known status", status)
 		}
 	}
-	err := s.UpdateActionStatus(nil, "user", [16]byte{}, "onbekend")
+	err := s.UpdateActionStatus(context.Background(), "user", [16]byte{}, "onbekend")
+
 	if err != ErrInvalidStatus {
 		t.Fatalf("expected ErrInvalidStatus for unknown action status, got %v", err)
 	}

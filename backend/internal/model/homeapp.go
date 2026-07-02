@@ -274,6 +274,11 @@ type Note struct {
 	TriageFlag           *bool      `json:"triage_flag" db:"triage_flag"`
 	Aangemaakt           time.Time  `json:"aangemaakt" db:"aangemaakt"`
 	Gewijzigd            time.Time  `json:"gewijzigd" db:"gewijzigd"`
+	// Preview is only populated in summary mode (fields=summary), where inhoud is
+	// blanked to keep payloads small. It holds the first ~80 chars of the body so
+	// the kiosk can show a meaningful line for untitled notes instead of
+	// "Naamloze notitie". Omitted (nil) in full mode.
+	Preview *string `json:"preview,omitempty" db:"-"`
 }
 
 type NoteRevision struct {

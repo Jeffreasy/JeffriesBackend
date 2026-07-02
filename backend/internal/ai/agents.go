@@ -60,7 +60,8 @@ var Policies = map[string]ToolPolicy{
 	"bulkVerwijder":      {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"inboxOpruimen":      {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Smart home
-	"lampBedien": {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"lampBedien": {Agents: []string{"lampen", "brain"}, Mutates: true, RequiresConfirmation: true},
+
 	// Schedule reads
 	"planningOpvragen":        {Agents: []string{"agenda", "rooster", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"dienstenOpvragen":        {Agents: []string{"agenda", "rooster", "finance", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -82,17 +83,18 @@ var Policies = map[string]ToolPolicy{
 	"afspraakVerwijderen": {Agents: []string{"agenda", "rooster", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"afsprakenOpvragen":   {Agents: []string{"agenda", "rooster", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	// Notes
-	"notitieAanmaken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"notitieAanmaken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitiesZoeken":        {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"notitiesOverzicht":     {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
-	"notitiePinnen":         {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"notitiePinnen":         {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitieBewerken":       {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitieArchiveren":     {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"notitiesVandaag":       {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
-	"habitAanmaken":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"habitVoltooien":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"habitAanmaken":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"habitVoltooien":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
+
 	"habitIncident":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"habitsOverzicht": {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"habitStreaks":    {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -128,9 +130,10 @@ var Policies = map[string]ToolPolicy{
 	"laventecareActieMaken":          {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareActieAfronden":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Pure additive log entries — same risk tier as notitieAanmaken, no destructive potential.
-	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
-	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: false},
+	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
+
 }
 
 // IsToolAllowed checks if the given agent may use the tool.

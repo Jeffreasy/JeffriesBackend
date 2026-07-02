@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "homeapp-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../JeffriesHomeapp", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}

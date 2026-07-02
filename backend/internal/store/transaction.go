@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -32,7 +33,8 @@ func (s *TransactionStore) List(ctx context.Context, userID string, fromDate, to
 		args = append(args, *toDate)
 		query += ` AND datum <= $` + pgArgNum(len(args))
 	}
-	query += ` ORDER BY datum DESC, volgnr DESC`
+	// LPAD volgnr so ordering is numeric ("9" < "10") at a digit-length rollover.
+	query += ` ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC`
 
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -105,9 +107,11 @@ func (s *TransactionStore) ListFiltered(ctx context.Context, userID string, f Tr
 		where += ` AND datum <= $` + pgArgNum(len(args))
 	}
 	if f.Zoekterm != "" {
-		args = append(args, "%"+f.Zoekterm+"%")
+		// Escape LIKE wildcards in the user term so "100%" or "a_b" match
+		// literally instead of acting as patterns.
+		args = append(args, "%"+escapeLikePattern(f.Zoekterm)+"%")
 		n := pgArgNum(len(args))
-		where += ` AND (LOWER(tegenpartij_naam) LIKE LOWER($` + n + `) OR LOWER(omschrijving) LIKE LOWER($` + n + `))`
+		where += ` AND (LOWER(tegenpartij_naam) LIKE LOWER($` + n + `) ESCAPE '\' OR LOWER(omschrijving) LIKE LOWER($` + n + `) ESCAPE '\')`
 	}
 
 	// Count
@@ -133,7 +137,7 @@ func (s *TransactionStore) ListFiltered(ctx context.Context, userID string, f Tr
 	offsetN := pgArgNum(len(args))
 
 	dataQ := `SELECT ` + trxColumns + ` FROM transactions ` + where +
-		` ORDER BY datum DESC, volgnr DESC LIMIT $` + limitN + ` OFFSET $` + offsetN
+		` ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC LIMIT $` + limitN + ` OFFSET $` + offsetN
 
 	rows, err := s.db.Pool.Query(ctx, dataQ, args...)
 	if err != nil {
@@ -203,7 +207,7 @@ func (s *TransactionStore) BulkUpdateCategorie(ctx context.Context, userID strin
 // GetStats returns aggregate stats for a user.
 func (s *TransactionStore) GetStats(ctx context.Context, userID string) (map[string]any, error) {
 	var totaal int
-	var inkomsten, uitgaven float64
+	var inkomsten, uitgaven, saldo float64
 	err := s.db.Pool.QueryRow(ctx,
 		`SELECT COUNT(*),
 		        COALESCE(SUM(CASE WHEN bedrag > 0 THEN bedrag ELSE 0 END), 0),
@@ -213,13 +217,29 @@ func (s *TransactionStore) GetStats(ctx context.Context, userID string) (map[str
 	if err != nil {
 		return nil, err
 	}
+
+	err = s.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(saldo_na_trn), 0)
+		   FROM (
+		       SELECT saldo_na_trn,
+		              ROW_NUMBER() OVER (PARTITION BY rekening_iban ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC) as rn
+		         FROM transactions
+		        WHERE user_id = $1
+		   ) t
+		  WHERE rn = 1`, userID,
+	).Scan(&saldo)
+	if err != nil {
+		return nil, err
+	}
+
 	return map[string]any{
 		"totaal":    totaal,
 		"inkomsten": inkomsten,
 		"uitgaven":  uitgaven,
-		"saldo":     inkomsten + uitgaven,
+		"saldo":     saldo,
 	}, nil
 }
+
 
 func scanTransaction(row pgx.CollectableRow) (model.Transaction, error) {
 	var t model.Transaction
@@ -233,3 +253,12 @@ func scanTransaction(row pgx.CollectableRow) (model.Transaction, error) {
 }
 
 func pgArgNum(n int) string { return strconv.Itoa(n) }
+
+// escapeLikePattern escapes \, % and _ in a user-supplied search term so it is
+// matched literally inside a LIKE ... ESCAPE '\' pattern.
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}

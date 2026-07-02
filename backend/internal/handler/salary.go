@@ -30,7 +30,7 @@ func (h *SalaryHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.store.List(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, list)
@@ -57,7 +57,7 @@ func (h *SalaryHandler) GetByPeriode(w http.ResponseWriter, r *http.Request) {
 	}
 	sal, err := h.store.GetByPeriode(r.Context(), userID, periode)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if sal == nil {
@@ -82,7 +82,7 @@ func (h *SalaryHandler) GetByPeriode(w http.ResponseWriter, r *http.Request) {
 func (h *SalaryHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	var sal model.Salary
 	if err := json.NewDecoder(r.Body).Decode(&sal); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if sal.UserID == "" || sal.Periode == "" {
@@ -90,7 +90,7 @@ func (h *SalaryHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Upsert(r.Context(), sal); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]bool{"ok": true})

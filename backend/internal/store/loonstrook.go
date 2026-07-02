@@ -72,21 +72,32 @@ func (s *LoonstrookStore) List(ctx context.Context, userID string) ([]map[string
 	})
 }
 
-// ImportBatch inserts parsed loonstroken, skipping existing periode/jaar combos.
-func (s *LoonstrookStore) ImportBatch(ctx context.Context, userID string, items []map[string]any) (int, error) {
+// ImportResult reports how many rows were newly inserted versus updated.
+type ImportResult struct {
+	Inserted int // genuinely new rows
+	Updated  int // existing rows whose data changed via upsert
+}
+
+// ImportBatch upserts parsed loonstroken. A re-uploaded (corrected) payslip for an
+// existing (user_id, jaar, periode) now overwrites all mutable columns instead of
+// being silently skipped. The returned ImportResult distinguishes truly-new rows
+// (Inserted) from overwritten ones (Updated) using the Postgres `xmax = 0` trick:
+// on a fresh INSERT xmax is 0, on an ON CONFLICT UPDATE it is the deleting txid.
+func (s *LoonstrookStore) ImportBatch(ctx context.Context, userID string, items []map[string]any) (ImportResult, error) {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return ImportResult{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	var inserted int
+	var res ImportResult
 	for _, item := range items {
 		ortDetailJSON, _ := json.Marshal(item["ortDetail"])
 		componentsJSON, _ := json.Marshal(item["componenten"])
 		cumulJSON, _ := json.Marshal(item["cumulatieven"])
 
-		tag, err := tx.Exec(ctx,
+		var isInsert bool
+		err := tx.QueryRow(ctx,
 			`INSERT INTO loonstroken (id, user_id, jaar, periode, periode_label, type,
 			    netto, bruto_betaling, bruto_inhouding, salaris_basis,
 			    ort_totaal, ort_detail, amt_zeerintensief, pensioenpremie,
@@ -95,7 +106,31 @@ func (s *LoonstrookStore) ImportBatch(ctx context.Context, userID string, items 
 			    schaalnummer, trede, parttime_factor, uurloon,
 			    componenten, cumulatieven)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
-			 ON CONFLICT (user_id, jaar, periode) DO NOTHING`,
+			 ON CONFLICT (user_id, jaar, periode) DO UPDATE SET
+			    periode_label     = EXCLUDED.periode_label,
+			    type              = EXCLUDED.type,
+			    netto             = EXCLUDED.netto,
+			    bruto_betaling    = EXCLUDED.bruto_betaling,
+			    bruto_inhouding   = EXCLUDED.bruto_inhouding,
+			    salaris_basis     = EXCLUDED.salaris_basis,
+			    ort_totaal        = EXCLUDED.ort_totaal,
+			    ort_detail        = EXCLUDED.ort_detail,
+			    amt_zeerintensief = EXCLUDED.amt_zeerintensief,
+			    pensioenpremie    = EXCLUDED.pensioenpremie,
+			    loonheffing       = EXCLUDED.loonheffing,
+			    reiskosten        = EXCLUDED.reiskosten,
+			    vakantietoeslag   = EXCLUDED.vakantietoeslag,
+			    eju_bedrag        = EXCLUDED.eju_bedrag,
+			    toeslag_balansvlf = EXCLUDED.toeslag_balansvlf,
+			    extra_uren_bedrag = EXCLUDED.extra_uren_bedrag,
+			    schaalnummer      = EXCLUDED.schaalnummer,
+			    trede             = EXCLUDED.trede,
+			    parttime_factor   = EXCLUDED.parttime_factor,
+			    uurloon           = EXCLUDED.uurloon,
+			    componenten       = EXCLUDED.componenten,
+			    cumulatieven      = EXCLUDED.cumulatieven,
+			    geimporteerd_op   = now()
+			 RETURNING (xmax = 0)`,
 			uuid.New(), userID,
 			toInt(item["jaar"]), toInt(item["periode"]),
 			toString(item["periodeLabel"]), toString(item["type"]),
@@ -109,13 +144,17 @@ func (s *LoonstrookStore) ImportBatch(ctx context.Context, userID string, items 
 			toString(item["schaalnummer"]), toString(item["trede"]),
 			toFloat(item["parttimeFactor"]), toFloatPtr(item["uurloon"]),
 			componentsJSON, cumulJSON,
-		)
+		).Scan(&isInsert)
 		if err != nil {
-			return 0, err
+			return ImportResult{}, err
 		}
-		inserted += int(tag.RowsAffected())
+		if isInsert {
+			res.Inserted++
+		} else {
+			res.Updated++
+		}
 	}
-	return inserted, tx.Commit(ctx)
+	return res, tx.Commit(ctx)
 }
 
 func toInt(v any) int {

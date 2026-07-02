@@ -270,7 +270,8 @@ func (s *PersonalEventStore) UpdateStatus(ctx context.Context, userID, eventID, 
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE personal_events SET status=$3 WHERE user_id=$1 AND event_id=$2`, userID, eventID, status)
 	if err == nil && tag.RowsAffected() == 0 {
-		return fmt.Errorf("personal event not found: %s", eventID)
+		// Wrap pgx.ErrNoRows so handlers can errors.Is this into a 404.
+		return fmt.Errorf("personal event niet gevonden: %s: %w", eventID, pgx.ErrNoRows)
 	}
 	return err
 }

@@ -736,7 +736,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "habitVoltooien",
-			Description: "Vinkt een habit af of zet meetbare voortgang voor een datum. Naam mag gebruikt worden als ID ontbreekt.",
+			Description: "Vinkt een habit af, zet meetbare voortgang, of maakt het afvinken ongedaan (heropenen) voor een datum. Zet voltooid=false om een eerder afgevinkte habit weer te openen. Naam mag gebruikt worden als ID ontbreekt.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -745,6 +745,7 @@ var AllTools = []ToolDefinition{
 					"naam": {"type": "string", "description": "Habitnaam als ID onbekend is."},
 					"datum": {"type": "string", "description": "YYYY-MM-DD, standaard vandaag."},
 					"waarde": {"type": "number", "description": "Meetwaarde voor kwantitatieve habits."},
+					"voltooid": {"type": "boolean", "description": "Standaard true (afvinken). Zet false om het afvinken ongedaan te maken (heropenen) — verwijdert de xp voor die dag."},
 					"notitie": {"type": "string"}
 				},
 				"required": []

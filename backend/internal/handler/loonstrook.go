@@ -31,16 +31,20 @@ func (h *LoonstrookHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.store.List(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, list)
 }
 
-// LoonstrokenImportResponse represents the import result
+// LoonstrokenImportResponse represents the import result.
+// Total counts every upserted row (inserted + updated); Inserted is the
+// genuinely-new count and Updated is the number of overwritten existing rows.
+// The frontend derives "bijgewerkt" from Updated (or Total - Inserted).
 type LoonstrokenImportResponse struct {
 	OK       bool `json:"ok"`
 	Inserted int  `json:"inserted"`
+	Updated  int  `json:"updated"`
 	Total    int  `json:"total"`
 }
 
@@ -67,17 +71,24 @@ func (h *LoonstrookHandler) Import(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.UseNumber()
 	if err := decoder.Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "Ongeldige JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 	if body.UserID == "" || len(body.Items) == 0 {
 		Error(w, http.StatusBadRequest, "userId en items verplicht")
 		return
 	}
-	inserted, err := h.store.ImportBatch(r.Context(), body.UserID, body.Items)
+	res, err := h.store.ImportBatch(r.Context(), body.UserID, body.Items)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
-	JSON(w, http.StatusOK, map[string]any{"ok": true, "inserted": inserted, "total": len(body.Items)})
+	// total = every upserted row so re-uploads are truthfully reported; the
+	// frontend's "bijgewerkt = total - inserted" now equals res.Updated.
+	JSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"inserted": res.Inserted,
+		"updated":  res.Updated,
+		"total":    res.Inserted + res.Updated,
+	})
 }

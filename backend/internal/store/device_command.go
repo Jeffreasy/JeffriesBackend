@@ -18,6 +18,12 @@ const (
 
 	defaultDeviceCommandClaimLimit = 25
 	staleDeviceCommandAfter        = 2 * time.Minute
+	// pendingDeviceCommandTTL bounds how long a pending command may wait before
+	// it is considered expired. Without this, commands enqueued during a long
+	// bridge outage all fire at once when the bridge returns — an hours-old
+	// "lamp aan" replay-storm at 3am. Expired commands are marked failed so they
+	// are never claimed/replayed.
+	pendingDeviceCommandTTL = 10 * time.Minute
 )
 
 // DeviceCommand represents a pending WiZ command.
@@ -57,11 +63,28 @@ func (s *DeviceCommandStore) ClaimPending(ctx context.Context, limit int) ([]Dev
 		return nil, err
 	}
 
+	// Expire pending commands older than the TTL so a backlog built up during a
+	// bridge outage is not replayed en masse (replay-storm). Marking them failed
+	// (rather than deleting) keeps the queued-count metric truthful: the metric
+	// counts status='pending', and expired rows leave that state here — the
+	// poller runs this on every 2s claim, so stale pendings are cleared promptly.
+	expiredBefore := time.Now().UTC().Add(-pendingDeviceCommandTTL)
+	if _, err := s.db.Pool.Exec(ctx,
+		`UPDATE device_commands
+		    SET status = 'failed', completed_at = now(), updated_at = now()
+		  WHERE status = 'pending'
+		    AND created_at < $1`,
+		expiredBefore,
+	); err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.Pool.Query(ctx,
 		`WITH picked AS (
 		     SELECT id
 		       FROM device_commands
 		      WHERE status = 'pending'
+		        AND created_at > now() - interval '10 minutes'
 		      ORDER BY created_at
 		      FOR UPDATE SKIP LOCKED
 		      LIMIT $1
@@ -106,13 +129,16 @@ func (s *DeviceCommandStore) MarkDone(ctx context.Context, id uuid.UUID, status 
 
 // RequeueOrFail increments the attempt counter and either requeues the command
 // to 'pending' for another try, or marks it 'failed' once maxAttempts is reached.
-// Returns whether the command was requeued. Use for transient send failures so a
-// one-off LAN/bridge blip does not become a permanent failure.
-func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, maxAttempts int) (bool, error) {
+// Returns whether the command was requeued plus the target device id (nil for
+// broadcast commands), so a terminal failure can flip that device offline. Use
+// for transient send failures so a one-off LAN/bridge blip does not become a
+// permanent failure.
+func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, maxAttempts int) (bool, *uuid.UUID, error) {
 	if maxAttempts < 1 {
 		maxAttempts = 3
 	}
 	var requeued bool
+	var deviceID *uuid.UUID
 	err := s.db.Pool.QueryRow(ctx,
 		`UPDATE device_commands
 		    SET attempts = attempts + 1,
@@ -122,13 +148,13 @@ func (s *DeviceCommandStore) RequeueOrFail(ctx context.Context, id uuid.UUID, ma
 		        updated_at = now()
 		  WHERE id = $1
 		    AND status IN ('pending', 'processing')
-		  RETURNING (status = 'pending')`,
+		  RETURNING (status = 'pending'), device_id`,
 		id, maxAttempts,
-	).Scan(&requeued)
+	).Scan(&requeued, &deviceID)
 	if err == pgx.ErrNoRows {
-		return false, nil
+		return false, nil, nil
 	}
-	return requeued, err
+	return requeued, deviceID, err
 }
 
 // TouchBridge bumps the bridge liveness heartbeat. Called on every authenticated

@@ -458,29 +458,46 @@ func (e *Engine) applyAction(ctx context.Context, di deviceInfo, actionType stri
 		}
 		if err := e.enqueueDeviceCommand(ctx, &di.ID, command); err != nil {
 			slog.Warn("queue automation command failed", "type", actionType, "device", di.ID, "error", err)
+			return
+		}
+		// Optimistically patch device state on enqueue, mirroring the HTTP handler
+		// (handler/device.go): the queue is drained up to ~5 min later, so without
+		// this the dienst-wekker turns the light on at 05:00 but app + kiosk keep
+		// showing "0 lampen aan" until the next full status poll (H12).
+		if patch, ok := statePatchFromAction(actionType, action); ok && len(patch) > 0 {
+			if uerr := e.devStore.UpdateState(ctx, di.ID, patch); uerr != nil {
+				slog.Warn("optimistic automation state patch failed", "type", actionType, "device", di.ID, "error", uerr)
+			}
 		}
 		return
 	}
 
 	ip := di.IP
 	var err error
+	var statePatch map[string]any
 
 	switch actionType {
 	case "off":
 		err = e.wiz.TurnOff(ip)
+		statePatch = map[string]any{"on": false}
 	case "on":
 		err = e.wiz.TurnOn(ip)
+		statePatch = map[string]any{"on": true}
 	case "brightness":
 		b := getIntField(action, "brightness", 80)
 		err = e.wiz.SetBrightness(ip, b)
+		statePatch = map[string]any{"on": true, "brightness": b}
 	case "color_temp":
 		mireds := getIntField(action, "colorTempMireds", 250)
 		kelvin := wiz.MiredsToKelvin(mireds)
 		err = e.wiz.SetColorTemp(ip, kelvin)
+		// Mirror the handler/frontend semantics: white mode clears color + scene.
+		statePatch = map[string]any{"on": true, "color_temp": kelvin, "r": 0, "g": 0, "b": 0, "scene_id": 0}
 	case "scene":
 		// Support integer scene_id (from Telegram commands) and string sceneId (from automations)
 		if sid := getIntField(action, "scene_id", 0); sid > 0 {
 			err = e.wiz.SetScene(ip, sid)
+			statePatch = map[string]any{"on": true, "scene_id": sid}
 		} else {
 			sceneKey := getStringField(action, "sceneId", "helder")
 			sceneDef, ok := SceneDefinitions[sceneKey]
@@ -488,11 +505,13 @@ func (e *Engine) applyAction(ctx context.Context, di deviceInfo, actionType stri
 				sceneDef = SceneDefinitions["helder"]
 			}
 			err = e.wiz.SetState(ip, sceneDef)
+			statePatch = statePatchFromStateOpts(sceneDef)
 		}
 	case "color":
 		hexColor := getStringField(action, "colorHex", "#ffffff")
 		r, g, b := wiz.HexToRGB(hexColor)
 		err = e.wiz.SetColor(ip, r, g, b)
+		statePatch = map[string]any{"on": true, "r": r, "g": g, "b": b, "scene_id": 0}
 	default:
 		slog.Warn("unknown action type", "type", actionType, "ip", ip)
 		return
@@ -500,7 +519,51 @@ func (e *Engine) applyAction(ctx context.Context, di deviceInfo, actionType stri
 
 	if err != nil {
 		slog.Warn("WiZ action failed", "type", actionType, "ip", ip, "error", err)
+		return
 	}
+
+	// Direct-mode automations bypass the device handler, so without this patch
+	// the DB state (and thus the UI) only reconverges on the next full status
+	// poll — up to 5 minutes of a card showing stale state (N8). The queue path
+	// already gets this via the handler's optimistic UpdateState.
+	if di.ID != uuid.Nil && len(statePatch) > 0 {
+		if uerr := e.devStore.UpdateState(ctx, di.ID, statePatch); uerr != nil {
+			slog.Warn("automation state patch failed", "type", actionType, "device", di.ID, "error", uerr)
+		}
+	}
+}
+
+// statePatchFromStateOpts converts a scene definition's StateOpts into the DB
+// current_state patch the UI reads.
+func statePatchFromStateOpts(opts wiz.StateOpts) map[string]any {
+	patch := map[string]any{}
+	if opts.On != nil {
+		patch["on"] = *opts.On
+	}
+	if opts.Brightness != nil {
+		patch["brightness"] = *opts.Brightness
+	}
+	if opts.ColorTemp != nil {
+		patch["color_temp"] = *opts.ColorTemp
+		patch["r"] = 0
+		patch["g"] = 0
+		patch["b"] = 0
+		patch["scene_id"] = 0
+	}
+	if opts.R != nil || opts.G != nil || opts.B != nil {
+		patch["r"] = derefIntOr(opts.R, 0)
+		patch["g"] = derefIntOr(opts.G, 0)
+		patch["b"] = derefIntOr(opts.B, 0)
+		patch["scene_id"] = 0
+	}
+	return patch
+}
+
+func derefIntOr(v *int, fallback int) int {
+	if v != nil {
+		return *v
+	}
+	return fallback
 }
 
 // ─── Device Map (PostgreSQL) ─────────────────────────────────────────────────
@@ -599,6 +662,7 @@ func (e *Engine) pollDeviceStatus(ctx context.Context) {
 				"r":          state.R,
 				"g":          state.G,
 				"b":          state.B,
+				"scene_id":   state.SceneID,
 			}
 			if err := e.devStore.UpdateState(ctx, id, patch); err != nil {
 				slog.Debug("state update failed", "device", idStr, "error", err)

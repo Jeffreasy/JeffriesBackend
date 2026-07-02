@@ -233,6 +233,35 @@ func GetPaymentRequest(ctx context.Context, cfg Config, userID, monetaryAccountI
 	return request, nil
 }
 
+func ListPaymentRequests(ctx context.Context, cfg Config, userID, monetaryAccountID int) ([]PaymentRequest, error) {
+	if monetaryAccountID <= 0 {
+		return nil, errors.New("BUNQ_MONETARY_ACCOUNT_ID ontbreekt")
+	}
+	session, err := authenticate(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if userID <= 0 {
+		userID = session.userID
+	}
+	if userID <= 0 {
+		return nil, errors.New("BUNQ_USER_ID ontbreekt")
+	}
+	env, err := session.client.do(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry", userID, monetaryAccountID),
+		session.token,
+		nil,
+		false,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list request-inquiry: %w", err)
+	}
+	return findPaymentRequests(env), nil
+}
+
+
 func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" {
@@ -506,6 +535,34 @@ func findAccounts(env *envelope) []Account {
 	}
 	return accounts
 }
+
+func findPaymentRequests(env *envelope) []PaymentRequest {
+	requests := make([]PaymentRequest, 0)
+	for _, item := range env.Response {
+		raw, ok := item["RequestInquiry"]
+		if !ok {
+			continue
+		}
+		var inquiry requestInquiry
+		if err := json.Unmarshal(raw, &inquiry); err != nil || inquiry.ID <= 0 {
+			continue
+		}
+		result := PaymentRequest{
+			ID:                inquiry.ID,
+			Status:            inquiry.Status,
+			Description:       inquiry.Description,
+			MerchantReference: inquiry.MerchantReference,
+			BunqMeShareURL:    inquiry.BunqMeShareURL,
+		}
+		if inquiry.AmountInquired != nil {
+			result.AmountValue = inquiry.AmountInquired.Value
+			result.Currency = inquiry.AmountInquired.Currency
+		}
+		requests = append(requests, result)
+	}
+	return requests
+}
+
 
 func findPaymentRequest(env *envelope) (*PaymentRequest, bool) {
 	for _, item := range env.Response {

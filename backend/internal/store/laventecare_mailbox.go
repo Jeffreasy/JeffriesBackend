@@ -33,10 +33,19 @@ func (s *LaventeCareStore) GetMailbox(ctx context.Context, userID string, limit 
 	if err != nil {
 		return nil, err
 	}
+	// Serialize empty collections as [] instead of null — the frontend .map's
+	// over these directly (M3).
+	if templates == nil {
+		templates = []model.LCMailTemplate{}
+	}
+	if outbox == nil {
+		outbox = []model.LCMailOutboxItem{}
+	}
 	return &model.LCMailbox{
 		Summary:   summary,
 		Templates: templates,
 		Outbox:    outbox,
+		Inbox:     []model.LCMailInboxItem{},
 	}, nil
 }
 
@@ -678,7 +687,7 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 		return nil, err
 	}
 	if template.Status != "active" {
-		return nil, errors.New("mail template is not active")
+		return nil, errors.New("Mailtemplate is niet actief.")
 	}
 
 	contextValues, companyID, contactID, toEmail, toName, err := s.buildMailRenderContext(ctx, userID, input, template.TemplateKey)
@@ -686,6 +695,10 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 		return nil, err
 	}
 	subject := cleanupRenderedMailSubject(renderTemplate(template.SubjectTemplate, contextValues))
+	// Optional explicit subject override (reply flow sends "Re: <origineel>").
+	if override := cleanStringPtr(input.Subject); override != nil {
+		subject = cleanupRenderedMailSubject(*override)
+	}
 	bodyHTML := cleanupRenderedMailHTML(renderMailHTML(template.BodyHTML, contextValues))
 	bodyText := cleanStringPtr(template.BodyText)
 	if bodyText != nil {
@@ -696,14 +709,19 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 
 	id := uuid.New()
 	now := time.Now().UTC()
+	// conversation_id is stored for UI threading/grouping with the inbound
+	// message being replied to; sending still creates a fresh Graph message
+	// (a true Graph reply is not plumbed through). On actual send, Graph's own
+	// conversation id replaces it via MarkMailOutboxSent's COALESCE.
 	_, err = s.db.Pool.Exec(ctx,
 		`INSERT INTO lc_mail_outbox (id, user_id, template_id, company_id, contact_id,
 		        project_id, workstream_id, quote_id, invoice_id, to_email, to_name, cc, bcc,
-		        subject, body_html, body_text, status, provider, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'concept','microsoft_graph',$17,$17)`,
+		        subject, body_html, body_text, conversation_id, status, provider, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'concept','microsoft_graph',$18,$18)`,
 		id, userID, template.ID, companyID, contactID, input.ProjectID, input.WorkstreamID,
 		input.QuoteID, input.InvoiceID, toEmail, toName, mergeEmails(template.DefaultCC, input.CC),
-		mergeEmails(template.DefaultBCC, input.BCC), subject, bodyHTML, bodyText, now)
+		mergeEmails(template.DefaultBCC, input.BCC), subject, bodyHTML, bodyText,
+		cleanStringPtr(input.ConversationID), now)
 	if err != nil {
 		return nil, err
 	}
@@ -751,9 +769,12 @@ func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string
 	// already received the real password; this only scrubs the at-rest copy. The
 	// text pattern is per-line (n flag); the HTML pattern is anchored on the exact
 	// monospace "secret" span style so it can't touch other content.
+	// COALESCE keeps an already-stored conversation_id (the reply flow pins the
+	// ORIGINAL conversation so the thread groups with the inbound message) and
+	// only falls back to Graph's own conversation id for normal sends.
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_mail_outbox
-		    SET status = 'sent', provider_message_id = $3, conversation_id = COALESCE($5, conversation_id),
+		    SET status = 'sent', provider_message_id = $3, conversation_id = COALESCE(conversation_id, $5),
 		        error_message = NULL, sent_at = $4, updated_at = $4,
 		        body_text = regexp_replace(COALESCE(body_text, ''),
 		                    'Wachtwoord:.*', 'Wachtwoord: ••• (verwijderd na verzending)', 'gn'),
@@ -1078,7 +1099,7 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 		toEmail = strings.TrimSpace(deref(contact.Email))
 	}
 	if toEmail == "" {
-		return nil, nil, nil, "", nil, errors.New("recipient email is required")
+		return nil, nil, nil, "", nil, errors.New("Ontvanger-e-mailadres is verplicht.")
 	}
 	if emailContact, err := s.mailContactByEmail(ctx, userID, toEmail, companyID); err != nil {
 		return nil, nil, nil, "", nil, err
@@ -1144,7 +1165,7 @@ func (s *LaventeCareStore) mailContactByEmail(ctx context.Context, userID, email
 	if companyID != nil {
 		rows, err = s.db.Pool.Query(ctx,
 			`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
-			        notities, created_at, updated_at
+			        notities, preferred_channel, decision_role, created_at, updated_at
 			   FROM lc_contacts
 			  WHERE user_id = $1
 			    AND lower(COALESCE(email, '')) = $2
@@ -1154,7 +1175,7 @@ func (s *LaventeCareStore) mailContactByEmail(ctx context.Context, userID, email
 	} else {
 		rows, err = s.db.Pool.Query(ctx,
 			`SELECT id, user_id, company_id, naam, email, telefoon, rol, is_primary,
-			        notities, created_at, updated_at
+			        notities, preferred_channel, decision_role, created_at, updated_at
 			   FROM lc_contacts
 			  WHERE user_id = $1
 			    AND lower(COALESCE(email, '')) = $2
@@ -1162,6 +1183,7 @@ func (s *LaventeCareStore) mailContactByEmail(ctx context.Context, userID, email
 			  LIMIT 1`,
 			userID, email)
 	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -2099,11 +2121,8 @@ func formatMailAccessCredentials(credentials []mailAccessCredential) string {
 	return formatMailAccessCredentialsText(credentials)
 }
 
-func formatMailAccessDetails(credentials []mailAccessCredential) mailAccessDetails {
-	return formatMailAccessDetailsWithLoginURL(credentials, "")
-}
-
 func formatMailAccessDetailsWithLoginURL(credentials []mailAccessCredential, loginURL string) mailAccessDetails {
+
 	credentials = withMailAccessLoginURL(credentials, loginURL)
 	summary := formatMailAccessCredentialsText(credentials)
 	if summary == "" {

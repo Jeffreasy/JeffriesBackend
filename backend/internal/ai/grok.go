@@ -283,11 +283,17 @@ func (c *GrokClient) Chat(
 			toolDur := time.Since(toolStart)
 			toolsUsed = append(toolsUsed, fmt.Sprintf("%s(%dms)", tc.Function.Name, toolDur.Milliseconds()))
 
+			framedResult := result
+			if !IsMutatingTool(tc.Function.Name) {
+				framedResult = fmt.Sprintf("[UNTRUSTED TOOL DATA START]\n%s\n[UNTRUSTED TOOL DATA END]", result)
+			}
+
 			messages = append(messages, Message{
 				Role:       "tool",
-				Content:    strPtr(result),
+				Content:    strPtr(framedResult),
 				ToolCallID: tc.ID,
 			})
+
 		}
 	}
 

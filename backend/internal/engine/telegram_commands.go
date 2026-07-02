@@ -158,7 +158,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		_ = client.SendMessageWithKeyboard(chatID, buildHelpText(), buildMainMenu())
 		return
 	case command == "/status" || command == "/health":
-		_ = client.SendMessage(chatID, "⚙️ Go backend actief")
+		e.handleSystemStatus(ctx, client, chatID)
 		return
 	case command == "/ai":
 		e.handleAIStatus(ctx, client, chatID)
@@ -239,7 +239,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		if e.cfg.QueueLightCommands() {
 			if err := e.enqueueDeviceCommand(ctx, nil, cmd.wizParams); err != nil {
 				slog.Warn("queue telegram lamp command failed", "error", err)
-				_ = client.SendMessage(chatID, "⚠️ Lampopdracht kon niet in de wachtrij.")
+				sendErrorReply(client, chatID, "⚠️ Lampopdracht kon niet in de wachtrij.")
 				return
 			}
 			reply := fmt.Sprintf("💡 %s — opdracht staat in de wachtrij", cmd.beschrijving)
@@ -252,7 +252,7 @@ func (e *Engine) processText(ctx context.Context, client *tg.Client, chatID int6
 		// Get all device IPs
 		deviceMap, err := e.getDeviceMap(ctx)
 		if err != nil || len(deviceMap) == 0 {
-			_ = client.SendMessage(chatID, "⚠️ Geen lampen gevonden.")
+			sendErrorReply(client, chatID, "⚠️ Geen lampen gevonden.")
 			return
 		}
 
@@ -412,7 +412,7 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	userID := e.cfg.HomeappUserID
 	oauthClient := e.googleOAuthClient()
 	if oauthClient == nil {
-		_ = client.SendMessage(chatID, "❌ Google OAuth is niet geconfigureerd.")
+		sendErrorReply(client, chatID, "❌ Google OAuth is niet geconfigureerd.")
 		return
 	}
 
@@ -435,8 +435,15 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("🔥 telegram calendar sync goroutine panicked", "panic", r)
+				scheduleErr = fmt.Errorf("calendar sync gecrasht door interne fout: %v", r)
+			}
+		}()
 
 		// 1. Process pending calendar operations first — shared retry-aware path
+
 		//    (records failures + dead-letters instead of silently dropping them).
 		if _, deadLettered, perr := e.processPendingCalendarOps(ctx, oauthClient, userID); perr != nil {
 			slog.Warn("telegram sync: pending calendar processing aborted", "error", perr)
@@ -557,8 +564,15 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("🔥 telegram sync goroutine panicked", "panic", r)
+				gmailMsg = fmt.Sprintf("Gmail sync gecrasht door interne fout: %v", r)
+			}
+		}()
 
 		emailStore := store.NewEmailStore(e.db)
+
 		meta, metaErr := emailStore.GetSyncMeta(ctx, userID)
 		if metaErr == nil {
 			storedBefore, _ := emailStore.Count(ctx, userID)
@@ -617,7 +631,10 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 					newHistoryID = meta.HistoryID
 				}
 				totalSynced, _ := emailStore.Count(ctx, userID)
-				lastFullSync := meta.LastFullSync
+				var lastFullSync *time.Time
+				if meta != nil {
+					lastFullSync = meta.LastFullSync
+				}
 				if result.Mode == "full" {
 					now := time.Now().UTC()
 					lastFullSync = &now
@@ -626,10 +643,11 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 				gmailMsg = fmt.Sprintf("Gmail: %d nieuwe mails gesynchroniseerd (totaal %d).", upserted, totalSynced)
 			} else {
 				_ = emailStore.MarkSyncFailed(ctx, userID, gmailErrVal.Error())
-				gmailMsg = fmt.Sprintf("Gmail sync mislukt: %v", gmailErrVal)
+
+				gmailMsg = "Gmail sync mislukt: " + classifyUserFacingError(gmailErrVal.Error())
 			}
 		} else {
-			gmailMsg = fmt.Sprintf("Gmail sync mislukt: %v", metaErr)
+			gmailMsg = "Gmail sync mislukt: " + classifyUserFacingError(metaErr.Error())
 		}
 	}()
 
@@ -639,7 +657,7 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	var b strings.Builder
 	b.WriteString("✅ Synchronisatie voltooid!\n\n")
 	if scheduleErr != nil {
-		fmt.Fprintf(&b, "❌ Kalender sync mislukt: %v\n", scheduleErr)
+		fmt.Fprintf(&b, "❌ Kalender sync mislukt: %s\n", classifyUserFacingError(scheduleErr.Error()))
 	} else {
 		fmt.Fprintf(&b, "📅 Kalender: %d diensten, %d persoonlijke afspraken gesynchroniseerd", len(schedules), len(personalEvents))
 		if schedulePruned > 0 {
@@ -655,6 +673,54 @@ func (e *Engine) handleSync(ctx context.Context, client *tg.Client, chatID int64
 	}
 
 	_ = client.SendMessage(chatID, b.String())
+}
+
+// handleSystemStatus answers /status with an ACTUAL check — DB ping + bridge
+// heartbeat age — instead of the previous static "Go backend actief" (T3).
+func (e *Engine) handleSystemStatus(ctx context.Context, client *tg.Client, chatID int64) {
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var b strings.Builder
+	b.WriteString("⚙️ Systeemstatus\n")
+
+	if err := e.db.Pool.Ping(checkCtx); err != nil {
+		slog.Warn("telegram /status: db ping failed", "error", err)
+		b.WriteString("• Database: ❌ niet bereikbaar\n")
+	} else {
+		b.WriteString("• Database: ✅ verbonden\n")
+	}
+
+	lastSeen, err := store.NewDeviceCommandStore(e.db).BridgeLastSeen(checkCtx)
+	switch {
+	case err != nil:
+		slog.Warn("telegram /status: bridge heartbeat query failed", "error", err)
+		b.WriteString("• Bridge: ⚠️ status onbekend\n")
+	case lastSeen.IsZero():
+		b.WriteString("• Bridge: ⚠️ nog nooit gezien\n")
+	default:
+		age := time.Since(lastSeen)
+		ageLabel := formatHeartbeatAge(age)
+		if age <= 3*time.Minute {
+			fmt.Fprintf(&b, "• Bridge: ✅ online (laatste heartbeat %s geleden)\n", ageLabel)
+		} else {
+			fmt.Fprintf(&b, "• Bridge: ❌ offline (laatste heartbeat %s geleden)\n", ageLabel)
+		}
+	}
+
+	_ = client.SendMessageWithKeyboard(chatID, strings.TrimRight(b.String(), "\n"), buildMainMenu())
+}
+
+// formatHeartbeatAge renders a duration compactly in Dutch ("45s", "8 min", "3 uur").
+func formatHeartbeatAge(age time.Duration) string {
+	switch {
+	case age < time.Minute:
+		return fmt.Sprintf("%ds", int(age.Seconds()))
+	case age < time.Hour:
+		return fmt.Sprintf("%d min", int(age.Minutes()))
+	default:
+		return fmt.Sprintf("%d uur", int(age.Hours()))
+	}
 }
 
 func (e *Engine) handlePendingConfirmationCommand(ctx context.Context, client *tg.Client, chatID int64, text string, originMessageID *int64) bool {
@@ -723,7 +789,7 @@ const pendingListButtonCap = 5
 func (e *Engine) handlePendingList(ctx context.Context, client *tg.Client, chatID int64) {
 	actions, err := store.NewPendingStore(e.db.Pool).ListPending(ctx, e.cfg.HomeappUserID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "❌ "+classifyUserFacingError(err.Error()))
+		sendErrorReply(client, chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 	if len(actions) == 0 {
@@ -775,7 +841,7 @@ func (e *Engine) handlePendingCancelCode(ctx context.Context, client *tg.Client,
 		return
 	}
 	if action == nil {
-		_ = client.SendMessage(chatID, "❌ Code onbekend, al gebruikt, of verlopen. Typ /pending voor de actuele lijst.")
+		sendErrorReply(client, chatID, "❌ Code onbekend, al gebruikt, of verlopen. Typ /pending voor de actuele lijst.")
 		return
 	}
 	result, err := CancelPendingAction(ctx, e.db.Pool, e.cfg.HomeappUserID, action.ID)
@@ -1005,6 +1071,33 @@ var scenePresets = map[string]struct {
 	"avond":     {map[string]any{"state": true, "temp": 2700, "dimming": 60}, "Avond"},
 }
 
+// containsWholeWord reports whether w occurs in s bounded by non-letter/digit
+// characters (or the string edges) — a lightweight \bw\b for the lamp keywords.
+func containsWholeWord(s, w string) bool {
+	if w == "" {
+		return false
+	}
+	for idx := 0; ; {
+		i := strings.Index(s[idx:], w)
+		if i < 0 {
+			return false
+		}
+		start := idx + i
+		end := start + len(w)
+		beforeOK := start == 0 || !isWordRune(rune(s[start-1]))
+		afterOK := end == len(s) || !isWordRune(rune(s[end]))
+		if beforeOK && afterOK {
+			return true
+		}
+		idx = start + 1
+	}
+}
+
+func isWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+		r == '\'' || r > 127 // treat any non-ASCII letter as word-forming too
+}
+
 func detectLampCommand(text string) *lampCommand {
 	lower := strings.ToLower(text)
 	isLamp := false
@@ -1025,15 +1118,16 @@ func detectLampCommand(text string) *lampCommand {
 		}
 	}
 
-	// Off
+	// Off/On — whole-word matches only (T4): substring matching sent "lampen
+	// aanpassen naar blauw" straight to "alles aan" instead of to the AI
+	// ("aanpassen" contains "aan"; "koffie" even contains "off").
 	for _, p := range []string{"uit", "off", "uitzetten"} {
-		if strings.Contains(lower, p) {
+		if containsWholeWord(lower, p) {
 			return &lampCommand{map[string]any{"state": false}, "Lampen uitzetten"}
 		}
 	}
-	// On
 	for _, p := range []string{"aan", "on", "aanzetten"} {
-		if strings.Contains(lower, p) {
+		if containsWholeWord(lower, p) {
 			return &lampCommand{map[string]any{"state": true}, "Lampen aanzetten"}
 		}
 	}

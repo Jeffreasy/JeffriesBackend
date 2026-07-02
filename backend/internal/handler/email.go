@@ -28,7 +28,7 @@ func NewEmailHandler(s *store.EmailStore) *EmailHandler { return &EmailHandler{s
 func (h *EmailHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "user_id is required")
+		Error(w, http.StatusBadRequest, "user_id is verplicht")
 		return
 	}
 
@@ -46,7 +46,7 @@ func (h *EmailHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, emails)
@@ -68,14 +68,14 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	query := r.URL.Query().Get("q")
 	if userID == "" || query == "" {
-		Error(w, http.StatusBadRequest, "user_id and q are required")
+		Error(w, http.StatusBadRequest, "user_id en q zijn verplicht")
 		return
 	}
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	emails, err := h.store.Search(r.Context(), userID, query, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, emails)
@@ -94,19 +94,19 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *EmailHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "user_id is required")
+		Error(w, http.StatusBadRequest, "user_id is verplicht")
 		return
 	}
 
 	total, err := h.store.Count(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
 	unread, err := h.store.CountUnread(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -135,12 +135,12 @@ func (h *EmailHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		Read    bool   `json:"read"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	if err := h.store.MarkRead(r.Context(), body.UserID, body.GmailID, body.Read); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -164,12 +164,12 @@ func (h *EmailHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		GmailID string `json:"gmail_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	if err := h.store.MarkDeleted(r.Context(), body.UserID, body.GmailID); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})

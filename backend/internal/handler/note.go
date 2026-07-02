@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
@@ -42,12 +43,17 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-// List returns all notes for a user.
+// List returns notes for a user. Optional (backward-compatible) query params:
+// limit/offset for pagination and fields=summary to omit the note body —
+// default behaviour (no params) stays a full, unlimited list.
 // @Summary List notes
-// @Description Returns all notes for the user
+// @Description Returns notes for the user; supports optional limit/offset and fields=summary
 // @Tags Notes
 // @Produce json
 // @Param userId query string true "User ID"
+// @Param limit query int false "Max number of notes (default unlimited)"
+// @Param offset query int false "Offset for pagination"
+// @Param fields query string false "Set to 'summary' to omit inhoud"
 // @Success 200 {array} model.Note
 // @Failure 400 {string} string "userId required"
 // @Failure 500 {string} string "Internal Server Error"
@@ -55,12 +61,25 @@ func normalizeTags(tags []string) []string {
 func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
-	notes, err := h.store.List(r.Context(), userID)
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
+	notes, err := h.store.ListPaged(r.Context(), userID, limit, offset, summary)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, notes)
@@ -79,17 +98,22 @@ func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	note, err := h.store.GetForUser(r.Context(), userID, id)
 	if err != nil {
-		Error(w, http.StatusNotFound, "note not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Notitie niet gevonden.")
+			return
+		}
+		// A DB timeout is not "niet gevonden" — surface it as a real server error.
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, note)
@@ -125,27 +149,27 @@ type noteCreateBody struct {
 func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	var body noteCreateBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	deadline, err := parseDeadline(body.Deadline)
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
+		Error(w, http.StatusBadRequest, "Ongeldig deadline-formaat (verwacht YYYY-MM-DD of ISO-tijdstip).")
 		return
 	}
 	linkedEventID, err := h.store.NormalizeLinkedEventID(r.Context(), userID, body.LinkedEventID)
 	if err != nil {
 		if errors.Is(err, store.ErrLinkedEventNotFound) {
-			Error(w, http.StatusBadRequest, "linked event not found")
+			Error(w, http.StatusBadRequest, "Gekoppelde afspraak niet gevonden.")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -164,7 +188,7 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.store.Create(r.Context(), userID, n)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, created)
@@ -207,17 +231,17 @@ type noteUpdateBody struct {
 func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	var body noteUpdateBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -272,10 +296,10 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		linkedEventID, err := h.store.NormalizeLinkedEventID(r.Context(), userID, body.LinkedEventID)
 		if err != nil {
 			if errors.Is(err, store.ErrLinkedEventNotFound) {
-				Error(w, http.StatusBadRequest, "linked event not found")
+				Error(w, http.StatusBadRequest, "Gekoppelde afspraak niet gevonden.")
 				return
 			}
-			Error(w, http.StatusInternalServerError, err.Error())
+			InternalError(w, r, err)
 			return
 		}
 		fields["linked_event_id"] = linkedEventID
@@ -287,7 +311,7 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		} else {
 			deadline, err := parseDeadline(body.Deadline)
 			if err != nil {
-				Error(w, http.StatusBadRequest, "invalid deadline format: "+err.Error())
+				Error(w, http.StatusBadRequest, "Ongeldig deadline-formaat (verwacht YYYY-MM-DD of ISO-tijdstip).")
 				return
 			}
 			fields["deadline"] = deadline
@@ -295,7 +319,7 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(fields) == 0 {
-		Error(w, http.StatusBadRequest, "no fields to update")
+		Error(w, http.StatusBadRequest, "Geen velden om bij te werken.")
 		return
 	}
 
@@ -314,14 +338,14 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.store.UpdateForUser(r.Context(), userID, id, fields)
 	if err != nil {
 		if errors.Is(err, store.ErrNoteConflict) {
-			Error(w, http.StatusConflict, "note modified elsewhere")
+			Error(w, http.StatusConflict, "Notitie is elders gewijzigd — herlaad om samen te voegen.")
 			return
 		}
 		if errors.Is(err, store.ErrNoteNotFound) {
-			Error(w, http.StatusNotFound, "note not found")
+			Error(w, http.StatusNotFound, "Notitie niet gevonden.")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, updated)
@@ -340,20 +364,20 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	if err := h.store.DeleteForUser(r.Context(), userID, id); err != nil {
 		if errors.Is(err, store.ErrNoteNotFound) {
-			Error(w, http.StatusNotFound, "note not found")
+			Error(w, http.StatusNotFound, "Notitie niet gevonden.")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -375,7 +399,7 @@ func (h *NoteHandler) Search(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	query := r.URL.Query().Get("q")
 	if userID == "" || query == "" {
-		Error(w, http.StatusBadRequest, "userId and q required")
+		Error(w, http.StatusBadRequest, "userId en q zijn verplicht")
 		return
 	}
 	limit := 20
@@ -386,7 +410,7 @@ func (h *NoteHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	notes, err := h.store.Search(r.Context(), userID, query, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, notes)
@@ -405,12 +429,12 @@ func (h *NoteHandler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) Tags(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	tags, err := h.store.AllTags(r.Context(), userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, tags)
@@ -429,17 +453,17 @@ func (h *NoteHandler) Tags(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	links, err := h.store.GetBacklinksForUser(r.Context(), userID, id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, links)
@@ -460,12 +484,12 @@ func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	limit := 20
@@ -476,7 +500,7 @@ func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
 	}
 	revisions, err := h.store.ListRevisions(r.Context(), userID, id, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, revisions)
@@ -499,26 +523,26 @@ func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
 func (h *NoteHandler) RestoreRevision(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId required")
+		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid id")
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
 	revisionID, err := uuid.Parse(chi.URLParam(r, "revisionID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "invalid revision id")
+		Error(w, http.StatusBadRequest, "Ongeldig revisie-id.")
 		return
 	}
 	restored, err := h.store.RestoreRevision(r.Context(), userID, id, revisionID)
 	if err != nil {
 		if errors.Is(err, store.ErrNoteNotFound) {
-			Error(w, http.StatusNotFound, "note or revision not found")
+			Error(w, http.StatusNotFound, "Notitie of revisie niet gevonden.")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, restored)

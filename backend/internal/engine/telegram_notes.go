@@ -52,7 +52,7 @@ func (e *Engine) handleNotitiesDashboard(ctx context.Context, client *tg.Client,
 	nStore := store.NewNoteStore(e.db)
 	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		sendErrorReply(client, chatID, "Fout bij ophalen notities.")
 		return
 	}
 
@@ -387,13 +387,13 @@ func buildNotesDashboardKeyboard(notes []model.Note) tg.InlineKeyboardMarkup {
 func (e *Engine) handleNoteRead(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		sendErrorReply(client, chatID, "Ongeldig notitie ID.")
 		return
 	}
 	nStore := store.NewNoteStore(e.db)
 	note, err := nStore.GetForUser(ctx, e.cfg.HomeappUserID, id)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Notitie niet gevonden.")
+		sendErrorReply(client, chatID, "Notitie niet gevonden.")
 		return
 	}
 
@@ -428,14 +428,14 @@ var startMenuOnlyKeyboard = tg.InlineKeyboardMarkup{
 func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		sendErrorReply(client, chatID, "Ongeldig notitie ID.")
 		return
 	}
 	nStore := store.NewNoteStore(e.db)
 
 	_, err = nStore.UpdateForUser(ctx, e.cfg.HomeappUserID, id, map[string]any{"is_archived": true})
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij archiveren.")
+		sendErrorReply(client, chatID, "Fout bij archiveren.")
 		return
 	}
 
@@ -446,7 +446,7 @@ func (e *Engine) handleNoteArchive(ctx context.Context, client *tg.Client, chatI
 func (e *Engine) handleNoteDone(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		sendErrorReply(client, chatID, "Ongeldig notitie ID.")
 		return
 	}
 
@@ -458,7 +458,7 @@ func (e *Engine) handleNoteDone(ctx context.Context, client *tg.Client, chatID i
 		"triage_flag":  false,
 	})
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij afronden.")
+		sendErrorReply(client, chatID, "Fout bij afronden.")
 		return
 	}
 
@@ -494,7 +494,7 @@ func (e *Engine) handleNoteSearch(ctx context.Context, client *tg.Client, chatID
 	}
 
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij zoeken in notities.")
+		sendErrorReply(client, chatID, "Fout bij zoeken in notities.")
 		return
 	}
 
@@ -647,7 +647,7 @@ func (e *Engine) handleVandaagNotities(ctx context.Context, client *tg.Client, c
 	nStore := store.NewNoteStore(e.db)
 	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		sendErrorReply(client, chatID, "Fout bij ophalen notities.")
 		return
 	}
 
@@ -714,7 +714,7 @@ func (e *Engine) handleWeekNotities(ctx context.Context, client *tg.Client, chat
 	nStore := store.NewNoteStore(e.db)
 	notes, err := nStore.List(ctx, e.cfg.HomeappUserID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij ophalen notities.")
+		sendErrorReply(client, chatID, "Fout bij ophalen notities.")
 		return
 	}
 
@@ -795,7 +795,7 @@ func (e *Engine) handleQuickNote(ctx context.Context, client *tg.Client, chatID 
 		Deadline:   capture.Deadline,
 	})
 	if err != nil {
-		_ = client.SendMessage(chatID, fmt.Sprintf("Fout: %s", err.Error()))
+		sendErrorReply(client, chatID, "❌ "+classifyUserFacingError(err.Error()))
 		return
 	}
 
@@ -811,21 +811,21 @@ func (e *Engine) handleQuickNote(ctx context.Context, client *tg.Client, chatID 
 func (e *Engine) handleNotePin(ctx context.Context, client *tg.Client, chatID int64, noteIDStr string, originMessageID *int64) {
 	id, err := uuid.Parse(noteIDStr)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Ongeldig notitie ID.")
+		sendErrorReply(client, chatID, "Ongeldig notitie ID.")
 		return
 	}
 	nStore := store.NewNoteStore(e.db)
 
 	note, err := nStore.GetForUser(ctx, e.cfg.HomeappUserID, id)
 	if err != nil {
-		_ = client.SendMessage(chatID, "Notitie niet gevonden.")
+		sendErrorReply(client, chatID, "Notitie niet gevonden.")
 		return
 	}
 
 	newPinned := !note.IsPinned
 	_, err = nStore.UpdateForUser(ctx, e.cfg.HomeappUserID, id, map[string]any{"is_pinned": newPinned})
 	if err != nil {
-		_ = client.SendMessage(chatID, "Fout bij pinnen.")
+		sendErrorReply(client, chatID, "Fout bij pinnen.")
 		return
 	}
 	// Reflect the new state locally (no extra round-trip) so the outcome

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"strconv"
@@ -189,7 +190,7 @@ func (e *Engine) handleLampStatus(ctx context.Context, client *tg.Client, chatID
 	dStore := store.NewDeviceStore(e.db)
 	devices, err := dStore.GetAll(ctx, 0, 100)
 	if err != nil {
-		_ = client.SendMessage(chatID, "⚠️ Lampstatus kon niet worden opgehaald.")
+		sendErrorReply(client, chatID, "⚠️ Lampstatus kon niet worden opgehaald.")
 		return
 	}
 
@@ -230,7 +231,7 @@ func (e *Engine) handleHabitStatus(ctx context.Context, client *tg.Client, chatI
 	logs, logsErr := habitStore.ListLogsForDate(ctx, userID, today)
 	badges, badgesErr := habitStore.ListBadges(ctx, userID)
 	if statsErr != nil || habitsErr != nil {
-		_ = client.SendMessage(chatID, "❌ Habit status ophalen mislukt.")
+		sendErrorReply(client, chatID, "❌ Habit status ophalen mislukt.")
 		return
 	}
 
@@ -295,7 +296,9 @@ func (e *Engine) handleHabitStatus(ctx context.Context, client *tg.Client, chatI
 	}
 
 	if dueErr != nil {
-		fmt.Fprintf(&b, "Let op: due-check had een fallback nodig: %s\n\n", truncateRunes(dueErr.Error(), 120))
+		// Raw store errors don't belong in a chat reply (N12) — log server-side.
+		slog.Warn("telegram habit dashboard: due-check fallback", "error", dueErr)
+		fmt.Fprintf(&b, "Let op: de due-check kon niet volledig worden uitgevoerd; onderstaande lijst kan afwijken.\n\n")
 	}
 	if logsErr != nil {
 		fmt.Fprintf(&b, "Let op: logs van vandaag konden niet worden geladen.\n\n")
@@ -329,7 +332,7 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 
 	stats, err := transactionStore.GetStats(ctx, userID)
 	if err != nil {
-		_ = client.SendMessage(chatID, "❌ Finance status ophalen mislukt.")
+		sendErrorReply(client, chatID, "❌ Finance status ophalen mislukt.")
 		return
 	}
 
@@ -349,7 +352,7 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	}
 	periodTxs, totalPeriod, periodErr := transactionStore.ListFiltered(ctx, userID, periodFilter)
 	if periodErr != nil {
-		_ = client.SendMessage(chatID, "❌ Finance periode ophalen mislukt: "+truncateRunes(periodErr.Error(), 180))
+		sendErrorReply(client, chatID, "❌ Finance periode ophalen mislukt: "+classifyUserFacingError(periodErr.Error()))
 		return
 	}
 
@@ -357,7 +360,7 @@ func (e *Engine) handleFinanceStatus(ctx context.Context, client *tg.Client, cha
 	outgoingFilter.Richting = "uit"
 	txs, totalOutgoing, txErr := transactionStore.ListFiltered(ctx, userID, outgoingFilter)
 	if txErr != nil {
-		_ = client.SendMessage(chatID, "❌ Finance breakdown ophalen mislukt: "+truncateRunes(txErr.Error(), 180))
+		sendErrorReply(client, chatID, "❌ Finance breakdown ophalen mislukt: "+classifyUserFacingError(txErr.Error()))
 		return
 	}
 
@@ -441,8 +444,11 @@ func parseTelegramFinancePeriod(text string, now time.Time) telegramFinancePerio
 		return telegramFinancePeriod{Label: "alles (2018-heden)", AllTime: true}
 	}
 	if strings.Contains(lower, "vorige maand") || strings.Contains(lower, "last month") {
-		return telegramFinanceMonthPeriod(now.AddDate(0, -1, 0), false)
+		firstOfCurrent := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		previousMonth := firstOfCurrent.AddDate(0, 0, -1)
+		return telegramFinanceMonthPeriod(previousMonth, false)
 	}
+
 	if lower == "jaar" || lower == "dit jaar" || lower == "huidig jaar" {
 		return telegramFinanceYearPeriod(now.Year())
 	}
@@ -757,6 +763,22 @@ func buildHelpText() string {
 	}
 	b.WriteString("\n🎙️ Spraakberichten worden automatisch herkend — zie /voicehelp.")
 	return b.String()
+}
+
+// buildMenuEscapeKeyboard is the single "🏠 Menu" escape row attached to error
+// replies, so a failure after a button tap never leaves the user without a
+// tappable way forward (T2).
+func buildMenuEscapeKeyboard() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{{Text: "🏠 Menu", CallbackData: "/start"}},
+		},
+	}
+}
+
+// sendErrorReply sends an error message with the menu-escape button (T2).
+func sendErrorReply(client *tg.Client, chatID int64, text string) {
+	_ = client.SendMessageWithKeyboard(chatID, text, buildMenuEscapeKeyboard())
 }
 
 func buildMainMenu() tg.InlineKeyboardMarkup {

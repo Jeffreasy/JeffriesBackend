@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"net"
@@ -72,7 +73,7 @@ func (h *DeviceHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	devices, err := h.devices.GetAll(r.Context(), skip, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, "Failed to fetch devices: "+err.Error())
+		InternalError(w, r, fmt.Errorf("fetch devices: %w", err))
 		return
 	}
 
@@ -97,17 +98,17 @@ func (h *DeviceHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid device ID")
+		Error(w, http.StatusBadRequest, "Ongeldig apparaat-id.")
 		return
 	}
 
 	d, err := h.devices.GetByID(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if d == nil {
-		Error(w, http.StatusNotFound, "Device not found")
+		Error(w, http.StatusNotFound, "Apparaat niet gevonden.")
 		return
 	}
 	JSON(w, http.StatusOK, mapDeviceModel(*d))
@@ -130,30 +131,30 @@ func (h *DeviceHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid device ID")
+		Error(w, http.StatusBadRequest, "Ongeldig apparaat-id.")
 		return
 	}
 
 	var data map[string]any
 	if err := DecodeJSON(r, &data); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	d, err := h.devices.GetByID(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if d == nil {
-		Error(w, http.StatusNotFound, "Device not found")
+		Error(w, http.StatusNotFound, "Apparaat niet gevonden.")
 		return
 	}
 
 	if name, ok := data["name"].(string); ok {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			Error(w, http.StatusBadRequest, "name cannot be empty")
+			Error(w, http.StatusBadRequest, "Naam mag niet leeg zijn.")
 			return
 		}
 		d.Name = name
@@ -163,7 +164,7 @@ func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if newIP, ok := data["ip_address"].(string); ok && newIP != "" {
 		newIP = strings.TrimSpace(newIP)
 		if newIP == "" {
-			Error(w, http.StatusBadRequest, "ip_address cannot be empty")
+			Error(w, http.StatusBadRequest, "ip_address mag niet leeg zijn.")
 			return
 		}
 		if !validDeviceIP(newIP) {
@@ -191,24 +192,24 @@ func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 			} else {
 				rid, err := uuid.Parse(roomID)
 				if err != nil {
-					Error(w, http.StatusBadRequest, "Invalid room_id")
+					Error(w, http.StatusBadRequest, "Ongeldig room_id.")
 					return
 				}
 				d.RoomID = &rid
 			}
 		} else {
-			Error(w, http.StatusBadRequest, "room_id must be a UUID string or null")
+			Error(w, http.StatusBadRequest, "room_id moet een UUID-string of null zijn.")
 			return
 		}
 	}
 
 	updated, err := h.devices.UpdateMetadata(r.Context(), *d)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if updated == nil {
-		Error(w, http.StatusNotFound, "Device not found")
+		Error(w, http.StatusNotFound, "Apparaat niet gevonden.")
 		return
 	}
 	JSON(w, http.StatusOK, mapDeviceModel(*updated))
@@ -227,17 +228,17 @@ func (h *DeviceHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid device ID")
+		Error(w, http.StatusBadRequest, "Ongeldig apparaat-id.")
 		return
 	}
 
 	deleted, err := h.devices.Delete(r.Context(), id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if !deleted {
-		Error(w, http.StatusNotFound, "Device not found")
+		Error(w, http.StatusNotFound, "Apparaat niet gevonden.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -258,11 +259,11 @@ func (h *DeviceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var input model.DeviceRegisterRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.IPAddress == "" || input.Name == "" {
-		Error(w, http.StatusBadRequest, "ip_address and name are required")
+		Error(w, http.StatusBadRequest, "ip_address en naam zijn verplicht.")
 		return
 	}
 	if !validDeviceIP(input.IPAddress) {
@@ -272,7 +273,7 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := h.devices.GetByIP(r.Context(), input.IPAddress)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if existing != nil {
@@ -296,7 +297,7 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if shouldProbe {
 		state, err := h.wiz.GetState(input.IPAddress)
 		if err != nil {
-			Error(w, http.StatusBadGateway, "Cannot reach WiZ bulb at "+input.IPAddress+":38899.")
+			Error(w, http.StatusBadGateway, "WiZ-lamp op "+input.IPAddress+":38899 is niet bereikbaar.")
 			return
 		}
 		currentState = map[string]any{
@@ -333,7 +334,7 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.devices.Create(r.Context(), d)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -358,19 +359,19 @@ func (h *DeviceHandler) Register(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "deviceID"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid device ID")
+		Error(w, http.StatusBadRequest, "Ongeldig apparaat-id.")
 		return
 	}
 
 	var cmd model.DeviceCommandRequest
 	if err := DecodeJSON(r, &cmd); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
 	d, err := h.devices.GetByID(r.Context(), id)
 	if err != nil || d == nil {
-		Error(w, http.StatusNotFound, "Device not found")
+		Error(w, http.StatusNotFound, "Apparaat niet gevonden.")
 		return
 	}
 	if d.IPAddress == nil || *d.IPAddress == "" {
@@ -397,6 +398,14 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		kelvin := clampInt(int(math.Round(1_000_000.0/float64(*cmd.ColorTempMireds))), 2200, 6500)
 		opts.ColorTemp = &kelvin
 		statePatch["color_temp"] = kelvin
+		// Mirror the frontend simulation (lib/deviceCommands.ts): switching to
+		// white mode clears any RGB color and scene, otherwise the jsonb-merge
+		// keeps the old r/g/b and the card snaps back to the previous color on
+		// the next refetch (N8).
+		statePatch["r"] = 0
+		statePatch["g"] = 0
+		statePatch["b"] = 0
+		statePatch["scene_id"] = 0
 	}
 
 	if cmd.Hue != nil && cmd.Saturation != nil {
@@ -407,6 +416,7 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		statePatch["r"] = rv
 		statePatch["g"] = gv
 		statePatch["b"] = bv
+		statePatch["scene_id"] = 0
 	} else if cmd.R != nil || cmd.G != nil || cmd.B != nil {
 		rv := clampInt(derefOr(cmd.R, 0), 0, 255)
 		gv := clampInt(derefOr(cmd.G, 0), 0, 255)
@@ -417,10 +427,13 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		statePatch["r"] = rv
 		statePatch["g"] = gv
 		statePatch["b"] = bv
+		statePatch["scene_id"] = 0
 	}
 
 	if cmd.SceneID != nil {
 		statePatch["on"] = true
+		// Persist the scene so the UI's scene-highlight survives a refetch (N8).
+		statePatch["scene_id"] = *cmd.SceneID
 	}
 
 	if h.queueLightCommands() {
@@ -430,7 +443,7 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := h.commands.Create(r.Context(), h.userID, &id, raw); err != nil {
-			Error(w, http.StatusInternalServerError, "Command queue mislukt: "+err.Error())
+			InternalError(w, r, fmt.Errorf("command queue: %w", err))
 			return
 		}
 		if len(statePatch) > 0 {
@@ -447,13 +460,13 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	if cmd.SceneID != nil {
 		if err := h.wiz.SetScene(ip, *cmd.SceneID); err != nil {
 			slog.Error("WiZ command failed", "device", id, "ip", ip, "error", err)
-			Error(w, http.StatusBadGateway, "WiZ command failed: "+err.Error())
+			Error(w, http.StatusBadGateway, "WiZ-commando mislukt — de lamp reageerde niet.")
 			return
 		}
 	} else {
 		if err := h.wiz.SetState(ip, opts); err != nil {
 			slog.Error("WiZ command failed", "device", id, "ip", ip, "error", err)
-			Error(w, http.StatusBadGateway, "WiZ command failed: "+err.Error())
+			Error(w, http.StatusBadGateway, "WiZ-commando mislukt — de lamp reageerde niet.")
 			return
 		}
 	}

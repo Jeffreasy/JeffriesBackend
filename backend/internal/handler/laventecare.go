@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
 	"github.com/Jeffreasy/JeffriesBackend/internal/bunq"
@@ -21,6 +26,29 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
+
+// isLaventeCareValidationError distinguishes the store layer's deliberately
+// Dutch errors.New validation messages (safe to show as 400 detail) from
+// infrastructure failures (pgx/network/context errors) that must become an
+// anonymous 500 (M4).
+func isLaventeCareValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	return true
+}
+
 
 const (
 	maxLaventeCareMailAttachments     = 6
@@ -70,7 +98,7 @@ func parseOptionalUUIDQuery(r *http.Request, key string) (*uuid.UUID, error) {
 func (h *LaventeCareHandler) Cockpit(w http.ResponseWriter, r *http.Request) {
 	cockpit, err := h.store.GetCockpit(r.Context(), h.userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, cockpit)
@@ -84,19 +112,19 @@ func (h *LaventeCareHandler) Cockpit(w http.ResponseWriter, r *http.Request) {
 // @Param companyId query string false "Company ID (UUID)"
 // @Param limit query int false "Limit count" default(40)
 // @Success 200 {object} model.LCBilling
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/billing [get]
 func (h *LaventeCareHandler) Billing(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 40)
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	billing, err := h.store.GetBilling(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, billing)
@@ -119,12 +147,17 @@ func (h *LaventeCareHandler) Mailbox(w http.ResponseWriter, r *http.Request) {
 		h.cfg.MicrosoftSenderEmail,
 	)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
-	// Best-effort: attach received mail; a failure here never breaks the mailbox.
+	// Best-effort: attach received mail; a failure here never breaks the mailbox,
+	// but it IS surfaced (inboxError) so the UI can distinguish "leeg" from
+	// "kon niet laden" (M3).
 	if inbox, ierr := h.store.ListInbox(r.Context(), h.userID, queryInt(r, "limit", 40)); ierr == nil {
 		mailbox.Inbox = inbox
+	} else {
+		slog.Error("laventecare inbox fetch failed", "error", ierr)
+		mailbox.InboxError = "Inbox kon niet worden geladen. Probeer het later opnieuw."
 	}
 	JSON(w, http.StatusOK, mailbox)
 }
@@ -145,7 +178,7 @@ func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	since, err := h.store.LatestInboxReceivedAt(r.Context(), h.userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if since.IsZero() {
@@ -163,7 +196,8 @@ func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		Error(w, http.StatusBadGateway, "Inbox ophalen mislukt: "+err.Error())
+		slog.Error("laventecare inbox sync failed", "error", err)
+		Error(w, http.StatusBadGateway, "Inbox ophalen bij Microsoft is mislukt. Probeer het later opnieuw.")
 		return
 	}
 
@@ -184,7 +218,7 @@ func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	synced, err := h.store.UpsertInboxMessages(r.Context(), h.userID, items)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"synced": synced, "ok": true})
@@ -193,7 +227,7 @@ func (h *LaventeCareHandler) SyncInbox(w http.ResponseWriter, r *http.Request) {
 func (h *LaventeCareHandler) MarkInboxRead(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid message ID")
+		Error(w, http.StatusBadRequest, "Ongeldig bericht-id.")
 		return
 	}
 	if err := h.store.MarkInboxRead(r.Context(), h.userID, id); err != nil {
@@ -201,7 +235,7 @@ func (h *LaventeCareHandler) MarkInboxRead(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Bericht niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -210,7 +244,7 @@ func (h *LaventeCareHandler) MarkInboxRead(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.Request) {
 	var input model.LCMailTemplateCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.SubjectTemplate == "" || input.BodyHTML == "" {
@@ -219,7 +253,7 @@ func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.R
 	}
 	template, err := h.store.CreateMailTemplate(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, template)
@@ -228,12 +262,12 @@ func (h *LaventeCareHandler) CreateMailTemplate(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) UpdateMailTemplate(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid template ID")
+		Error(w, http.StatusBadRequest, "Ongeldig template-id.")
 		return
 	}
 	var input model.LCMailTemplateUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if err := h.store.UpdateMailTemplate(r.Context(), h.userID, id, input); err != nil {
@@ -241,7 +275,7 @@ func (h *LaventeCareHandler) UpdateMailTemplate(w http.ResponseWriter, r *http.R
 			Error(w, http.StatusNotFound, "Template niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -263,7 +297,7 @@ func (h *LaventeCareHandler) UpdateMailTemplate(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) SuggestMailContent(w http.ResponseWriter, r *http.Request) {
 	var input model.LCMailAISuggestionRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.TemplateID == uuid.Nil {
@@ -277,7 +311,7 @@ func (h *LaventeCareHandler) SuggestMailContent(w http.ResponseWriter, r *http.R
 			Error(w, http.StatusNotFound, "Template of gekoppelde context niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -320,13 +354,19 @@ Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de pl
 		strings.TrimSpace(input.Intent), strings.TrimSpace(input.Tone), string(payload))
 
 	client := ai.NewGrokClientWithOptions(h.cfg.GrokAPIKey, h.cfg.GrokModel, h.cfg.GrokReasoningEffort)
-	result := client.Chat(r.Context(), systemPrompt, userPrompt, nil, nil, nil)
+	// Cap the AI call well under the server WriteTimeout — the deterministic
+	// fallback suggestion ships if the model doesn't answer in time, instead of
+	// the connection dying mid-spinner.
+	aiCtx, cancelAI := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancelAI()
+	result := client.Chat(aiCtx, systemPrompt, userPrompt, nil, nil, nil)
 	if result.OK {
-		if parsed, err := parseMailAISuggestion(result.Antwoord, suggestion); err == nil {
+		if parsed, err := parseMailAISuggestion(result.Antwoord, suggestion, contextBundle.Company); err == nil {
 			JSON(w, http.StatusOK, parsed)
 			return
 		}
 	}
+
 
 	JSON(w, http.StatusOK, suggestion)
 }
@@ -347,7 +387,7 @@ Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de pl
 func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Request) {
 	var input model.LCMailSendRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.TemplateID == uuid.Nil {
@@ -365,7 +405,13 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 			Error(w, http.StatusNotFound, "Template of gekoppelde klant niet gevonden")
 			return
 		}
-		Error(w, http.StatusBadRequest, err.Error())
+		// Store validation errors are deliberately Dutch errors.New messages →
+		// 400 with the message; DB/exec failures → anonymous 500 (M4).
+		if isLaventeCareValidationError(err) {
+			Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		InternalError(w, r, err)
 		return
 	}
 	if !input.Send {
@@ -383,7 +429,7 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err := h.store.MarkMailOutboxSending(r.Context(), h.userID, item.ID); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -397,19 +443,23 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		Attachments: mailAttachmentsFromModel(input.Attachments),
 	})
 	if err != nil {
-		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, err.Error())
+		// The outbox row's error_message is rendered in the UI — store the short
+		// Dutch summary there and keep the raw Graph error in the server log (M4).
+		slog.Error("laventecare mail send failed", "outboxId", item.ID, "error", err)
+		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, "Verzenden via Microsoft Graph is mislukt. Probeer het later opnieuw.")
 		failed, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
 		if failed != nil {
 			JSON(w, http.StatusBadGateway, failed)
 			return
 		}
-		Error(w, http.StatusBadGateway, err.Error())
+		Error(w, http.StatusBadGateway, "Verzenden via Microsoft Graph is mislukt. Probeer het later opnieuw.")
 		return
 	}
 
 	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID, result.ConversationID); err != nil {
+		slog.Error("laventecare outbox status update failed after successful send", "outboxId", item.ID, "error", err)
 		item.Status = "sent_unconfirmed"
-		message := "Mail is door Microsoft Graph geaccepteerd, maar de lokale outbox-status kon niet worden bijgewerkt: " + err.Error()
+		message := "Mail is door Microsoft Graph geaccepteerd, maar de lokale outbox-status kon niet worden bijgewerkt."
 		item.ErrorMessage = &message
 		JSON(w, http.StatusAccepted, item)
 		return
@@ -432,7 +482,7 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 	}
 	sent, err := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, sent)
@@ -514,7 +564,7 @@ func mailAttachmentNames(items []model.LCMailAttachment) []string {
 func (h *LaventeCareHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
 	var input model.LCQuoteCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Titel == "" || len(input.Lines) == 0 {
@@ -527,7 +577,7 @@ func (h *LaventeCareHandler) CreateQuote(w http.ResponseWriter, r *http.Request)
 			Error(w, http.StatusNotFound, "Klant, opdracht of project niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, quote)
@@ -550,7 +600,7 @@ func (h *LaventeCareHandler) CreateQuote(w http.ResponseWriter, r *http.Request)
 func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid quote ID")
+		Error(w, http.StatusBadRequest, "Ongeldig offerte-id.")
 		return
 	}
 	var input struct {
@@ -569,7 +619,7 @@ func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Re
 		case store.ErrInvalidStatusTransition:
 			Error(w, http.StatusConflict, "Een geaccepteerde offerte kan niet worden teruggezet")
 		default:
-			Error(w, http.StatusInternalServerError, err.Error())
+			InternalError(w, r, err)
 		}
 		return
 	}
@@ -591,7 +641,7 @@ func (h *LaventeCareHandler) UpdateQuoteStatus(w http.ResponseWriter, r *http.Re
 func (h *LaventeCareHandler) CreateInvoiceFromQuote(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid quote ID")
+		Error(w, http.StatusBadRequest, "Ongeldig offerte-id.")
 		return
 	}
 	invoice, err := h.store.CreateInvoiceFromQuote(r.Context(), h.userID, id)
@@ -604,7 +654,7 @@ func (h *LaventeCareHandler) CreateInvoiceFromQuote(w http.ResponseWriter, r *ht
 		case pgx.ErrNoRows:
 			Error(w, http.StatusNotFound, "Offerte niet gevonden")
 		default:
-			Error(w, http.StatusInternalServerError, err.Error())
+			InternalError(w, r, err)
 		}
 		return
 	}
@@ -627,7 +677,7 @@ func (h *LaventeCareHandler) CreateInvoiceFromQuote(w http.ResponseWriter, r *ht
 func (h *LaventeCareHandler) CreateTimeEntry(w http.ResponseWriter, r *http.Request) {
 	var input model.LCTimeEntryCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Description == "" || input.Minutes <= 0 {
@@ -640,10 +690,91 @@ func (h *LaventeCareHandler) CreateTimeEntry(w http.ResponseWriter, r *http.Requ
 			Error(w, http.StatusNotFound, "Klant, opdracht of project niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, entry)
+}
+
+// UpdateTimeEntry patches an uninvoiced time entry (omschrijving/minuten/status).
+// @Summary Update Time Entry
+// @Description Edits description, minutes or status (open/afgeschreven) of an uninvoiced time entry
+// @Tags LaventeCare
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Time Entry ID (UUID)"
+// @Param request body model.LCTimeEntryUpdate true "Time Entry Update"
+// @Success 200 {object} model.LCTimeEntry
+// @Failure 400 {string} string "Invalid request body or values"
+// @Failure 404 {string} string "Time entry not found"
+// @Failure 409 {string} string "Time entry already invoiced"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/time-entries/{id} [patch]
+func (h *LaventeCareHandler) UpdateTimeEntry(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig urenregel-id.")
+		return
+	}
+	var input model.LCTimeEntryUpdate
+	if err := DecodeJSON(r, &input); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	if input.Omschrijving == nil && input.Minuten == nil && input.Status == nil {
+		Error(w, http.StatusBadRequest, "Geen velden om bij te werken.")
+		return
+	}
+	entry, err := h.store.UpdateTimeEntry(r.Context(), h.userID, id, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			Error(w, http.StatusNotFound, "Urenregel niet gevonden.")
+		case errors.Is(err, store.ErrTimeEntryInvoiced):
+			Error(w, http.StatusConflict, "Deze urenregel is al gefactureerd en kan niet meer worden aangepast.")
+		case errors.Is(err, store.ErrInvalidStatus):
+			Error(w, http.StatusBadRequest, "Onbekende status (toegestaan: open, afgeschreven).")
+		case isLaventeCareValidationError(err):
+			Error(w, http.StatusBadRequest, err.Error())
+		default:
+			InternalError(w, r, err)
+		}
+		return
+	}
+	JSON(w, http.StatusOK, entry)
+}
+
+// DeleteTimeEntry removes an uninvoiced time entry.
+// @Summary Delete Time Entry
+// @Description Deletes an uninvoiced time entry
+// @Tags LaventeCare
+// @Security ApiKeyAuth
+// @Param id path string true "Time Entry ID (UUID)"
+// @Success 204 "No Content"
+// @Failure 400 {string} string "Invalid id"
+// @Failure 404 {string} string "Time entry not found"
+// @Failure 409 {string} string "Time entry already invoiced"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /laventecare/time-entries/{id} [delete]
+func (h *LaventeCareHandler) DeleteTimeEntry(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig urenregel-id.")
+		return
+	}
+	if err := h.store.DeleteTimeEntry(r.Context(), h.userID, id); err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			Error(w, http.StatusNotFound, "Urenregel niet gevonden.")
+		case errors.Is(err, store.ErrTimeEntryInvoiced):
+			Error(w, http.StatusConflict, "Deze urenregel is al gefactureerd en kan niet worden verwijderd.")
+		default:
+			InternalError(w, r, err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // CreateInvoice creates a LaventeCare invoice draft.
@@ -662,7 +793,7 @@ func (h *LaventeCareHandler) CreateTimeEntry(w http.ResponseWriter, r *http.Requ
 func (h *LaventeCareHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 	var input model.LCInvoiceCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if len(input.Lines) == 0 && len(input.TimeEntryIDs) == 0 {
@@ -675,7 +806,7 @@ func (h *LaventeCareHandler) CreateInvoice(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Factuurbron niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, invoice)
@@ -698,7 +829,7 @@ func (h *LaventeCareHandler) CreateInvoice(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		Error(w, http.StatusBadRequest, "Ongeldig factuur-id.")
 		return
 	}
 	var input model.LCInvoiceStatusUpdate
@@ -715,7 +846,7 @@ func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.
 		case store.ErrInvalidStatusTransition:
 			Error(w, http.StatusConflict, "Een betaalde factuur kan niet worden teruggezet of geherwaardeerd")
 		default:
-			Error(w, http.StatusInternalServerError, err.Error())
+			InternalError(w, r, err)
 		}
 		return
 	}
@@ -737,7 +868,7 @@ func (h *LaventeCareHandler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.
 func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		Error(w, http.StatusBadRequest, "Ongeldig factuur-id.")
 		return
 	}
 	invoice, err := h.store.GetInvoice(r.Context(), h.userID, id)
@@ -746,7 +877,7 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 			Error(w, http.StatusNotFound, "Factuur niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if invoice.Status == "betaald" || invoice.Status == "geannuleerd" {
@@ -773,7 +904,7 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 
 	args, err := json.Marshal(map[string]string{"invoice_id": id.String()})
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	toolName := "laventecareBetaalverzoekMaken"
@@ -785,7 +916,7 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 	))
 	existing, err := h.pending.FindPendingByToolArgs(r.Context(), h.userID, toolName, string(args))
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if existing != nil {
@@ -802,7 +933,7 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 	}
 	action, err := h.pending.Create(r.Context(), h.userID, "laventecare", toolName, string(args), summary)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusAccepted, map[string]any{
@@ -825,14 +956,14 @@ func (h *LaventeCareHandler) CreateInvoicePaymentRequestAction(w http.ResponseWr
 // @Param id path string true "Invoice ID (UUID)"
 // @Param format query string false "json, html or ubl"
 // @Success 200 {object} model.LCInvoiceDocument
-// @Failure 400 {string} string "Invalid invoice ID"
+// @Failure 400 {string} string "Ongeldig factuur-id."
 // @Failure 404 {string} string "Invoice not found"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/invoices/{id}/document [get]
 func (h *LaventeCareHandler) GetInvoiceDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		Error(w, http.StatusBadRequest, "Ongeldig factuur-id.")
 		return
 	}
 	doc, err := h.store.GenerateInvoiceDocument(r.Context(), h.userID, id)
@@ -841,7 +972,7 @@ func (h *LaventeCareHandler) GetInvoiceDocument(w http.ResponseWriter, r *http.R
 			Error(w, http.StatusNotFound, "Factuur of factuurregels niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -875,7 +1006,7 @@ func (h *LaventeCareHandler) GetInvoiceDocument(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid invoice ID")
+		Error(w, http.StatusBadRequest, "Ongeldig factuur-id.")
 		return
 	}
 	invoice, err := h.store.GetInvoice(r.Context(), h.userID, id)
@@ -884,7 +1015,7 @@ func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, 
 			Error(w, http.StatusNotFound, "Factuur niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	if invoice.ProviderRequestID == nil || strings.TrimSpace(*invoice.ProviderRequestID) == "" {
@@ -918,7 +1049,10 @@ func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, 
 		DeviceDescription: h.cfg.BunqDeviceDescription,
 	}, userID, monetaryAccountID, requestID)
 	if err != nil {
-		message := err.Error()
+		// The stored payment_last_error surfaces in the invoice payload/UI —
+		// keep it Dutch and log the raw bunq error server-side (M4).
+		slog.Error("bunq payment status refresh failed", "invoiceId", id, "error", err)
+		message := "Bunq betaalstatus ophalen is mislukt. Probeer het later opnieuw."
 		checked := checkedAt.Format(time.RFC3339)
 		_ = h.store.UpdateInvoiceStatus(r.Context(), h.userID, id, model.LCInvoiceStatusUpdate{
 			Status:           invoice.Status,
@@ -926,7 +1060,7 @@ func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, 
 			PaymentLastError: &message,
 			PaymentCheckedAt: &checked,
 		})
-		Error(w, http.StatusBadGateway, "Bunq betaalstatus ophalen mislukt: "+message)
+		Error(w, http.StatusBadGateway, message)
 		return
 	}
 
@@ -955,12 +1089,12 @@ func (h *LaventeCareHandler) RefreshInvoicePaymentStatus(w http.ResponseWriter, 
 		PaymentCheckedAt: &checked,
 		PaidAt:           paidAt,
 	}); err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	updated, err := h.store.GetInvoice(r.Context(), h.userID, id)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	message := "Betaalstatus bijgewerkt"
@@ -1042,7 +1176,7 @@ func (h *LaventeCareHandler) ListDecisions(w http.ResponseWriter, r *http.Reques
 	limit := queryInt(r, "limit", 30)
 	decisions, err := h.store.ListDecisions(r.Context(), h.userID, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, decisions)
@@ -1063,7 +1197,7 @@ func (h *LaventeCareHandler) ListDecisions(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) CreateDecision(w http.ResponseWriter, r *http.Request) {
 	var input model.LCDecision
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Titel) == "" || strings.TrimSpace(input.Besluit) == "" {
@@ -1075,7 +1209,7 @@ func (h *LaventeCareHandler) CreateDecision(w http.ResponseWriter, r *http.Reque
 	}
 	decision, err := h.store.CreateDecision(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, decision)
@@ -1096,14 +1230,14 @@ func (h *LaventeCareHandler) CreateDecision(w http.ResponseWriter, r *http.Reque
 func (h *LaventeCareHandler) UpdateDecisionStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "ongeldig besluit id")
+		Error(w, http.StatusBadRequest, "Ongeldig besluit-id.")
 		return
 	}
 	var input struct {
 		Status string `json:"status"`
 	}
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Status) == "" {
@@ -1115,7 +1249,7 @@ func (h *LaventeCareHandler) UpdateDecisionStatus(w http.ResponseWriter, r *http
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1134,7 +1268,7 @@ func (h *LaventeCareHandler) ListChangeRequests(w http.ResponseWriter, r *http.R
 	limit := queryInt(r, "limit", 30)
 	changes, err := h.store.ListChangeRequests(r.Context(), h.userID, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, changes)
@@ -1155,7 +1289,7 @@ func (h *LaventeCareHandler) ListChangeRequests(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) CreateChangeRequest(w http.ResponseWriter, r *http.Request) {
 	var input model.LCChangeRequest
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Titel) == "" || strings.TrimSpace(input.Impact) == "" {
@@ -1164,7 +1298,7 @@ func (h *LaventeCareHandler) CreateChangeRequest(w http.ResponseWriter, r *http.
 	}
 	change, err := h.store.CreateChangeRequest(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, change)
@@ -1185,14 +1319,14 @@ func (h *LaventeCareHandler) CreateChangeRequest(w http.ResponseWriter, r *http.
 func (h *LaventeCareHandler) UpdateChangeRequestStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "ongeldig change id")
+		Error(w, http.StatusBadRequest, "Ongeldig change-id.")
 		return
 	}
 	var input struct {
 		Status string `json:"status"`
 	}
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Status) == "" {
@@ -1204,7 +1338,7 @@ func (h *LaventeCareHandler) UpdateChangeRequestStatus(w http.ResponseWriter, r 
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1223,7 +1357,7 @@ func (h *LaventeCareHandler) ListSlaIncidents(w http.ResponseWriter, r *http.Req
 	limit := queryInt(r, "limit", 30)
 	incidents, err := h.store.ListSlaIncidents(r.Context(), h.userID, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, incidents)
@@ -1253,7 +1387,7 @@ func (h *LaventeCareHandler) CreateSlaIncident(w http.ResponseWriter, r *http.Re
 		Samenvatting    *string    `json:"samenvatting"`
 	}
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Titel) == "" {
@@ -1284,7 +1418,7 @@ func (h *LaventeCareHandler) CreateSlaIncident(w http.ResponseWriter, r *http.Re
 	}
 	created, err := h.store.CreateSlaIncident(r.Context(), h.userID, incident)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, created)
@@ -1305,14 +1439,14 @@ func (h *LaventeCareHandler) CreateSlaIncident(w http.ResponseWriter, r *http.Re
 func (h *LaventeCareHandler) UpdateSlaIncidentStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "ongeldig incident id")
+		Error(w, http.StatusBadRequest, "Ongeldig incident-id.")
 		return
 	}
 	var input struct {
 		Status string `json:"status"`
 	}
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(input.Status) == "" {
@@ -1324,7 +1458,7 @@ func (h *LaventeCareHandler) UpdateSlaIncidentStatus(w http.ResponseWriter, r *h
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1364,7 +1498,7 @@ func (h *LaventeCareHandler) ListCompanies(w http.ResponseWriter, r *http.Reques
 	query := r.URL.Query().Get("q")
 	companies, err := h.store.ListCompanies(r.Context(), h.userID, limit, query)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, companies)
@@ -1385,7 +1519,7 @@ func (h *LaventeCareHandler) ListCompanies(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 	var input model.LCCompanyCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Naam == "" {
@@ -1395,7 +1529,7 @@ func (h *LaventeCareHandler) CreateCompany(w http.ResponseWriter, r *http.Reques
 
 	company, err := h.store.CreateCompany(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, company)
@@ -1418,12 +1552,12 @@ func (h *LaventeCareHandler) CreateCompany(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid company ID")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	var input model.LCCompanyUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if err := h.store.UpdateCompany(r.Context(), h.userID, id, input); err != nil {
@@ -1431,7 +1565,7 @@ func (h *LaventeCareHandler) UpdateCompany(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Klant niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1451,7 +1585,7 @@ func (h *LaventeCareHandler) UpdateCompany(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid company ID")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	if err := h.store.DeleteCompany(r.Context(), h.userID, id); err != nil {
@@ -1459,7 +1593,7 @@ func (h *LaventeCareHandler) DeleteCompany(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Klant niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -1473,7 +1607,7 @@ func (h *LaventeCareHandler) DeleteCompany(w http.ResponseWriter, r *http.Reques
 // @Param companyId query string false "Company ID (UUID)"
 // @Param limit query int false "Limit count" default(30)
 // @Success 200 {array} model.LCContact
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/contacts [get]
 func (h *LaventeCareHandler) ListContacts(w http.ResponseWriter, r *http.Request) {
@@ -1482,14 +1616,14 @@ func (h *LaventeCareHandler) ListContacts(w http.ResponseWriter, r *http.Request
 	if raw := r.URL.Query().Get("companyId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid companyId")
+			Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 			return
 		}
 		companyID = &id
 	}
 	contacts, err := h.store.ListContacts(r.Context(), h.userID, companyID, limit)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, contacts)
@@ -1511,7 +1645,7 @@ func (h *LaventeCareHandler) ListContacts(w http.ResponseWriter, r *http.Request
 func (h *LaventeCareHandler) CreateContact(w http.ResponseWriter, r *http.Request) {
 	var input model.LCContactCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Naam == "" {
@@ -1524,7 +1658,7 @@ func (h *LaventeCareHandler) CreateContact(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Klant niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, contact)
@@ -1547,12 +1681,12 @@ func (h *LaventeCareHandler) CreateContact(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) UpdateContact(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid contact ID")
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	var input model.LCContactUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if err := h.store.UpdateContact(r.Context(), h.userID, id, input); err != nil {
@@ -1560,7 +1694,7 @@ func (h *LaventeCareHandler) UpdateContact(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Contact niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1571,12 +1705,12 @@ func (h *LaventeCareHandler) ListAccessCredentials(w http.ResponseWriter, r *htt
 	limit := queryInt(r, "limit", 40)
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	items, err := h.store.ListAccessCredentials(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, items)
@@ -1586,7 +1720,7 @@ func (h *LaventeCareHandler) ListAccessCredentials(w http.ResponseWriter, r *htt
 func (h *LaventeCareHandler) CreateAccessCredential(w http.ResponseWriter, r *http.Request) {
 	var input model.LCAccessCredentialCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.CompanyID == uuid.Nil || strings.TrimSpace(input.Title) == "" {
@@ -1599,7 +1733,7 @@ func (h *LaventeCareHandler) CreateAccessCredential(w http.ResponseWriter, r *ht
 			Error(w, http.StatusNotFound, "Klant of gekoppelde context niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, item)
@@ -1609,12 +1743,12 @@ func (h *LaventeCareHandler) CreateAccessCredential(w http.ResponseWriter, r *ht
 func (h *LaventeCareHandler) UpdateAccessCredential(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid access credential ID")
+		Error(w, http.StatusBadRequest, "Ongeldig toegang-id.")
 		return
 	}
 	var input model.LCAccessCredentialUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if err := h.store.UpdateAccessCredential(r.Context(), h.userID, id, input); err != nil {
@@ -1622,7 +1756,7 @@ func (h *LaventeCareHandler) UpdateAccessCredential(w http.ResponseWriter, r *ht
 			Error(w, http.StatusNotFound, "Toegang niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1636,19 +1770,19 @@ func (h *LaventeCareHandler) UpdateAccessCredential(w http.ResponseWriter, r *ht
 // @Param limit query int false "Limit count" default(30)
 // @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCLead
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/leads [get]
 func (h *LaventeCareHandler) ListLeads(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 30)
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	leads, err := h.store.ListLeads(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, leads)
@@ -1669,7 +1803,7 @@ func (h *LaventeCareHandler) ListLeads(w http.ResponseWriter, r *http.Request) {
 func (h *LaventeCareHandler) CreateLead(w http.ResponseWriter, r *http.Request) {
 	var input model.LCLeadCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Titel == "" {
@@ -1679,7 +1813,7 @@ func (h *LaventeCareHandler) CreateLead(w http.ResponseWriter, r *http.Request) 
 
 	lead, err := h.store.CreateLead(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, lead)
@@ -1702,13 +1836,13 @@ func (h *LaventeCareHandler) CreateLead(w http.ResponseWriter, r *http.Request) 
 func (h *LaventeCareHandler) UpdateLead(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid lead ID")
+		Error(w, http.StatusBadRequest, "Ongeldig lead-id.")
 		return
 	}
 
 	var input model.LCLeadUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -1721,7 +1855,7 @@ func (h *LaventeCareHandler) UpdateLead(w http.ResponseWriter, r *http.Request) 
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1744,13 +1878,13 @@ func (h *LaventeCareHandler) UpdateLead(w http.ResponseWriter, r *http.Request) 
 func (h *LaventeCareHandler) ConvertLeadToProject(w http.ResponseWriter, r *http.Request) {
 	leadID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid lead ID")
+		Error(w, http.StatusBadRequest, "Ongeldig lead-id.")
 		return
 	}
 
 	var input model.LCConvertLeadToProject
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	input.LeadID = leadID
@@ -1763,7 +1897,7 @@ func (h *LaventeCareHandler) ConvertLeadToProject(w http.ResponseWriter, r *http
 		case store.ErrInvalidStatusTransition:
 			Error(w, http.StatusConflict, "Lead is al gesloten (gewonnen/verloren/gediskwalificeerd) en kan niet nogmaals omgezet worden")
 		default:
-			Error(w, http.StatusInternalServerError, err.Error())
+			InternalError(w, r, err)
 		}
 		return
 	}
@@ -1778,19 +1912,19 @@ func (h *LaventeCareHandler) ConvertLeadToProject(w http.ResponseWriter, r *http
 // @Param limit query int false "Limit count" default(30)
 // @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCProject
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/projects [get]
 func (h *LaventeCareHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 30)
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	projects, err := h.store.ListProjects(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, projects)
@@ -1811,7 +1945,7 @@ func (h *LaventeCareHandler) ListProjects(w http.ResponseWriter, r *http.Request
 func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	var input model.LCProjectCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Naam == "" {
@@ -1830,7 +1964,7 @@ func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusNotFound, "Klant niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 
@@ -1847,7 +1981,7 @@ func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Reques
 
 	project, err := h.store.CreateProject(r.Context(), h.userID, projectToCreate)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, project)
@@ -1870,13 +2004,13 @@ func (h *LaventeCareHandler) CreateProject(w http.ResponseWriter, r *http.Reques
 func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid project ID")
+		Error(w, http.StatusBadRequest, "Ongeldig project-id.")
 		return
 	}
 
 	var input model.LCProjectUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -1889,7 +2023,7 @@ func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1904,7 +2038,7 @@ func (h *LaventeCareHandler) UpdateProject(w http.ResponseWriter, r *http.Reques
 // @Param includeClosed query bool false "Include closed/completed workstreams"
 // @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCWorkstream
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/workstreams [get]
 func (h *LaventeCareHandler) ListWorkstreams(w http.ResponseWriter, r *http.Request) {
@@ -1912,12 +2046,12 @@ func (h *LaventeCareHandler) ListWorkstreams(w http.ResponseWriter, r *http.Requ
 	includeClosed := r.URL.Query().Get("includeClosed") == "true"
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	workstreams, err := h.store.ListWorkstreams(r.Context(), h.userID, limit, includeClosed, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, workstreams)
@@ -1938,7 +2072,7 @@ func (h *LaventeCareHandler) ListWorkstreams(w http.ResponseWriter, r *http.Requ
 func (h *LaventeCareHandler) CreateWorkstream(w http.ResponseWriter, r *http.Request) {
 	var input model.LCWorkstreamCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Titel == "" {
@@ -1948,7 +2082,7 @@ func (h *LaventeCareHandler) CreateWorkstream(w http.ResponseWriter, r *http.Req
 
 	workstream, err := h.store.CreateWorkstream(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, workstream)
@@ -1971,13 +2105,13 @@ func (h *LaventeCareHandler) CreateWorkstream(w http.ResponseWriter, r *http.Req
 func (h *LaventeCareHandler) UpdateWorkstream(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid workstream ID")
+		Error(w, http.StatusBadRequest, "Ongeldig opdracht-id.")
 		return
 	}
 
 	var input model.LCWorkstreamUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -1990,7 +2124,7 @@ func (h *LaventeCareHandler) UpdateWorkstream(w http.ResponseWriter, r *http.Req
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -2013,13 +2147,13 @@ func (h *LaventeCareHandler) UpdateWorkstream(w http.ResponseWriter, r *http.Req
 func (h *LaventeCareHandler) ConvertWorkstreamToProject(w http.ResponseWriter, r *http.Request) {
 	workstreamID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid workstream ID")
+		Error(w, http.StatusBadRequest, "Ongeldig opdracht-id.")
 		return
 	}
 
 	var input model.LCConvertWorkstreamToProject
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	input.WorkstreamID = workstreamID
@@ -2030,7 +2164,7 @@ func (h *LaventeCareHandler) ConvertWorkstreamToProject(w http.ResponseWriter, r
 			Error(w, http.StatusNotFound, "Opdracht niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, project)
@@ -2044,19 +2178,19 @@ func (h *LaventeCareHandler) ConvertWorkstreamToProject(w http.ResponseWriter, r
 // @Param limit query int false "Limit count" default(8)
 // @Param companyId query string false "Company ID (UUID)"
 // @Success 200 {array} model.LCActionItem
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/actions [get]
 func (h *LaventeCareHandler) ListActions(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 8)
 	companyID, err := parseOptionalUUIDQuery(r, "companyId")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	actions, err := h.store.ListActions(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, actions)
@@ -2077,17 +2211,17 @@ func (h *LaventeCareHandler) ListActions(w http.ResponseWriter, r *http.Request)
 func (h *LaventeCareHandler) CreateAction(w http.ResponseWriter, r *http.Request) {
 	var input model.LCActionCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.Title == "" {
-		Error(w, http.StatusBadRequest, "Title is verplicht")
+		Error(w, http.StatusBadRequest, "Titel is verplicht")
 		return
 	}
 
 	action, err := h.store.CreateAction(r.Context(), h.userID, input)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, action)
@@ -2110,7 +2244,7 @@ func (h *LaventeCareHandler) CreateAction(w http.ResponseWriter, r *http.Request
 func (h *LaventeCareHandler) UpdateActionStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid action ID")
+		Error(w, http.StatusBadRequest, "Ongeldig actie-id.")
 		return
 	}
 
@@ -2131,7 +2265,7 @@ func (h *LaventeCareHandler) UpdateActionStatus(w http.ResponseWriter, r *http.R
 			Error(w, http.StatusBadRequest, "Onbekende status")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -2148,7 +2282,7 @@ func (h *LaventeCareHandler) UpdateActionStatus(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	docs, err := h.store.ListDocuments(r.Context(), h.userID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, docs)
@@ -2176,7 +2310,7 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 	if raw := r.URL.Query().Get("leadId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid leadId")
+			Error(w, http.StatusBadRequest, "Ongeldig lead-id.")
 			return
 		}
 		leadID = &id
@@ -2185,7 +2319,7 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 	if raw := r.URL.Query().Get("projectId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid projectId")
+			Error(w, http.StatusBadRequest, "Ongeldig project-id.")
 			return
 		}
 		projectID = &id
@@ -2194,7 +2328,7 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 	if raw := r.URL.Query().Get("workstreamId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid workstreamId")
+			Error(w, http.StatusBadRequest, "Ongeldig opdracht-id.")
 			return
 		}
 		workstreamID = &id
@@ -2203,7 +2337,7 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 	if raw := r.URL.Query().Get("companyId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid companyId")
+			Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 			return
 		}
 		companyID = &id
@@ -2211,7 +2345,7 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 
 	docs, err := h.store.ListDossierDocuments(r.Context(), h.userID, limit, leadID, projectID, workstreamID, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, docs)
@@ -2235,22 +2369,22 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 func (h *LaventeCareHandler) DossierAdvice(w http.ResponseWriter, r *http.Request) {
 	companyID, err := parseUUIDQueryAliases(r, "companyId", "company_id")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid companyId")
+		Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 		return
 	}
 	leadID, err := parseUUIDQueryAliases(r, "leadId", "lead_id")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid leadId")
+		Error(w, http.StatusBadRequest, "Ongeldig lead-id.")
 		return
 	}
 	projectID, err := parseUUIDQueryAliases(r, "projectId", "project_id")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid projectId")
+		Error(w, http.StatusBadRequest, "Ongeldig project-id.")
 		return
 	}
 	workstreamID, err := parseUUIDQueryAliases(r, "workstreamId", "workstream_id")
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid workstreamId")
+		Error(w, http.StatusBadRequest, "Ongeldig opdracht-id.")
 		return
 	}
 
@@ -2271,7 +2405,7 @@ func (h *LaventeCareHandler) DossierAdvice(w http.ResponseWriter, r *http.Reques
 			Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, advice)
@@ -2308,7 +2442,7 @@ func parseUUIDQueryAliases(r *http.Request, keys ...string) (*uuid.UUID, error) 
 func (h *LaventeCareHandler) CreateDossierDocument(w http.ResponseWriter, r *http.Request) {
 	var input model.LCDossierDocumentCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.DocumentKey == "" || input.Titel == "" || input.PDFURL == "" {
@@ -2322,7 +2456,7 @@ func (h *LaventeCareHandler) CreateDossierDocument(w http.ResponseWriter, r *htt
 			Error(w, http.StatusNotFound, "Lead of project niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, doc)
@@ -2336,7 +2470,7 @@ func (h *LaventeCareHandler) CreateDossierDocument(w http.ResponseWriter, r *htt
 // @Param companyId query string false "Company ID (UUID)"
 // @Param limit query int false "Limit count" default(30)
 // @Success 200 {array} model.LCActivityEvent
-// @Failure 400 {string} string "Invalid companyId"
+// @Failure 400 {string} string "Ongeldig klant-id."
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/activity [get]
 func (h *LaventeCareHandler) ListActivityEvents(w http.ResponseWriter, r *http.Request) {
@@ -2345,7 +2479,7 @@ func (h *LaventeCareHandler) ListActivityEvents(w http.ResponseWriter, r *http.R
 	if raw := r.URL.Query().Get("companyId"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			Error(w, http.StatusBadRequest, "Invalid companyId")
+			Error(w, http.StatusBadRequest, "Ongeldig klant-id.")
 			return
 		}
 		companyID = &id
@@ -2353,7 +2487,7 @@ func (h *LaventeCareHandler) ListActivityEvents(w http.ResponseWriter, r *http.R
 
 	events, err := h.store.ListActivityEvents(r.Context(), h.userID, limit, companyID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, events)
@@ -2375,7 +2509,7 @@ func (h *LaventeCareHandler) ListActivityEvents(w http.ResponseWriter, r *http.R
 func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.Request) {
 	var input model.LCActivityEventCreate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if input.CompanyID == uuid.Nil {
@@ -2383,7 +2517,7 @@ func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.
 		return
 	}
 	if input.Title == "" {
-		Error(w, http.StatusBadRequest, "title is verplicht")
+		Error(w, http.StatusBadRequest, "Titel is verplicht")
 		return
 	}
 
@@ -2393,7 +2527,7 @@ func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.
 			Error(w, http.StatusNotFound, "Klant of gekoppeld object niet gevonden")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, event)
@@ -2403,13 +2537,13 @@ func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.
 func (h *LaventeCareHandler) UpdateActivityEvent(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		Error(w, http.StatusBadRequest, "Invalid activity ID")
+		Error(w, http.StatusBadRequest, "Ongeldig moment-id.")
 		return
 	}
 
 	var input model.LCActivityEventUpdate
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -2422,7 +2556,7 @@ func (h *LaventeCareHandler) UpdateActivityEvent(w http.ResponseWriter, r *http.
 			Error(w, http.StatusBadRequest, "Ongeldige occurred_at")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -2443,7 +2577,7 @@ func (h *LaventeCareHandler) UpdateActivityEvent(w http.ResponseWriter, r *http.
 func (h *LaventeCareHandler) ConvertSignalToLead(w http.ResponseWriter, r *http.Request) {
 	var input model.LCConvertSignalToLead
 	if err := DecodeJSON(r, &input); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 
@@ -2469,7 +2603,7 @@ func (h *LaventeCareHandler) ConvertSignalToLead(w http.ResponseWriter, r *http.
 		Prioriteit: &prioriteit,
 	})
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusCreated, map[string]any{
@@ -2493,7 +2627,7 @@ func (h *LaventeCareHandler) ConvertSignalToLead(w http.ResponseWriter, r *http.
 func (h *LaventeCareHandler) SeedDocuments(w http.ResponseWriter, r *http.Request) {
 	var docs []model.LCDocument
 	if err := DecodeJSON(r, &docs); err != nil {
-		Error(w, http.StatusBadRequest, "Invalid request body")
+		RespondDecodeError(w, err)
 		return
 	}
 	if len(docs) == 0 {
@@ -2503,7 +2637,7 @@ func (h *LaventeCareHandler) SeedDocuments(w http.ResponseWriter, r *http.Reques
 
 	inserted, updated, err := h.store.SeedDocuments(r.Context(), h.userID, docs)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, model.LCSeedResult{
@@ -2693,7 +2827,56 @@ func mailAISuggestionFallback(contextBundle *model.LCMailAIContext, input model.
 	}
 }
 
-func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion) (model.LCMailAISuggestion, error) {
+func isSafeMailURL(valueStr string, company *model.LCCompany) bool {
+	u, err := url.Parse(valueStr)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		// Not a valid absolute URL, so it's not a URL injection
+		return true
+	}
+
+	host := strings.ToLower(u.Host)
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	// Safe domains list:
+	// - bunq.me and its subdomains
+	// - jeffries-homeapp.vercel.app and localhost
+	if host == "bunq.me" || strings.HasSuffix(host, ".bunq.me") ||
+		host == "jeffries-homeapp.vercel.app" || host == "localhost" || host == "127.0.0.1" {
+		return true
+	}
+
+	// Customer domains
+	if company != nil {
+		if company.PortalURL != nil && *company.PortalURL != "" {
+			if pu, perr := url.Parse(*company.PortalURL); perr == nil && pu.Host != "" {
+				chost := strings.ToLower(pu.Host)
+				if idx := strings.Index(chost, ":"); idx != -1 {
+					chost = chost[:idx]
+				}
+				if host == chost || strings.HasSuffix(host, "."+chost) {
+					return true
+				}
+			}
+		}
+		if company.DefaultLoginURL != nil && *company.DefaultLoginURL != "" {
+			if lu, lerr := url.Parse(*company.DefaultLoginURL); lerr == nil && lu.Host != "" {
+				lhost := strings.ToLower(lu.Host)
+				if idx := strings.Index(lhost, ":"); idx != -1 {
+					lhost = lhost[:idx]
+				}
+				if host == lhost || strings.HasSuffix(host, "."+lhost) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion, company *model.LCCompany) (model.LCMailAISuggestion, error) {
 	payload := extractMailAIJSON(raw)
 	var parsed model.LCMailAISuggestion
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
@@ -2704,7 +2887,11 @@ func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion) (model
 	}
 	merged := fallback
 	for key, value := range parsed.Variables {
-		mailAIAddVariable(merged.Variables, key, value)
+		if isSafeMailURL(value, company) {
+			mailAIAddVariable(merged.Variables, key, value)
+		} else {
+			mailAIAddVariable(merged.Variables, key, "[URL GEBLOKKEERD WEGENS VEILIGHEIDSBELEID]")
+		}
 	}
 	if parsed.SubjectHint != nil && strings.TrimSpace(*parsed.SubjectHint) != "" {
 		merged.SubjectHint = cleanMailAIStringPtr(parsed.SubjectHint)
@@ -2719,6 +2906,7 @@ func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion) (model
 	merged.GeneratedAt = parsed.GeneratedAt
 	return merged, nil
 }
+
 
 func extractMailAIJSON(raw string) string {
 	raw = strings.TrimSpace(raw)
