@@ -170,12 +170,17 @@ type focusAggregate struct {
 
 func (h *FocusHandler) focusAggregateCounts(ctx context.Context, userID, today string, errs *[]string) focusAggregate {
 	var a focusAggregate
+	// NULL discipline: every scalar subquery here is scanned into a non-nullable
+	// int/int64. COUNT(*) can never be NULL, but any SUM/MIN/MAX/aggregate over an
+	// empty set returns NULL and would fail the Scan. When adding a new subquery
+	// that is NOT a plain COUNT(*), wrap it in COALESCE(..., 0) (see the final
+	// SUM(GREATEST(...)) row) or the whole aggregate errors on an empty table.
 	err := h.db.Pool.QueryRow(ctx, `
 SELECT
   (SELECT COUNT(*) FROM devices),
   (SELECT COUNT(*) FROM devices WHERE status = 'online'),
   (SELECT COUNT(*) FROM devices WHERE current_state->>'on' = 'true'),
-  (SELECT COUNT(*) FROM device_commands WHERE status = 'pending'),
+  (SELECT COUNT(*) FROM device_commands WHERE status = 'pending' AND created_at > now() - interval '10 minutes'),
   (SELECT COUNT(*) FROM device_commands WHERE status = 'processing'),
   (SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'),
   (SELECT COUNT(*) FROM schedule WHERE user_id = $1),

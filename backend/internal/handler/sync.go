@@ -345,6 +345,18 @@ func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]int{"created": res.Created, "updated": res.Updated, "closed": res.Closed, "deleted": res.Deleted, "failed": res.Failed})
 }
 
+// ReconcileTodoist re-pushes the current (possibly empty) stored schedule to
+// Todoist. Wired as the ScheduleHandler post-wipe cleanup hook: after "Rooster
+// wissen" the schedule is empty, so SyncDiensten closes/deletes every lingering
+// [EID:…] shift task. Returns nil when Todoist is not configured (no-op).
+func (h *SyncHandler) ReconcileTodoist(ctx context.Context, userID string) error {
+	if h.cfg.TodoistAPIToken == "" {
+		return nil
+	}
+	_, err := h.pushTodoist(ctx, userID)
+	return err
+}
+
 // pushTodoist re-pushes the stored schedule to Todoist, shared by SyncTodoist and
 // a best-effort call from SyncCalendar so shift changes reach Todoist immediately.
 func (h *SyncHandler) pushTodoist(ctx context.Context, userID string) (*todoist.SyncResult, error) {

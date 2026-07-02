@@ -27,7 +27,10 @@ func TestHabitDueOnDateRespectsFrequencyAndPause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := habitDueOnDate(tt.habit, tt.date.Format("2006-01-02"), habitScheduleContext{})
+			// Use the date itself as "today" so the pause/active gate applies
+			// (pause only suppresses today/future).
+			d := tt.date.Format("2006-01-02")
+			got := habitDueOnDate(tt.habit, d, d, habitScheduleContext{})
 			if got != tt.want {
 				t.Fatalf("habitDueOnDate() = %v, want %v", got, tt.want)
 			}
@@ -35,14 +38,33 @@ func TestHabitDueOnDateRespectsFrequencyAndPause(t *testing.T) {
 	}
 }
 
+func TestHabitDueOnDatePauseOnlyAffectsTodayAndFuture(t *testing.T) {
+	created := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	paused := model.Habit{IsActief: true, IsPauze: true, Frequentie: "dagelijks", Aangemaakt: created}
+	today := "2026-06-20"
+
+	// A past due day must stay due even while currently paused — otherwise the
+	// heatmap/PerfectDays retroactively lose real completions (R3-item7a).
+	if !habitDueOnDate(paused, "2026-06-10", today, habitScheduleContext{}) {
+		t.Fatal("paused habit must remain due on historical dates")
+	}
+	// Today and future must not be due while paused.
+	if habitDueOnDate(paused, today, today, habitScheduleContext{}) {
+		t.Fatal("paused habit must not be due today")
+	}
+	if habitDueOnDate(paused, "2026-06-25", today, habitScheduleContext{}) {
+		t.Fatal("paused habit must not be due in the future")
+	}
+}
+
 func TestHabitDueOnDateRespectsRoosterFilter(t *testing.T) {
 	filter := "vroegeDienst"
 	habit := model.Habit{IsActief: true, Frequentie: "dagelijks", RoosterFilter: &filter}
 
-	if !habitDueOnDate(habit, "2026-06-01", habitScheduleContext{HasWork: true, HasVroeg: true}) {
+	if !habitDueOnDate(habit, "2026-06-01", "2026-06-01", habitScheduleContext{HasWork: true, HasVroeg: true}) {
 		t.Fatal("expected habit due on early shift")
 	}
-	if habitDueOnDate(habit, "2026-06-01", habitScheduleContext{HasWork: true, HasLaat: true}) {
+	if habitDueOnDate(habit, "2026-06-01", "2026-06-01", habitScheduleContext{HasWork: true, HasLaat: true}) {
 		t.Fatal("did not expect habit due on late-only shift")
 	}
 }
@@ -169,10 +191,10 @@ func TestCalculateMonthlyHabitProgress(t *testing.T) {
 func TestHabitDueOnDateNotBeforeCreation(t *testing.T) {
 	created := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	habit := model.Habit{IsActief: true, Frequentie: "dagelijks", Aangemaakt: created}
-	if habitDueOnDate(habit, "2026-06-05", habitScheduleContext{}) {
+	if habitDueOnDate(habit, "2026-06-05", "2026-06-20", habitScheduleContext{}) {
 		t.Fatal("habit must not be due before its creation date (heatmap rewrote history)")
 	}
-	if !habitDueOnDate(habit, "2026-06-10", habitScheduleContext{}) {
+	if !habitDueOnDate(habit, "2026-06-10", "2026-06-20", habitScheduleContext{}) {
 		t.Fatal("habit must be due on its creation date")
 	}
 }
@@ -185,6 +207,66 @@ func TestPeriodBoundsForDate(t *testing.T) {
 	ms, me, err := PeriodBoundsForDate("2026-02-10", false)
 	if err != nil || ms != "2026-02-01" || me != "2026-02-28" {
 		t.Fatalf("month bounds = %s..%s (%v), want 2026-02-01..2026-02-28", ms, me, err)
+	}
+}
+
+// TestCalculateWeeklyHabitProgressAcrossYearBoundary verifies that period
+// bucketing uses ISO-week+ISO-year, so the Dec→Jan rollover (week 53 → week 1)
+// does not merge or split periods incorrectly. 2026 has 53 ISO weeks; 2026-W53
+// runs Mon 2026-12-28 .. Sun 2027-01-03, and 2027-W01 starts Mon 2027-01-04.
+func TestCalculateWeeklyHabitProgressAcrossYearBoundary(t *testing.T) {
+	goal := 1
+	habit := model.Habit{Type: "positief", Frequentie: "x_per_week", DoelAantal: &goal}
+	logs := []habitProgressLog{
+		{Datum: "2026-12-21", Voltooid: true}, // 2026-W52
+		{Datum: "2026-12-29", Voltooid: true}, // 2026-W53 (spans into January)
+		{Datum: "2027-01-05", Voltooid: true}, // 2027-W01
+	}
+	current, longest, total, _ := calculateHabitProgress(habit, logs, "2027-01-06", func(string) bool { return true })
+	if current != 3 || longest != 3 || total != 3 {
+		t.Fatalf("weekly year-boundary progress = current %d longest %d total %d, want 3/3/3 (W52→W53→W01 are consecutive)", current, longest, total)
+	}
+}
+
+// TestWeeklyPeriodKeyDistinguishesW53FromNextW01 pins the ISO-year behaviour: a
+// log on Sun 2027-01-03 belongs to 2026-W53, while Mon 2027-01-04 starts 2027-W01.
+// Same-numbered weeks in different ISO-years must not collide.
+func TestWeeklyPeriodKeyDistinguishesW53FromNextW01(t *testing.T) {
+	sun := time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)
+	mon := time.Date(2027, 1, 4, 0, 0, 0, 0, time.UTC)
+	if got := habitPeriodKey(sun, true); got != "2026-W53" {
+		t.Fatalf("period key for 2027-01-03 = %q, want 2026-W53", got)
+	}
+	if got := habitPeriodKey(mon, true); got != "2027-W01" {
+		t.Fatalf("period key for 2027-01-04 = %q, want 2027-W01", got)
+	}
+}
+
+// TestCalculateMonthlyHabitProgressAcrossYearBoundary verifies month buckets are
+// keyed by calendar year+month, so December and the following January are two
+// distinct consecutive periods (not merged, not skipped).
+func TestCalculateMonthlyHabitProgressAcrossYearBoundary(t *testing.T) {
+	goal := 1
+	habit := model.Habit{Type: "positief", Frequentie: "x_per_maand", DoelAantal: &goal}
+	logs := []habitProgressLog{
+		{Datum: "2026-11-15", Voltooid: true}, // 2026-11
+		{Datum: "2026-12-20", Voltooid: true}, // 2026-12
+		{Datum: "2027-01-10", Voltooid: true}, // 2027-01
+	}
+	current, longest, total, _ := calculateHabitProgress(habit, logs, "2027-01-15", func(string) bool { return true })
+	if current != 3 || longest != 3 || total != 3 {
+		t.Fatalf("monthly year-boundary progress = current %d longest %d total %d, want 3/3/3 (Nov→Dec→Jan consecutive)", current, longest, total)
+	}
+
+	// A skipped December must break the run across the year boundary.
+	gap := []habitProgressLog{
+		{Datum: "2026-11-15", Voltooid: true}, // 2026-11
+		// 2026-12 skipped
+		{Datum: "2027-01-10", Voltooid: true}, // 2027-01
+	}
+	current, longest, _, _ = calculateHabitProgress(habit, gap, "2027-01-15", func(string) bool { return true })
+	if current != 1 || longest != 1 {
+		t.Fatalf("monthly gap progress = current %d longest %d, want 1/1 (skipped December breaks the run)", current, longest)
 	}
 }
 

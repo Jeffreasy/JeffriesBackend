@@ -117,9 +117,10 @@ func (s *HabitStore) ListDueForDate(ctx context.Context, userID, datum string) (
 	if err != nil {
 		return nil, err
 	}
+	today := todayAmsterdam()
 	due := make([]model.Habit, 0, len(habits))
 	for _, habit := range habits {
-		if habitDueOnDate(habit, datum, schedule) {
+		if habitDueOnDate(habit, datum, today, schedule) {
 			due = append(due, habit)
 		}
 	}
@@ -279,8 +280,18 @@ func scheduleContextsRangeQ(ctx context.Context, q pgQuerier, userID, startDate,
 	return contexts, rows.Err()
 }
 
-func habitDueOnDate(habit model.Habit, datum string, schedule habitScheduleContext) bool {
-	if !habit.IsActief || habit.IsPauze {
+// habitDueOnDate reports whether a habit is "due" on datum. The today argument
+// is the Amsterdam-local reference day.
+//
+// Pause/archive semantics apply ONLY to today and the future: a currently paused
+// or archived habit must NOT retroactively erase its historical due-days, or the
+// heatmap and PerfectDays would drop completions that genuinely happened before
+// the pause (R3-item7a). For historical dates due-ness is decided purely by
+// creation-date + frequency/schedule; the current pause window is subtracted
+// separately in the streak isDue predicate (see refreshHabitProgressQ).
+func habitDueOnDate(habit model.Habit, datum, today string, schedule habitScheduleContext) bool {
+	// Today/future only: a paused or archived habit is not due going forward.
+	if datum >= today && (!habit.IsActief || habit.IsPauze) {
 		return false
 	}
 	// A habit only exists from its creation date onward: without this, creating
@@ -296,7 +307,15 @@ func habitDueOnDate(habit model.Habit, datum string, schedule habitScheduleConte
 	if !habitFrequencyDueOnDate(habit, parsed) {
 		return false
 	}
-	return habitMatchesRoosterFilter(habit.RoosterFilter, schedule)
+	if !habitMatchesRoosterFilter(habit.RoosterFilter, schedule) {
+		return false
+	}
+	// A period-satisfied x_per_week / x_per_maand habit is NOT due on a day with
+	// no log: once the weekly/monthly target is met, remaining days in the period
+	// must not count as due/incomplete (N5 parity with the frontend). Callers that
+	// know the period is already satisfied pass it via completionForDate; here we
+	// only handle the base frequency/schedule gate.
+	return true
 }
 
 var habitAmsterdamLoc = func() *time.Location {
@@ -649,7 +668,22 @@ func refreshHabitProgressQ(ctx context.Context, q pgQuerier, habit model.Habit) 
 	if scErr != nil {
 		schedCtx = map[string]habitScheduleContext{}
 	}
+	// Current (open) pause window: from gepauzeer_om (Amsterdam date) up to today,
+	// while the habit is paused. Days inside it are treated as not-due so the pause
+	// neither breaks nor counts against the streak (R3-item7b). Only the currently
+	// open window is persisted (gepauzeer_om is cleared on resume); closed/historic
+	// pause windows are not recoverable.
+	// TODO(item7b): persist closed pause windows (a habit_pause_windows table with
+	// start/end, or paused-days in habit_logs) so previously-paused stretches are
+	// also subtracted from streaks after resume. Requires a schema migration.
+	pauseStart := ""
+	if habit.IsPauze && habit.GepauzeerOm != nil {
+		pauseStart = habit.GepauzeerOm.In(amsterdamLocationStore()).Format("2006-01-02")
+	}
 	isDue := func(date string) bool {
+		if pauseStart != "" && date >= pauseStart && date <= today {
+			return false
+		}
 		parsed, err := time.Parse("2006-01-02", date)
 		if err != nil {
 			return false
@@ -898,13 +932,29 @@ func habitLogByDate(logs []model.HabitLog) map[string]map[uuid.UUID]model.HabitL
 	return out
 }
 
-func completionForDate(habits []model.Habit, logs map[uuid.UUID]model.HabitLog, datum string, schedule habitScheduleContext) (completed, due int) {
+// completionForDate computes completed/due counts for a single date.
+//
+// periodSatisfied(habitID) reports whether an x_per_week/x_per_maand habit has
+// already met its period target as of this date (counting logs strictly BEFORE
+// this date). When it has, and there is no completing log on this date, the
+// habit is NOT due today — matching the frontend N5 rule so a period-satisfied
+// weekly habit isn't shown as incomplete on its remaining days. Pass a nil
+// predicate to disable period-awareness (treats every due frequency-day as due).
+func completionForDate(habits []model.Habit, logs map[uuid.UUID]model.HabitLog, datum, today string, schedule habitScheduleContext, periodSatisfied func(uuid.UUID) bool) (completed, due int) {
 	for _, habit := range habits {
-		if !habitDueOnDate(habit, datum, schedule) {
+		if !habitDueOnDate(habit, datum, today, schedule) {
 			continue
 		}
-		due++
 		log, hasLog := logs[habit.ID]
+		// N5: a period-satisfied weekly/monthly habit is not due on a day without
+		// its own completing log.
+		if periodSatisfied != nil && (habit.Frequentie == "x_per_week" || habit.Frequentie == "x_per_maand") {
+			completedToday := hasLog && log.Voltooid
+			if !completedToday && periodSatisfied(habit.ID) {
+				continue
+			}
+		}
+		due++
 		if habit.Type == "negatief" {
 			if !hasLog || !log.IsIncident {
 				completed++
@@ -992,6 +1042,38 @@ func PeriodBoundsForDate(datum string, weekly bool) (start, end string, err erro
 	return s.Format("2006-01-02"), e.Format("2006-01-02"), nil
 }
 
+// currentPeriodLogs fetches logs spanning both the ISO-week and month containing
+// datum, so a period index can decide N5 exclusion for TodayDue. Returns nil when
+// no habit uses a periodic frequency (nothing to compute).
+func (s *HabitStore) currentPeriodLogs(ctx context.Context, userID, datum string, habits []model.Habit) ([]model.HabitLog, error) {
+	needsPeriod := false
+	for _, h := range habits {
+		if h.Frequentie == "x_per_week" || h.Frequentie == "x_per_maand" {
+			needsPeriod = true
+			break
+		}
+	}
+	if !needsPeriod {
+		return nil, nil
+	}
+	weekStart, weekEnd, err := PeriodBoundsForDate(datum, true)
+	if err != nil {
+		return nil, err
+	}
+	monthStart, monthEnd, err := PeriodBoundsForDate(datum, false)
+	if err != nil {
+		return nil, err
+	}
+	start, end := weekStart, weekEnd
+	if monthStart < start {
+		start = monthStart
+	}
+	if monthEnd > end {
+		end = monthEnd
+	}
+	return s.ListLogsRange(ctx, userID, start, end)
+}
+
 func todayAmsterdam() string {
 	loc, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
@@ -1035,10 +1117,15 @@ func (s *HabitStore) HeatmapData(ctx context.Context, userID string, days int) (
 		return nil, err
 	}
 	logMap := habitLogByDate(logs)
+	today := todayAmsterdam()
+	// Index completed period-counts so the heatmap applies the same N5 rule as the
+	// frontend: a weekly/monthly habit already at target earlier in its period is
+	// not counted as due on its remaining empty days.
+	periodIdx := newHabitPeriodIndex(habits, logs)
 	out := make([]DayRow, 0, days)
 	for i := 0; i < days; i++ {
 		date := endDate.AddDate(0, 0, -days+1+i).Format("2006-01-02")
-		count, due := completionForDate(habits, logMap[date], date, schedules[date])
+		count, due := completionForDate(habits, logMap[date], date, today, schedules[date], periodIdx.satisfiedBefore(date))
 		rate := 0.0
 		if due > 0 {
 			rate = float64(count) / float64(due)
@@ -1046,6 +1133,69 @@ func (s *HabitStore) HeatmapData(ctx context.Context, userID string, days int) (
 		out = append(out, DayRow{Datum: date, Count: count, Due: due, Rate: rate})
 	}
 	return out, nil
+}
+
+// habitPeriodIndex answers, for a given date, whether an x_per_week/x_per_maand
+// habit had already met its period target using only completing logs dated
+// strictly BEFORE that date (same period). This mirrors the frontend N5 exclusion.
+type habitPeriodIndex struct {
+	weekly  map[uuid.UUID]bool // habit is x_per_week
+	goal    map[uuid.UUID]int
+	// completions[habitID][periodKey] = sorted-ascending list of completion dates
+	completions map[uuid.UUID]map[string][]string
+}
+
+func newHabitPeriodIndex(habits []model.Habit, logs []model.HabitLog) *habitPeriodIndex {
+	idx := &habitPeriodIndex{
+		weekly:      map[uuid.UUID]bool{},
+		goal:        map[uuid.UUID]int{},
+		completions: map[uuid.UUID]map[string][]string{},
+	}
+	for _, h := range habits {
+		if h.Frequentie == "x_per_week" || h.Frequentie == "x_per_maand" {
+			idx.weekly[h.ID] = h.Frequentie == "x_per_week"
+			idx.goal[h.ID] = habitPeriodGoal(h)
+			idx.completions[h.ID] = map[string][]string{}
+		}
+	}
+	for _, l := range logs {
+		if !l.Voltooid {
+			continue
+		}
+		if _, ok := idx.completions[l.HabitID]; !ok {
+			continue
+		}
+		d, err := time.Parse("2006-01-02", l.Datum)
+		if err != nil {
+			continue
+		}
+		key := habitPeriodKey(d, idx.weekly[l.HabitID])
+		idx.completions[l.HabitID][key] = append(idx.completions[l.HabitID][key], l.Datum)
+	}
+	return idx
+}
+
+// satisfiedBefore returns a predicate: for habitID, was the period target met by
+// completions strictly before `date`?
+func (idx *habitPeriodIndex) satisfiedBefore(date string) func(uuid.UUID) bool {
+	return func(habitID uuid.UUID) bool {
+		byPeriod, ok := idx.completions[habitID]
+		if !ok {
+			return false
+		}
+		d, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			return false
+		}
+		key := habitPeriodKey(d, idx.weekly[habitID])
+		count := 0
+		for _, cd := range byPeriod[key] {
+			if cd < date {
+				count++
+			}
+		}
+		return count >= idx.goal[habitID]
+	}
 }
 
 // Stats returns aggregate stats for a user.
@@ -1077,26 +1227,48 @@ func (s *HabitStore) Stats(ctx context.Context, userID string) (HabitStats, erro
 	if err != nil {
 		return stats, err
 	}
-	stats.TodayCompleted, stats.TodayDue = completionForDate(habits, habitLogByID(logs), today, schedule)
+	// N5: build a period index over the current week+month so TodayDue applies
+	// the same period-satisfied exclusion the heatmap/frontend do. Fetch the
+	// widest bound (month usually) covering today's period.
+	periodLogs, perr := s.currentPeriodLogs(ctx, userID, today, habits)
+	if perr != nil {
+		periodLogs = nil
+	}
+	periodIdx := newHabitPeriodIndex(habits, periodLogs)
+	stats.TodayCompleted, stats.TodayDue = completionForDate(habits, habitLogByID(logs), today, today, schedule, periodIdx.satisfiedBefore(today))
 
 	_ = s.db.Pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT datum)
 		FROM habit_logs
 		WHERE user_id = $1 AND is_incident = true AND datum >= CURRENT_DATE - INTERVAL '30 days'
 	`, userID).Scan(&stats.Incidents30d)
-	_ = s.db.Pool.QueryRow(ctx, `
-		WITH active AS (
-			SELECT COUNT(*) AS total FROM habits WHERE user_id = $1 AND is_actief = true AND is_pauze = false
-		),
-		daily AS (
-			SELECT datum, COUNT(*) FILTER (WHERE voltooid = true) AS done
-			FROM habit_logs
-			WHERE user_id = $1
-			GROUP BY datum
-		)
-		SELECT COUNT(*) FROM daily, active WHERE active.total > 0 AND daily.done >= active.total
-	`, userID).Scan(&stats.PerfectDays)
+
+	// PerfectDays is computed from the SAME per-day due/completed logic the heatmap
+	// and frontend day% use (creation-date + frequency/schedule + pause-only-today
+	// + N5 period exclusion), so the three no longer disagree. The old SQL
+	// heuristic (done >= active-habit-count) over-counted low-due days and mis-
+	// counted weekly habits. Bounded to the heatmap's 365-day window.
+	if perfect, perr := s.perfectDaysCount(ctx, userID, 365); perr == nil {
+		stats.PerfectDays = perfect
+	}
 	return stats, nil
+}
+
+// perfectDaysCount counts days in the trailing window where every due habit was
+// completed (Rate == 1, at least one habit due), using HeatmapData's accurate
+// per-day computation so Stats.PerfectDays agrees with the heatmap.
+func (s *HabitStore) perfectDaysCount(ctx context.Context, userID string, days int) (int, error) {
+	rows, err := s.HeatmapData(ctx, userID, days)
+	if err != nil {
+		return 0, err
+	}
+	perfect := 0
+	for _, r := range rows {
+		if r.Due > 0 && r.Count >= r.Due {
+			perfect++
+		}
+	}
+	return perfect, nil
 }
 
 // ─── Badges ──────────────────────────────────────────────────────────────────

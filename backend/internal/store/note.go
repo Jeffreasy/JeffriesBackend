@@ -96,14 +96,22 @@ func (s *NoteStore) List(ctx context.Context, userID string) ([]model.Note, erro
 func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset int, summary bool) ([]model.Note, error) {
 	cols := noteCols
 	if summary {
-		// Same column list/order as noteCols, but with inhoud replaced by an
-		// empty literal so scanNote keeps working and payloads stay small.
-		cols = strings.Replace(noteCols, "inhoud", "'' AS inhoud", 1)
+		// Same column list/order as noteCols, but with inhoud blanked (payloads
+		// stay small) and a trailing left(inhoud,80) preview so untitled notes
+		// still render a meaningful line on the kiosk instead of "Naamloze notitie".
+		cols = strings.Replace(noteCols, "inhoud", "'' AS inhoud", 1) + ", left(inhoud, 80) AS preview"
+	}
+	// Summary mode orders by deadline-urgency first (overdue/soonest deadlines
+	// win, then newest) so the kiosk's newest-N window doesn't truncate away the
+	// overdue heavyweights; full mode keeps the pinned-then-newest ordering.
+	order := "is_pinned DESC, gewijzigd DESC"
+	if summary {
+		order = "is_pinned DESC, (deadline IS NULL), deadline ASC, gewijzigd DESC"
 	}
 	q := fmt.Sprintf(`
 		SELECT %s FROM notes WHERE user_id = $1
-		ORDER BY is_pinned DESC, gewijzigd DESC
-	`, cols)
+		ORDER BY %s
+	`, cols, order)
 	args := []any{userID}
 	if limit > 0 {
 		args = append(args, limit)
@@ -120,9 +128,13 @@ func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset 
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (model.Note, error) {
 		var n model.Note
-		err := row.Scan(&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
+		dest := []any{&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 			&n.IsPinned, &n.IsArchived, &n.IsCompleted, &n.CompletedAt, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
-			&n.Symbol, &n.BusinessContextType, &n.BusinessContextID, &n.BusinessContextTitle, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd)
+			&n.Symbol, &n.BusinessContextType, &n.BusinessContextID, &n.BusinessContextTitle, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd}
+		if summary {
+			dest = append(dest, &n.Preview)
+		}
+		err := row.Scan(dest...)
 		if n.Tags == nil {
 			n.Tags = []string{}
 		}

@@ -33,7 +33,8 @@ func (s *TransactionStore) List(ctx context.Context, userID string, fromDate, to
 		args = append(args, *toDate)
 		query += ` AND datum <= $` + pgArgNum(len(args))
 	}
-	query += ` ORDER BY datum DESC, volgnr DESC`
+	// LPAD volgnr so ordering is numeric ("9" < "10") at a digit-length rollover.
+	query += ` ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC`
 
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -136,7 +137,7 @@ func (s *TransactionStore) ListFiltered(ctx context.Context, userID string, f Tr
 	offsetN := pgArgNum(len(args))
 
 	dataQ := `SELECT ` + trxColumns + ` FROM transactions ` + where +
-		` ORDER BY datum DESC, volgnr DESC LIMIT $` + limitN + ` OFFSET $` + offsetN
+		` ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC LIMIT $` + limitN + ` OFFSET $` + offsetN
 
 	rows, err := s.db.Pool.Query(ctx, dataQ, args...)
 	if err != nil {

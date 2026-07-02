@@ -458,6 +458,16 @@ func (e *Engine) applyAction(ctx context.Context, di deviceInfo, actionType stri
 		}
 		if err := e.enqueueDeviceCommand(ctx, &di.ID, command); err != nil {
 			slog.Warn("queue automation command failed", "type", actionType, "device", di.ID, "error", err)
+			return
+		}
+		// Optimistically patch device state on enqueue, mirroring the HTTP handler
+		// (handler/device.go): the queue is drained up to ~5 min later, so without
+		// this the dienst-wekker turns the light on at 05:00 but app + kiosk keep
+		// showing "0 lampen aan" until the next full status poll (H12).
+		if patch, ok := statePatchFromAction(actionType, action); ok && len(patch) > 0 {
+			if uerr := e.devStore.UpdateState(ctx, di.ID, patch); uerr != nil {
+				slog.Warn("optimistic automation state patch failed", "type", actionType, "device", di.ID, "error", uerr)
+			}
 		}
 		return
 	}

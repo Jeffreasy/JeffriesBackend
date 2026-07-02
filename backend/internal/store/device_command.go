@@ -18,6 +18,12 @@ const (
 
 	defaultDeviceCommandClaimLimit = 25
 	staleDeviceCommandAfter        = 2 * time.Minute
+	// pendingDeviceCommandTTL bounds how long a pending command may wait before
+	// it is considered expired. Without this, commands enqueued during a long
+	// bridge outage all fire at once when the bridge returns — an hours-old
+	// "lamp aan" replay-storm at 3am. Expired commands are marked failed so they
+	// are never claimed/replayed.
+	pendingDeviceCommandTTL = 10 * time.Minute
 )
 
 // DeviceCommand represents a pending WiZ command.
@@ -57,11 +63,28 @@ func (s *DeviceCommandStore) ClaimPending(ctx context.Context, limit int) ([]Dev
 		return nil, err
 	}
 
+	// Expire pending commands older than the TTL so a backlog built up during a
+	// bridge outage is not replayed en masse (replay-storm). Marking them failed
+	// (rather than deleting) keeps the queued-count metric truthful: the metric
+	// counts status='pending', and expired rows leave that state here — the
+	// poller runs this on every 2s claim, so stale pendings are cleared promptly.
+	expiredBefore := time.Now().UTC().Add(-pendingDeviceCommandTTL)
+	if _, err := s.db.Pool.Exec(ctx,
+		`UPDATE device_commands
+		    SET status = 'failed', completed_at = now(), updated_at = now()
+		  WHERE status = 'pending'
+		    AND created_at < $1`,
+		expiredBefore,
+	); err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.Pool.Query(ctx,
 		`WITH picked AS (
 		     SELECT id
 		       FROM device_commands
 		      WHERE status = 'pending'
+		        AND created_at > now() - interval '10 minutes'
 		      ORDER BY created_at
 		      FOR UPDATE SKIP LOCKED
 		      LIMIT $1

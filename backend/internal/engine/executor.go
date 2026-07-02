@@ -2550,12 +2550,13 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "habitVoltooien":
 		var args struct {
-			ID      string   `json:"id"`
-			HabitID string   `json:"habitId"`
-			Naam    string   `json:"naam"`
-			Datum   string   `json:"datum"`
-			Waarde  *float64 `json:"waarde"`
-			Notitie string   `json:"notitie"`
+			ID       string   `json:"id"`
+			HabitID  string   `json:"habitId"`
+			Naam     string   `json:"naam"`
+			Datum    string   `json:"datum"`
+			Waarde   *float64 `json:"waarde"`
+			Voltooid *bool    `json:"voltooid"`
+			Notitie  string   `json:"notitie"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -2565,21 +2566,32 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		datum := firstNonEmpty(args.Datum, todayAmsterdamISO())
+		// Match the web Toggle handler: voltooid absent = true (afvinken), false =
+		// echte untoggle ("heropenen") so bot and web don't diverge. Previously the
+		// bot hardcoded true and could only force-complete.
+		voltooid := true
+		if args.Voltooid != nil {
+			voltooid = *args.Voltooid
+		}
 		log, err := e.habitStore.UpsertLog(ctx, model.HabitLog{
 			UserID:   e.userID,
 			HabitID:  habit.ID,
 			Datum:    datum,
-			Voltooid: true,
+			Voltooid: voltooid,
 			Waarde:   args.Waarde,
 			Notitie:  optionalStringPtr(args.Notitie),
 			Bron:     "telegram",
 		})
+		scope := "habit voltooid"
+		if !voltooid {
+			scope = "habit heropend"
+		}
 		return e.jsonResponse(map[string]any{
 			"ok":          true,
-			"scope":       "habit voltooid",
+			"scope":       scope,
 			"habit":       habitSummary(habit),
 			"log":         log,
-			"instruction": "Bij kwantitatieve habits is voltooid alleen true als de waarde het doel haalt.",
+			"instruction": "Bij kwantitatieve habits is voltooid alleen true als de waarde het doel haalt. voltooid=false maakt het afvinken ongedaan.",
 		}, err)
 
 	case "habitIncident":

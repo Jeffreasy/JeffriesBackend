@@ -52,7 +52,9 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM automations WHERE enabled = true`).Scan(&activeAutomations)
 
 	var pendingCommands, processingCommands, failedCommands int
-	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'pending'`).Scan(&pendingCommands)
+	// Count only non-expired pendings so the metric stays truthful between TTL
+	// sweeps (expired commands no longer replay; see device_command TTL).
+	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'pending' AND created_at > now() - interval '10 minutes'`).Scan(&pendingCommands)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'processing'`).Scan(&processingCommands)
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_commands WHERE status = 'failed' AND COALESCE(completed_at, updated_at) > now() - interval '24 hours'`).Scan(&failedCommands)
 

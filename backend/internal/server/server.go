@@ -75,6 +75,9 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	}
 	settingsH := handler.NewSettingsHandler(db, telegramClient, cfg)
 	syncH := handler.NewSyncHandler(db, cfg)
+	// After "Rooster wissen" reconcile Todoist so shift tasks for deleted diensten
+	// don't orphan (H10). No-op when Todoist is unconfigured.
+	scheduleH.SetTodoistCleanup(syncH.ReconcileTodoist)
 
 	registerRoutes(r, cfg, healthH, roomH, deviceH, bridgeH, sceneH, autoH,
 		scheduleH, transactionH, salaryH, loonstrookH, personalEventH, emailH,

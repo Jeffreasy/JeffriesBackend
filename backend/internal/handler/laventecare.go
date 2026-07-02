@@ -2215,7 +2215,7 @@ func (h *LaventeCareHandler) CreateAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if input.Title == "" {
-		Error(w, http.StatusBadRequest, "Title is verplicht")
+		Error(w, http.StatusBadRequest, "Titel is verplicht")
 		return
 	}
 
@@ -2517,7 +2517,7 @@ func (h *LaventeCareHandler) CreateActivityEvent(w http.ResponseWriter, r *http.
 		return
 	}
 	if input.Title == "" {
-		Error(w, http.StatusBadRequest, "title is verplicht")
+		Error(w, http.StatusBadRequest, "Titel is verplicht")
 		return
 	}
 

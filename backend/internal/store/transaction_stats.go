@@ -3,6 +3,9 @@ package store
 import (
 	"context"
 	"math"
+	"sort"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
@@ -68,50 +71,42 @@ type TopMerchant struct {
 
 // GetFullStats returns the complete finance dashboard statistics,
 // replicating the Convex getStats query with full aggregation.
-// datumVan/datumTot (YYYY-MM-DD, optional) constrain every aggregation that is
-// computed over the filtered transaction set — so the stats finally match the
-// period the list view shows ("huidige selectie"). The point-in-time balance
-// fields (huidigSaldo etc.) and the jaren/ibannen index lists intentionally
-// stay unfiltered.
+//
+// Filter precedence (jaarFilter + datumVan/datumTot):
+//   - jaarFilter constrains the aggregation set to a single calendar year.
+//   - datumVan/datumTot narrow *within* that year; if both a year and a date
+//     range are supplied they are intersected (year lower/upper bounds AND the
+//     explicit range), so the effective window is the tighter of the two on
+//     each side. All bounds are pushed into SQL rather than filtered in Go.
+//
+// The point-in-time balance fields (huidigSaldo, huidigSaldoPerIban, saldo per
+// maand carry-forward) and the jaren/ibannen index lists intentionally stay
+// unfiltered — they describe the account as a whole, not the selected period.
 func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, ibanFilter, jaarFilter, datumVan, datumTot *string) (*TransactionStats, error) {
-	// Load all transactions once
-	allTxs, err := s.List(ctx, userID, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	stats := &TransactionStats{
 		HuidigSaldoPerIban:    make(map[string]float64),
 		SaldoPeildatumPerIban: make(map[string]string),
 	}
-	stats.AantalAlleTxs = len(allTxs)
 
-	// Jaren + IBANs from all transactions
-	jarenSet := make(map[string]bool)
-	ibanSet := make(map[string]bool)
-	for _, t := range allTxs {
-		if len(t.Datum) >= 4 {
-			jarenSet[t.Datum[:4]] = true
-		}
-		ibanSet[t.RekeningIban] = true
+	// ── Unfiltered index data (jaren, ibannen, total count) ──────────────────
+	// Cheap dedicated queries instead of scanning every row in Go.
+	jaren, ibannen, alleCount, err := s.statsIndex(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
-	stats.Jaren = sortedKeys(jarenSet)
-	stats.Ibannen = sortedKeys(ibanSet)
+	stats.Jaren = jaren
+	stats.Ibannen = ibannen
+	stats.AantalAlleTxs = alleCount
 
-	// Saldo per IBAN: find latest transaction per IBAN
+	// ── Latest saldo per IBAN (unfiltered, point-in-time) ────────────────────
 	type ibanSaldo struct {
-		datum  string
-		volgnr string
-		saldo  float64
+		datum string
+		saldo float64
 	}
-	ibanSaldoMap := make(map[string]ibanSaldo)
-	for _, t := range allTxs {
-		prev, exists := ibanSaldoMap[t.RekeningIban]
-		if !exists || isLater(t.Datum, t.Volgnr, prev.datum, prev.volgnr) {
-			ibanSaldoMap[t.RekeningIban] = ibanSaldo{datum: t.Datum, volgnr: t.Volgnr, saldo: t.SaldoNaTrn}
-		}
+	ibanSaldoMap, err := s.statsLatestSaldoPerIban(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
-
 	var laatsteDatum string
 	for iban, s := range ibanSaldoMap {
 		stats.HuidigSaldoPerIban[iban] = round2(s.saldo)
@@ -124,24 +119,11 @@ func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, iban
 		stats.LaatsteSaldoPeildatum = &laatsteDatum
 	}
 
-	// Filter on IBAN if set
-	txs := allTxs
-	if ibanFilter != nil && *ibanFilter != "" {
-		txs = filterByIban(txs, *ibanFilter)
-	}
-
-	// Filter on year if set
-	if jaarFilter != nil && *jaarFilter != "" {
-		txs = filterByJaar(txs, *jaarFilter)
-	}
-
-	// Optional explicit date range (YYYY-MM-DD) — constrains all aggregations
-	// below, matching the period filter of the transaction list.
-	if datumVan != nil && *datumVan != "" {
-		txs = filterFromDate(txs, *datumVan)
-	}
-	if datumTot != nil && *datumTot != "" {
-		txs = filterToDate(txs, *datumTot)
+	// ── Filtered aggregation set (iban + jaar ∩ date-range), pushed to SQL ────
+	van, tot := intersectYearAndRange(jaarFilter, datumVan, datumTot)
+	txs, err := s.statsAggregationRows(ctx, userID, ibanFilter, van, tot)
+	if err != nil {
+		return nil, err
 	}
 	stats.AantalTxs = len(txs)
 
@@ -262,10 +244,12 @@ func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, iban
 	}
 	stats.InUitPerMaand = sortedMaandInUit(inUitMap)
 
-	// Saldo per maand (with carry-forward per IBAN)
-	saldoBron := allTxs
-	if ibanFilter != nil && *ibanFilter != "" {
-		saldoBron = filterByIban(allTxs, *ibanFilter)
+	// Saldo per maand (with carry-forward per IBAN). This deliberately does NOT
+	// apply the lower date bound: the carry-forward needs every earlier row to
+	// seed each displayed month's opening balance. Only the iban filter applies.
+	saldoBron, err := s.statsAggregationRows(ctx, userID, ibanFilter, nil, tot)
+	if err != nil {
+		return nil, err
 	}
 	stats.SaldoPerMaand = computeSaldoPerMaand(saldoBron, stats.Maanden)
 
@@ -292,53 +276,135 @@ func (s *TransactionStore) GetFullStats(ctx context.Context, userID string, iban
 	return stats, nil
 }
 
+// ─── SQL data loaders for stats ──────────────────────────────────────────────
+
+// statsIndex returns the all-time jaren (years), ibannen and total tx count via
+// dedicated aggregate queries instead of scanning every row in Go.
+func (s *TransactionStore) statsIndex(ctx context.Context, userID string) (jaren, ibannen []string, total int, err error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT DISTINCT to_char(datum, 'YYYY') FROM transactions WHERE user_id = $1 ORDER BY 1`, userID)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	jaren, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	rows, err = s.db.Pool.Query(ctx,
+		`SELECT DISTINCT rekening_iban FROM transactions WHERE user_id = $1 ORDER BY 1`, userID)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	ibannen, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	if err = s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions WHERE user_id = $1`, userID).Scan(&total); err != nil {
+		return nil, nil, 0, err
+	}
+	return jaren, ibannen, total, nil
+}
+
+// statsLatestSaldoPerIban returns the point-in-time balance per IBAN: the
+// saldo_na_trn of the most recent transaction (by datum, then numeric volgnr).
+func (s *TransactionStore) statsLatestSaldoPerIban(ctx context.Context, userID string) (map[string]struct {
+	datum string
+	saldo float64
+}, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT rekening_iban, datum::text, saldo_na_trn FROM (
+		     SELECT rekening_iban, datum, saldo_na_trn,
+		            ROW_NUMBER() OVER (PARTITION BY rekening_iban
+		                               ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC) AS rn
+		       FROM transactions WHERE user_id = $1
+		 ) t WHERE rn = 1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]struct {
+		datum string
+		saldo float64
+	})
+	for rows.Next() {
+		var iban, datum string
+		var saldo float64
+		if err := rows.Scan(&iban, &datum, &saldo); err != nil {
+			return nil, err
+		}
+		out[iban] = struct {
+			datum string
+			saldo float64
+		}{datum: datum, saldo: saldo}
+	}
+	return out, rows.Err()
+}
+
+// statsAggregationRows loads the transaction rows for aggregation with the
+// iban filter and (optional) date range pushed into SQL. Both bounds are
+// inclusive. Passing nil skips a bound.
+func (s *TransactionStore) statsAggregationRows(ctx context.Context, userID string, ibanFilter, van, tot *string) ([]model.Transaction, error) {
+	query := `SELECT ` + trxColumns + ` FROM transactions WHERE user_id = $1`
+	args := []any{userID}
+	if ibanFilter != nil && *ibanFilter != "" {
+		args = append(args, *ibanFilter)
+		query += ` AND rekening_iban = $` + pgArgNum(len(args))
+	}
+	if van != nil && *van != "" {
+		args = append(args, *van)
+		query += ` AND datum >= $` + pgArgNum(len(args))
+	}
+	if tot != nil && *tot != "" {
+		args = append(args, *tot)
+		query += ` AND datum <= $` + pgArgNum(len(args))
+	}
+	query += ` ORDER BY datum DESC, volgnr DESC`
+
+	rows, err := s.db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanTransaction)
+}
+
+// intersectYearAndRange combines a jaarFilter (single year, e.g. "2026") with an
+// explicit datumVan/datumTot range. The year contributes YYYY-01-01 / YYYY-12-31
+// bounds; the explicit range narrows within it. The result is the intersection:
+// the later of the two lower bounds and the earlier of the two upper bounds.
+func intersectYearAndRange(jaarFilter, datumVan, datumTot *string) (van, tot *string) {
+	if jaarFilter != nil && *jaarFilter != "" {
+		lo := *jaarFilter + "-01-01"
+		hi := *jaarFilter + "-12-31"
+		van, tot = &lo, &hi
+	}
+	if datumVan != nil && *datumVan != "" {
+		if van == nil || *datumVan > *van {
+			v := *datumVan
+			van = &v
+		}
+	}
+	if datumTot != nil && *datumTot != "" {
+		if tot == nil || *datumTot < *tot {
+			t := *datumTot
+			tot = &t
+		}
+	}
+	return van, tot
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func isLater(datum1, volgnr1, datum2, volgnr2 string) bool {
 	if datum1 != datum2 {
 		return datum1 > datum2
 	}
-	return volgnr1 > volgnr2
-}
-
-func filterByIban(txs []model.Transaction, iban string) []model.Transaction {
-	var out []model.Transaction
-	for _, t := range txs {
-		if t.RekeningIban == iban {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func filterByJaar(txs []model.Transaction, jaar string) []model.Transaction {
-	var out []model.Transaction
-	for _, t := range txs {
-		if len(t.Datum) >= 4 && t.Datum[:4] == jaar {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func filterFromDate(txs []model.Transaction, from string) []model.Transaction {
-	var out []model.Transaction
-	for _, t := range txs {
-		if t.Datum >= from {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func filterToDate(txs []model.Transaction, to string) []model.Transaction {
-	var out []model.Transaction
-	for _, t := range txs {
-		if t.Datum <= to {
-			out = append(out, t)
-		}
-	}
-	return out
+	// Numeric compare so a shorter volgnr ("9") is not treated as greater than a
+	// longer one ("10") at a digit-length rollover.
+	return volgnrLess(volgnr2, volgnr1)
 }
 
 func filterExtern(txs []model.Transaction) []model.Transaction {
@@ -383,11 +449,7 @@ func sortedBreakdowns(m map[string]*CategorieBreakdown) []CategorieBreakdown {
 	for _, cb := range m {
 		out = append(out, *cb)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Bedrag > out[j-1].Bedrag; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bedrag > out[j].Bedrag })
 	return out
 }
 
@@ -396,11 +458,7 @@ func sortedMaandInUit(m map[string]*MaandInUit) []MaandInUit {
 	for _, v := range m {
 		out = append(out, *v)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Maand < out[j-1].Maand; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Maand < out[j].Maand })
 	return out
 }
 
@@ -409,26 +467,36 @@ func topNMerchants(m map[string]*TopMerchant, n int) []TopMerchant {
 	for _, v := range m {
 		out = append(out, *v)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Bedrag > out[j-1].Bedrag; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bedrag > out[j].Bedrag })
 	if len(out) > n {
 		out = out[:n]
 	}
 	return out
 }
 
+// volgnrLess reports whether volgnr a sorts before b using numeric semantics
+// (left-pad to equal width, then lexical), so "9" < "10" instead of the raw
+// string comparison that would put "9" after "10".
+func volgnrLess(a, b string) bool {
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return true
+		}
+		return false
+	}
+	return a < b
+}
+
 func computeSaldoPerMaand(txs []model.Transaction, maanden []string) []MaandSaldo {
-	// Sort transactions by datum+volgnr ascending
+	// Sort transactions by datum+volgnr ascending (numeric volgnr tiebreak).
 	sorted := make([]model.Transaction, len(txs))
 	copy(sorted, txs)
-	for i := 1; i < len(sorted); i++ {
-		for j := i; j > 0 && isLater(sorted[j-1].Datum, sorted[j-1].Volgnr, sorted[j].Datum, sorted[j].Volgnr); j-- {
-			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Datum != sorted[j].Datum {
+			return sorted[i].Datum < sorted[j].Datum
 		}
-	}
+		return volgnrLess(sorted[i].Volgnr, sorted[j].Volgnr)
+	})
 
 	type ibanState struct{ saldo float64 }
 	laatsteSaldo := make(map[string]*ibanState)

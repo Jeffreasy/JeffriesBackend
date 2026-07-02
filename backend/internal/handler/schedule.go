@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -15,10 +17,20 @@ import (
 
 type ScheduleHandler struct {
 	store *store.ScheduleStore
+	// todoistCleanup, if set, reconciles Todoist after a full schedule wipe by
+	// pushing an empty shift set — closing/deleting every [EID:…] shift task so
+	// they don't linger as reminders for shifts that no longer exist. Optional
+	// (nil when Todoist is not configured); called best-effort after DeleteAll.
+	todoistCleanup func(ctx context.Context, userID string) error
 }
 
 func NewScheduleHandler(s *store.ScheduleStore) *ScheduleHandler {
 	return &ScheduleHandler{store: s}
+}
+
+// SetTodoistCleanup wires the post-wipe Todoist reconcile hook (see field docs).
+func (h *ScheduleHandler) SetTodoistCleanup(fn func(ctx context.Context, userID string) error) {
+	h.todoistCleanup = fn
 }
 
 // parseOptionalDateRange reads optional from/to (YYYY-MM-DD) query params.
@@ -178,6 +190,28 @@ func (h *ScheduleHandler) Clear(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, err)
 		return
 	}
+
+	// After the wipe commits, reconcile Todoist so the shift tasks that were
+	// pushed for now-deleted diensten don't orphan as stale reminders. Done
+	// best-effort in the background: the schedule delete already succeeded, so a
+	// Todoist hiccup must not turn a 204 into a 500. Uses a detached context so
+	// it survives the request returning.
+	//
+	// Google Calendar note: the backend does NOT create Google "shadow" events
+	// for shifts (shifts live only in the `schedule` table; personal_events holds
+	// real Google events). The duplicate-shadow-on-/agenda symptom is a frontend
+	// dedup concern (dedup keyed on the live dienstenlijst) — nothing to null out
+	// server-side here.
+	if h.todoistCleanup != nil {
+		go func(uid string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := h.todoistCleanup(ctx, uid); err != nil {
+				slog.Warn("todoist cleanup after schedule wipe failed", "user", uid, "err", err)
+			}
+		}(userID)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

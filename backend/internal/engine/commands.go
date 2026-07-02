@@ -91,8 +91,9 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 
 	// Send to all target devices concurrently
 	var wg sync.WaitGroup
-	var successCount, failedCount int
+	var successCount int
 	var mu sync.Mutex
+	var failedDeviceIDs []uuid.UUID // targets that did not respond (for offline marking)
 
 	for _, di := range infos {
 		wg.Add(1)
@@ -103,7 +104,9 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 			defer mu.Unlock()
 			if wizErr != nil {
 				slog.Warn("WiZ command failed", "ip", info.IP, "error", wizErr, "cmdID", cmd.ID)
-				failedCount++
+				if info.ID != uuid.Nil {
+					failedDeviceIDs = append(failedDeviceIDs, info.ID)
+				}
 			} else {
 				slog.Info("WiZ command OK", "ip", info.IP, "cmdID", cmd.ID)
 				successCount++
@@ -112,12 +115,41 @@ func (e *Engine) processCommand(ctx context.Context, cmd store.DeviceCommand, de
 	}
 	wg.Wait()
 
-	status := store.DeviceCommandStatusDone
-	if successCount == 0 && failedCount > 0 {
-		status = store.DeviceCommandStatusFailed
+	if successCount > 0 {
+		// At least one target reacted → command done.
+		if err := e.cmdStore.MarkDone(ctx, cmd.ID, store.DeviceCommandStatusDone); err != nil {
+			slog.Error("mark command done failed", "id", cmd.ID, "error", err)
+		}
+		return
 	}
-	if err := e.cmdStore.MarkDone(ctx, cmd.ID, status); err != nil {
-		slog.Error("mark command done failed", "id", cmd.ID, "error", err)
+
+	// Total failure: retry via RequeueOrFail rather than failing on the first
+	// blip — a transient LAN/UDP hiccup should not permanently fail the command
+	// (mirrors the bridge HTTP path in handler/bridge.go). Only on the terminal
+	// attempt do we mark the affected device(s) offline so the UI stops showing
+	// the optimistic state as if the command landed.
+	requeued, deviceID, err := e.cmdStore.RequeueOrFail(ctx, cmd.ID, 3)
+	if err != nil {
+		slog.Error("requeue command failed", "id", cmd.ID, "error", err)
+		return
+	}
+	if requeued {
+		return
+	}
+	// Terminal failure. For a targeted command RequeueOrFail returns its device_id;
+	// for a broadcast (device_id NULL) mark every target that failed to respond.
+	offlineIDs := failedDeviceIDs
+	if deviceID != nil {
+		offlineIDs = []uuid.UUID{*deviceID}
+	}
+	for _, id := range offlineIDs {
+		if serr := e.devStore.SetStatus(ctx, id, "offline"); serr != nil {
+			slog.Warn("failed to mark device offline after terminal command failure",
+				"cmdID", cmd.ID, "deviceID", id, "error", serr)
+		} else {
+			slog.Warn("device command failed terminally; device marked offline",
+				"cmdID", cmd.ID, "deviceID", id)
+		}
 	}
 }
 
@@ -160,6 +192,41 @@ func buildDeviceCommandFromAction(actionType string, action map[string]any) (map
 		hexColor := getStringField(action, "colorHex", "#ffffff")
 		r, g, b := wiz.HexToRGB(hexColor)
 		return map[string]any{"on": true, "r": r, "g": g, "b": b}, true
+	default:
+		return nil, false
+	}
+}
+
+// statePatchFromAction derives the DB current_state patch for an automation
+// action, matching the direct-path (applyAction) semantics exactly so queued
+// automations converge to the same optimistic state the direct path writes.
+// Note this differs from buildDeviceCommandFromAction: the command carries
+// color_temp_mireds, the state patch carries color_temp in kelvin (and clears
+// r/g/b + scene_id for white mode), as the frontend expects.
+func statePatchFromAction(actionType string, action map[string]any) (map[string]any, bool) {
+	switch actionType {
+	case "off":
+		return map[string]any{"on": false}, true
+	case "on":
+		return map[string]any{"on": true}, true
+	case "brightness":
+		return map[string]any{"on": true, "brightness": getIntField(action, "brightness", 80)}, true
+	case "color_temp":
+		kelvin := wiz.MiredsToKelvin(getIntField(action, "colorTempMireds", 250))
+		return map[string]any{"on": true, "color_temp": kelvin, "r": 0, "g": 0, "b": 0, "scene_id": 0}, true
+	case "scene":
+		if sid := getIntField(action, "scene_id", 0); sid > 0 {
+			return map[string]any{"on": true, "scene_id": sid}, true
+		}
+		sceneKey := getStringField(action, "sceneId", "helder")
+		sceneDef, ok := SceneDefinitions[sceneKey]
+		if !ok {
+			sceneDef = SceneDefinitions["helder"]
+		}
+		return statePatchFromStateOpts(sceneDef), true
+	case "color":
+		r, g, b := wiz.HexToRGB(getStringField(action, "colorHex", "#ffffff"))
+		return map[string]any{"on": true, "r": r, "g": g, "b": b, "scene_id": 0}, true
 	default:
 		return nil, false
 	}
