@@ -109,7 +109,10 @@ func (e *Engine) buildAILiveContext(ctx context.Context, agentID string) map[str
 	}
 
 	switch agentID {
-	case "notes", "brain", "dashboard":
+	// agenda is included so /planning sees notes-with-a-deadline directly in
+	// Live Data (the notes.focus items carry deadline/attention), instead of
+	// answering planning questions blind to dated to-dos.
+	case "notes", "brain", "dashboard", "agenda":
 		if snapshot, err := e.buildNotesAISnapshot(ctx, 8); err == nil {
 			live["notes"] = snapshot
 		} else {

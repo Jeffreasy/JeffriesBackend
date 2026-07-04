@@ -2235,17 +2235,38 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			totaalUur += dienst.Duur
 		}
 
-		return e.jsonResponse(map[string]any{
+		// A note with a deadline is a time-bound to-do and therefore part of the
+		// planning. Enrich the result with open notes due on or before the window
+		// end (including overdue) so every consumer of this tool — the /planning
+		// Telegram command, brain, rooster, laventecare — stops silently dropping
+		// dated notes. A notes-store hiccup must not fail the whole planning, so
+		// on error we still return shifts + appointments and flag the gap.
+		loc := amsterdamLocation()
+		now := time.Now().In(loc)
+		var deadlineNotities []map[string]any
+		notes, noteErr := e.noteStore.List(ctx, e.userID)
+		if noteErr == nil {
+			deadlineNotities = planningDeadlineNotes(notes, eindIso, now, loc, 10)
+		}
+
+		result := map[string]any{
 			"periode": map[string]string{
 				"startIso": startIso,
 				"eindIso":  eindIso,
 			},
-			"diensten":        diensten,
-			"afspraken":       afspraken,
-			"aantalDiensten":  len(diensten),
-			"aantalAfspraken": len(afspraken),
-			"totaalUur":       totaalUur,
-		}, nil)
+			"diensten":               diensten,
+			"afspraken":              afspraken,
+			"deadlineNotities":       deadlineNotities,
+			"aantalDiensten":         len(diensten),
+			"aantalAfspraken":        len(afspraken),
+			"aantalDeadlineNotities": len(deadlineNotities),
+			"totaalUur":              totaalUur,
+			"instruction":            "deadlineNotities zijn open notities met een deadline op of vóór het einde van deze periode (overdue notities zijn inbegrepen). Behandel ze als planningstaken naast diensten en afspraken; verzin nooit een notitie of deadline.",
+		}
+		if noteErr != nil {
+			result["notitiesError"] = "kon notities niet laden"
+		}
+		return e.jsonResponse(result, nil)
 
 	case "afsprakenOpvragen":
 		startIso, eindIso, hasRange, errParse := parseToolDateRange(argsJSON, false)

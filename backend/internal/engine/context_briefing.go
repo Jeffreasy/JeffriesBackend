@@ -232,6 +232,37 @@ func compactNextPlanning(schedules []model.Schedule, events []model.PersonalEven
 	return items
 }
 
+// planningDeadlineNotes selects the open (non-archived, non-completed) notes
+// whose deadline lands on or before eindIso, so a dated to-do like "factuur
+// indienen vóór vrijdag" surfaces as part of the planning instead of staying
+// invisible until someone opens the notes view. Overdue notes (deadline before
+// the window) are deliberately kept — a missed deadline is the most planning-
+// critical item there is. Results are soonest-deadline-first and mapped to the
+// same compact shape the notes agent already emits (title, deadline,
+// deadlineLabel, attention, snippet, ...).
+func planningDeadlineNotes(notes []model.Note, eindIso string, now time.Time, loc *time.Location, limit int) []map[string]any {
+	matched := make([]model.Note, 0)
+	for _, note := range openNotes(notes) {
+		if note.Deadline == nil {
+			continue
+		}
+		if note.Deadline.In(loc).Format("2006-01-02") <= eindIso {
+			matched = append(matched, note)
+		}
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		return matched[i].Deadline.Before(*matched[j].Deadline)
+	})
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	items := make([]map[string]any, 0, len(matched))
+	for _, note := range matched {
+		items = append(items, noteAIItem(note, now, loc))
+	}
+	return items
+}
+
 // weekdayLabel returns the Dutch weekday name for an ISO date, or "" if it
 // doesn't parse. This is defense-in-depth beyond the prompt-level 14-day
 // lookup table (ai/prompt.go): the model can read the day directly off the
