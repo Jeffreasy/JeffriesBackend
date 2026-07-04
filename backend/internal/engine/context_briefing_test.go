@@ -70,6 +70,55 @@ func TestDomainUrgencyScoreOverdueBeatsFuture(t *testing.T) {
 	}
 }
 
+// TestPlanningDeadlineNotes pins down the /planning notes-gap fix: only open
+// (non-archived, non-completed) notes with a deadline on or before the window
+// end belong on the planning, overdue notes are kept, and results are sorted
+// soonest-deadline-first so the most urgent to-do leads.
+func TestPlanningDeadlineNotes(t *testing.T) {
+	loc := amsterdamLocation()
+	now := time.Date(2026, 7, 5, 9, 0, 0, 0, loc)
+	dl := func(s string) *time.Time {
+		d, err := time.ParseInLocation("2006-01-02", s, loc)
+		if err != nil {
+			t.Fatalf("bad test date %q: %v", s, err)
+		}
+		return &d
+	}
+
+	notes := []model.Note{
+		{Titel: strp("Binnen window"), Deadline: dl("2026-07-06")},
+		{Titel: strp("Overdue factuur"), Deadline: dl("2026-07-02")},
+		{Titel: strp("Vandaag bellen"), Deadline: dl("2026-07-05")},
+		{Titel: strp("Buiten window"), Deadline: dl("2026-07-20")},
+		{Titel: strp("Geen deadline"), Deadline: nil},
+		{Titel: strp("Voltooid"), Deadline: dl("2026-07-03"), IsCompleted: true},
+		{Titel: strp("Gearchiveerd"), Deadline: dl("2026-07-03"), IsArchived: true},
+	}
+
+	items := planningDeadlineNotes(notes, "2026-07-06", now, loc, 10)
+
+	wantOrder := []string{"Overdue factuur", "Vandaag bellen", "Binnen window"}
+	if len(items) != len(wantOrder) {
+		t.Fatalf("expected %d deadline notes, got %d: %+v", len(wantOrder), len(items), items)
+	}
+	for i, want := range wantOrder {
+		if got, _ := items[i]["title"].(string); got != want {
+			t.Fatalf("order[%d] = %q, want %q", i, got, want)
+		}
+	}
+
+	// A tighter window (today only) still keeps overdue but drops tomorrow.
+	todayOnly := planningDeadlineNotes(notes, "2026-07-05", now, loc, 10)
+	if len(todayOnly) != 2 {
+		t.Fatalf("expected 2 notes for today-only window, got %d: %+v", len(todayOnly), todayOnly)
+	}
+
+	// The limit caps the result set.
+	if capped := planningDeadlineNotes(notes, "2026-07-06", now, loc, 1); len(capped) != 1 {
+		t.Fatalf("expected limit=1 to cap at 1, got %d", len(capped))
+	}
+}
+
 func TestWeekdayLabel(t *testing.T) {
 	// 2026-07-07 is a real-calendar Tuesday — the exact date from the
 	// production weekday bug this defense-in-depth guards against.

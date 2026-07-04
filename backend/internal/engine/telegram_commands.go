@@ -25,7 +25,7 @@ type commandRoute struct {
 
 const (
 	briefingPrompt = "Geef mij een compacte dagbriefing voor vandaag. Combineer planning, werkrooster, afspraken, notities, habits, email, lampen en systeemstatus. Sluit af met maximaal drie concrete aandachtspunten."
-	planningPrompt = "Wat staat er vandaag op mijn planning? Combineer werkdiensten en persoonlijke afspraken, en noem conflicten of aandachtspunten."
+	planningPrompt = "Wat staat er vandaag op mijn planning? Combineer werkdiensten, persoonlijke afspraken en notities met een deadline, en noem conflicten of aandachtspunten."
 	agendaPrompt   = "Geef mijn aankomende persoonlijke agenda-afspraken. Gebruik afsprakenOpvragen en combineer met planningOpvragen wanneer diensten relevant zijn. Maak duidelijk onderscheid tussen afspraken, diensten en wachtrij-items."
 	roosterPrompt  = "Geef mijn aankomende diensten. Gebruik dienstenOpvragen en vermeld aantal diensten, totaalUur, eerstvolgende dienst en eventuele relevante afspraken op dezelfde dag."
 	financePrompt  = "Geef een compacte finance status voor de huidige maand. Gebruik saldoOpvragen als basis: stats is alleen huidig totaalsaldo/dataset, defaultSummary is de maandanalyse. Gebruik uitgavenOverzicht zonder periode voor categorieen/merchants van de huidige maand. Noem all-time alleen als de gebruiker daarom vraagt."

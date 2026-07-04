@@ -76,6 +76,8 @@ func TestBuildSystemPromptAddsAgendaGuardrails(t *testing.T) {
 		"afsprakenOpvragen",
 		"verzin geen datums",
 		"werkdiensten en persoonlijke afspraken",
+		"notities met een deadline",
+		"deadlineNotities",
 	} {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("prompt missing %q", needle)

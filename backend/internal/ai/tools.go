@@ -429,7 +429,7 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "planningOpvragen",
-			Description: "Haalt de gecombineerde planning op: werkdiensten plus persoonlijke agenda-afspraken voor een dag of periode.",
+			Description: "Haalt de gecombineerde planning op: werkdiensten, persoonlijke agenda-afspraken en open notities met een deadline (inclusief overdue) voor een dag of periode.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
