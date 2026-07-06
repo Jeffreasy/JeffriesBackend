@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -359,7 +360,17 @@ func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id 
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Write-through: the company's LaventeCare contacts are gone, so drop their
+	// unified mirrors too (best-effort; the sync cron also prunes orphans).
+	if _, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM contacts WHERE user_id = $1 AND source = 'laventecare' AND organization_id = $2`,
+		userID, id); err != nil {
+		slog.Warn("DeleteCompany: unified contact mirror cleanup failed", "error", err)
+	}
+	return nil
 }
 
 func (s *LaventeCareStore) ListContacts(ctx context.Context, userID string, companyID *uuid.UUID, limit int) ([]model.LCContact, error) {
@@ -417,6 +428,11 @@ func (s *LaventeCareStore) CreateContact(ctx context.Context, userID string, inp
 	if input.IsPrimary && input.CompanyID != nil {
 		_ = s.clearOtherPrimaryContacts(ctx, userID, id, *input.CompanyID)
 	}
+	// Write-through: keep the unified contacts mirror in sync (best-effort — a
+	// mirror failure must never fail the LaventeCare write; the sync cron reconciles).
+	if _, err := SyncLaventeCareContactMirror(ctx, s.db, userID, &id); err != nil {
+		slog.Warn("CreateContact: unified contact mirror sync failed", "error", err)
+	}
 	return s.GetContact(ctx, userID, id)
 }
 
@@ -469,6 +485,10 @@ func (s *LaventeCareStore) UpdateContact(ctx context.Context, userID string, id 
 	}
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
+	}
+	// Write-through to the unified contacts mirror (best-effort; cron reconciles).
+	if _, err := SyncLaventeCareContactMirror(ctx, s.db, userID, &id); err != nil {
+		slog.Warn("UpdateContact: unified contact mirror sync failed", "error", err)
 	}
 	if input.IsPrimary != nil && *input.IsPrimary {
 		companyID := input.CompanyID

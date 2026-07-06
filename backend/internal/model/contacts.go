@@ -24,6 +24,7 @@ type Contact struct {
 	BusinessRole      *string    `json:"business_role" db:"business_role"`
 	LastContactedAt   *time.Time `json:"last_contacted_at" db:"last_contacted_at"`
 	Archived          bool       `json:"archived" db:"archived"`
+	Source            string     `json:"source" db:"source"` // manual | laventecare
 	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
 
