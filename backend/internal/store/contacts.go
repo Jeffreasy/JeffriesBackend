@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts (user_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_user_org ON contacts (user_id, organization_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_reltypes ON contacts USING GIN (relationship_types);
+-- Phase 3: provenance for contacts mirrored from LaventeCare (lc_contacts).
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS lc_contact_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_lc_contact ON contacts (lc_contact_id);
 
 CREATE TABLE IF NOT EXISTS contact_important_dates (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -502,4 +506,25 @@ func clampDate(year, month, day int, loc *time.Location) time.Time {
 		day = lastDay
 	}
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
+}
+
+// BackfillLaventeCareContacts mirrors LaventeCare business contacts (lc_contacts)
+// into the unified contacts table as relationship_type "business", linked to
+// their organization. Create-only (ON CONFLICT DO NOTHING on lc_contact_id) so it
+// never clobbers a contact once mirrored — safe to run repeatedly. Returns the
+// number newly mirrored. Phase 3 keeps LaventeCare's own screens/store untouched;
+// this surfaces business contacts in the unified module + AI without a risky
+// write-through refactor.
+func (s *ContactStore) BackfillLaventeCareContacts(ctx context.Context, userID string) (int, error) {
+	tag, err := s.db.Pool.Exec(ctx, `
+		INSERT INTO contacts
+			(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, lc_contact_id)
+		SELECT user_id, naam, ARRAY['business']::text[], email, telefoon, notities, rol, company_id, 'laventecare', id
+		FROM lc_contacts
+		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''
+		ON CONFLICT (lc_contact_id) DO NOTHING`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
