@@ -119,6 +119,24 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		})
 	}
 
+	// ── Contacts: mirror LaventeCare business contacts into the unified module ──
+	s.Register(CronJob{
+		Name:       "contacts-laventecare-sync",
+		Interval:   6 * time.Hour,
+		RunOnStart: true,
+		RunFunc: func(ctx context.Context) error {
+			n, err := store.NewContactStore(e.db).BackfillLaventeCareContacts(ctx, cfg.UserID)
+			if err != nil {
+				slog.Warn("contacts-laventecare-sync: failed", "error", err)
+				return nil
+			}
+			if n > 0 {
+				slog.Info("contacts-laventecare-sync: mirrored business contacts", "count", n)
+			}
+			return nil
+		},
+	})
+
 	// ── Gmail sync — every 5 minutes ─────────────────────────────────────────
 	if cfg.GmailEnabled && oauthClient != nil {
 		s.Register(CronJob{
