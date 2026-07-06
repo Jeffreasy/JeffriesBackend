@@ -151,8 +151,10 @@ func scanContactRow(row pgx.Row) (model.Contact, error) {
 
 // ListContactsOptions filters the contact list.
 type ListContactsOptions struct {
-	Query            string // ILIKE match on name/email/notes
-	RelationshipType string // exact match against relationship_types array
+	Query            string   // ILIKE match on name/email/notes
+	RelationshipType string   // exact match against relationship_types array
+	LabelNames       []string // filter on assigned label names (case-insensitive)
+	LabelMatchAll    bool     // true = contact must have ALL LabelNames; false = ANY
 	IncludeArchived  bool
 	Limit            int
 }
@@ -172,6 +174,21 @@ func (s *ContactStore) List(ctx context.Context, userID string, opts ListContact
 		args = append(args, "%"+query+"%")
 		n := len(args)
 		q += fmt.Sprintf(` AND (display_name ILIKE $%d OR email ILIKE $%d OR notes ILIKE $%d)`, n, n, n)
+	}
+	if names := loweredNonEmpty(opts.LabelNames); len(names) > 0 {
+		args = append(args, names)
+		namesPh := len(args)
+		if opts.LabelMatchAll {
+			args = append(args, len(names))
+			cntPh := len(args)
+			q += fmt.Sprintf(` AND (SELECT COUNT(DISTINCT lower(l.name))
+				FROM contact_label_assignments a JOIN contact_labels l ON l.id = a.label_id
+				WHERE a.contact_id = contacts.id AND lower(l.name) = ANY($%d)) = $%d`, namesPh, cntPh)
+		} else {
+			q += fmt.Sprintf(` AND EXISTS (SELECT 1
+				FROM contact_label_assignments a JOIN contact_labels l ON l.id = a.label_id
+				WHERE a.contact_id = contacts.id AND lower(l.name) = ANY($%d))`, namesPh)
+		}
 	}
 	q += ` ORDER BY display_name ASC`
 	if opts.Limit > 0 {

@@ -945,13 +945,15 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "contactenOpvragen",
-			Description: "Haalt contacten/relaties op uit de globale Contacten-module (familie, vrienden, collega's, zakelijk). Optioneel filteren op relatie-type of zoekterm op naam/e-mail/notitie.",
+			Description: "Haalt contacten/relaties op uit de globale Contacten-module (familie, vrienden, collega's, zakelijk). Optioneel filteren op relatie-type, vrije labels of zoekterm. Elk contact heeft relationship_types (basis) én labels (vrije, gekleurde tags zoals 'investeerder' of 'VIP'). Gebruik 'labels' om op die tags te filteren, bijv. 'welke investeerders ken ik'.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"limit": {"type": "number", "description": "Aantal contacten (max 50)."},
 					"query": {"type": "string", "description": "Optionele zoekterm op naam, e-mail of notitie."},
-					"type": {"type": "string", "description": "Optioneel relatie-type: family, friend, colleague, business."}
+					"type": {"type": "string", "description": "Optioneel relatie-type: family, friend, colleague, business."},
+					"labels": {"type": "array", "items": {"type": "string"}, "description": "Optioneel: filter op één of meer labelnamen (bijv. ['investeerder'])."},
+					"label_match": {"type": "string", "description": "Bij meerdere labels: 'any' (standaard, minstens één) of 'all' (alle labels)."}
 				},
 				"required": []
 			}`),
@@ -975,12 +977,13 @@ var AllTools = []ToolDefinition{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "contactMaken",
-			Description: "Maakt een nieuw contact/relatie aan in de Contacten-module. Vereist een naam; relationship_types zijn optioneel (family, friend, colleague, business).",
+			Description: "Maakt een nieuw contact/relatie aan in de Contacten-module. Vereist een naam; relationship_types zijn optioneel (family, friend, colleague, business). Labels zijn vrije tags die worden aangemaakt als ze nog niet bestaan.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"display_name": {"type": "string", "description": "Naam van de persoon."},
 					"relationship_types": {"type": "array", "items": {"type": "string"}, "description": "Optioneel: family, friend, colleague, business."},
+					"labels": {"type": "array", "items": {"type": "string"}, "description": "Optionele vrije labels/tags (bijv. ['investeerder','VIP'])."},
 					"email": {"type": "string"},
 					"phone": {"type": "string"},
 					"notes": {"type": "string", "description": "Optionele vrije notitie."}
@@ -1036,6 +1039,49 @@ var AllTools = []ToolDefinition{
 					"limit": {"type": "number", "description": "Aantal samenvattingen (max 30)."}
 				},
 				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "labelsOpvragen",
+			Description: "Haalt de labelvocabulaire van de gebruiker op: alle vrije labels/tags in de Contacten-module met hun kleur en hoeveel contacten ze hebben. Gebruik dit om te weten welke labels bestaan voordat je op labels filtert of een label toekent.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contactsOmTeSpreken",
+			Description: "Haalt contacten op die je al een tijd niet hebt gesproken (op basis van de laatst gelogde interactie), oudste eerst. Gebruik dit voor 'wie moet ik weer eens spreken?'. days_since is het aantal dagen sinds het laatste contact (null = nog nooit gelogd).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"days": {"type": "number", "description": "Minimaal aantal dagen sinds het laatste contact (standaard 60)."},
+					"limit": {"type": "number", "description": "Aantal contacten (max 100, standaard 25)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contactLabelToevoegen",
+			Description: "Kent een vrij label/tag toe aan een bestaand contact (het label wordt aangemaakt als het nog niet bestaat). Gebruik dit voor 'markeer Jan als investeerder' of 'label Sophie als VIP'. Geef contact_id mee (uit contactenOpvragen).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"contact_id": {"type": "string", "description": "UUID van het contact."},
+					"label": {"type": "string", "description": "De labelnaam (bijv. 'investeerder')."},
+					"color": {"type": "string", "description": "Optionele kleur: slate, amber, sky, emerald, rose, violet, orange, teal, blue, pink, lime, cyan, red, indigo, fuchsia."}
+				},
+				"required": ["contact_id", "label"]
 			}`),
 		},
 	},

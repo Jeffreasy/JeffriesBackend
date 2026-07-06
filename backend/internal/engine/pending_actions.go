@@ -356,6 +356,8 @@ func summarizePendingTool(toolName, argsJSON string) string {
 		return cleanSummary("Contact bijwerken", value("contact_id"), value("display_name"))
 	case "contactFeitOnthouden":
 		return cleanSummary("Feit onthouden bij contact", value("contact_id"), bodyPreview(value("fact")))
+	case "contactLabelToevoegen":
+		return cleanSummary("Label toevoegen aan contact", value("label"), value("contact_id"))
 	case "laventecareLeadMaken":
 		return cleanSummary("LaventeCare lead maken", value("titel"))
 	case "laventecareLeadBijwerken":

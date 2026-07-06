@@ -3714,10 +3714,12 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "contactenOpvragen":
 		var args struct {
-			Limit int    `json:"limit"`
-			Query string `json:"query"`
-			Q     string `json:"q"`
-			Type  string `json:"type"`
+			Limit      int      `json:"limit"`
+			Query      string   `json:"query"`
+			Q          string   `json:"q"`
+			Type       string   `json:"type"`
+			Labels     []string `json:"labels"`
+			LabelMatch string   `json:"label_match"`
 		}
 		if err := e.parseArgs(argsJSON, &args); err != nil {
 			return e.jsonResponse(nil, err)
@@ -3725,13 +3727,44 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		contacts, err := e.contactStore.List(ctx, e.userID, store.ListContactsOptions{
 			Query:            firstNonEmpty(args.Query, args.Q),
 			RelationshipType: args.Type,
+			LabelNames:       args.Labels,
+			LabelMatchAll:    strings.EqualFold(strings.TrimSpace(args.LabelMatch), "all"),
 			Limit:            clampToolLimit(args.Limit, 25, 50),
 		})
 		return e.jsonResponse(map[string]any{
 			"scope":       "contacten",
 			"count":       len(contacts),
 			"items":       contacts,
-			"instruction": "Dit zijn de relaties/contacten van de gebruiker (familie, vrienden, collega's, zakelijk). Gebruik notes en gekoppelde belangrijke datums voor context; verzin geen gegevens die hier niet staan.",
+			"instruction": "Dit zijn de relaties/contacten van de gebruiker (familie, vrienden, collega's, zakelijk). relationship_types is de basisrelatie; labels zijn vrije, gekleurde tags. Gebruik notes, labels en gekoppelde belangrijke datums voor context; verzin geen gegevens die hier niet staan.",
+		}, err)
+
+	case "labelsOpvragen":
+		labels, err := e.contactStore.ListLabels(ctx, e.userID)
+		return e.jsonResponse(map[string]any{
+			"scope":       "contact-labels",
+			"count":       len(labels),
+			"items":       labels,
+			"instruction": "De labelvocabulaire van de gebruiker: vrije tags met kleur en contact_count (hoeveel contacten het label dragen). Gebruik de exacte namen bij het filteren of toekennen van labels.",
+		}, err)
+
+	case "contactsOmTeSpreken":
+		var args struct {
+			Days  int `json:"days"`
+			Limit int `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		days := args.Days
+		if days <= 0 {
+			days = 60
+		}
+		stale, err := e.contactStore.StaleContacts(ctx, e.userID, days, clampToolLimit(args.Limit, 25, 100))
+		return e.jsonResponse(map[string]any{
+			"scope":       "contacten-om-te-spreken",
+			"count":       len(stale),
+			"items":       stale,
+			"instruction": "Contacten die de gebruiker al ≥" + strconv.Itoa(days) + " dagen niet heeft gesproken, oudste eerst. days_since = dagen sinds het laatste gelogde contact (null = nog nooit gelogd). Geef prioriteit aan familie/vrienden.",
 		}, err)
 
 	case "belangrijkeDatumsOpvragen":
@@ -3754,6 +3787,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			DisplayName       string   `json:"display_name"`
 			Naam              string   `json:"naam"`
 			RelationshipTypes []string `json:"relationship_types"`
+			Labels            []string `json:"labels"`
 			Notes             *string  `json:"notes"`
 			Email             *string  `json:"email"`
 			Phone             *string  `json:"phone"`
@@ -3772,6 +3806,23 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Email:             args.Email,
 			Phone:             args.Phone,
 		})
+		if err == nil {
+			// Best-effort label assignment (create-if-missing); a label failure
+			// doesn't undo the created contact.
+			for _, name := range args.Labels {
+				if strings.TrimSpace(name) == "" {
+					continue
+				}
+				if _, lerr := e.contactStore.AssignLabelByName(ctx, e.userID, contact.ID, name, ""); lerr != nil {
+					slog.Warn("contactMaken: label assign failed", "label", name, "error", lerr)
+				}
+			}
+			if len(args.Labels) > 0 {
+				if refreshed, gerr := e.contactStore.Get(ctx, e.userID, contact.ID); gerr == nil {
+					contact = refreshed
+				}
+			}
+		}
 		return e.jsonResponse(map[string]any{"ok": true, "contact": contact}, err)
 
 	case "contactBijwerken":
@@ -3828,6 +3879,28 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			Source:    "telegram",
 		})
 		return e.jsonResponse(map[string]any{"ok": true, "fact": fact}, err)
+
+	case "contactLabelToevoegen":
+		var args struct {
+			ContactID string `json:"contact_id"`
+			Label     string `json:"label"`
+			Color     string `json:"color"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Label) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("label verplicht"))
+		}
+		contactID, err := parseOptionalUUID(args.ContactID)
+		if err != nil {
+			return e.invalidUUIDResponse("contact_id", err)
+		}
+		if contactID == nil {
+			return e.jsonResponse(nil, fmt.Errorf("contact_id verplicht"))
+		}
+		label, err := e.contactStore.AssignLabelByName(ctx, e.userID, *contactID, args.Label, args.Color)
+		return e.jsonResponse(map[string]any{"ok": true, "label": label}, err)
 
 	case "whatsappSamenvattingOpvragen":
 		var args struct {
