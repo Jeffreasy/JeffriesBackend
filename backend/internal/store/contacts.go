@@ -106,6 +106,31 @@ CREATE TABLE IF NOT EXISTS contact_label_assignments (
 );
 CREATE INDEX IF NOT EXISTS idx_contact_label_assign_label ON contact_label_assignments (label_id);
 CREATE INDEX IF NOT EXISTS idx_contact_label_assign_user ON contact_label_assignments (user_id);
+
+-- Additional contact channels (extra emails/phones beyond the primary on the row).
+CREATE TABLE IF NOT EXISTS contact_channels (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    TEXT NOT NULL,
+    contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL DEFAULT 'email',
+    value      TEXT NOT NULL,
+    label      TEXT,
+    is_primary BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_channels_contact ON contact_channels (contact_id);
+
+-- Interaction timeline (logged touchpoints). Advances contacts.last_contacted_at.
+CREATE TABLE IF NOT EXISTS contact_interactions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     TEXT NOT NULL,
+    contact_id  UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL DEFAULT 'note',
+    summary     TEXT,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_interactions_contact ON contact_interactions (contact_id, occurred_at DESC);
 `)
 	return err
 }
@@ -192,6 +217,12 @@ func (s *ContactStore) Get(ctx context.Context, userID string, id uuid.UUID) (mo
 		return model.Contact{}, err
 	}
 	if c.Labels, err = s.labelsForContact(ctx, userID, id); err != nil {
+		return model.Contact{}, err
+	}
+	if c.Channels, err = s.ListChannels(ctx, userID, id); err != nil {
+		return model.Contact{}, err
+	}
+	if c.Interactions, err = s.ListInteractions(ctx, userID, id, 50); err != nil {
 		return model.Contact{}, err
 	}
 	return c, nil
