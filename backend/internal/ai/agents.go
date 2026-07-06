@@ -57,6 +57,8 @@ var Policies = map[string]ToolPolicy{
 	"contactMaken":         {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
 	"contactBijwerken":     {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
 	"contactFeitOnthouden": {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	// WhatsApp — read-only summaries
+	"whatsappSamenvattingOpvragen": {Agents: []string{"brain", "dashboard", "laventecare"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},

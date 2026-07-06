@@ -67,6 +67,9 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureContactsSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure contacts schema: %w", err)
 	}
+	if err := ensureWhatsappSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure whatsapp schema: %w", err)
+	}
 	return nil
 }
 
