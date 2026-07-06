@@ -53,10 +53,13 @@ var Policies = map[string]ToolPolicy{
 	// Contacten / Relaties (globale module) — read-only
 	"contactenOpvragen":         {Agents: []string{"brain", "dashboard", "agenda", "laventecare"}, Mutates: false, RequiresConfirmation: false},
 	"belangrijkeDatumsOpvragen": {Agents: []string{"brain", "dashboard", "agenda"}, Mutates: false, RequiresConfirmation: false},
+	"labelsOpvragen":            {Agents: []string{"brain", "dashboard", "laventecare"}, Mutates: false, RequiresConfirmation: false},
+	"contactsOmTeSpreken":       {Agents: []string{"brain", "dashboard", "agenda"}, Mutates: false, RequiresConfirmation: false},
 	// Contacten / Relaties — writes (bevestiging vereist)
-	"contactMaken":         {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
-	"contactBijwerken":     {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
-	"contactFeitOnthouden": {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactMaken":          {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactBijwerken":      {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactFeitOnthouden":  {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactLabelToevoegen": {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
 	// WhatsApp — read-only summaries
 	"whatsappSamenvattingOpvragen": {Agents: []string{"brain", "dashboard", "laventecare"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes

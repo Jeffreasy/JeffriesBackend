@@ -117,6 +117,12 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 			Interval: 1 * time.Hour,
 			RunFunc:  cronContactsReminders(e, cfg),
 		})
+
+		s.Register(CronJob{
+			Name:     "contacts-reconnect-nudge",
+			Interval: 3 * time.Hour,
+			RunFunc:  cronStaleContactsNudge(e, cfg),
+		})
 	}
 
 	// ── Contacts: mirror LaventeCare business contacts into the unified module ──
@@ -636,6 +642,79 @@ func cronContactsReminders(e *Engine, cfg CronConfig) func(ctx context.Context) 
 		}
 		return nil
 	}
+}
+
+// cronStaleContactsNudge sends a weekly "wie moet ik weer eens spreken" nudge for
+// close relationships (family/friends) not contacted in a long time. Fires once a
+// week (Monday morning) among the eligible candidates; the 6-day cooldown keeps
+// it to one message even though the job ticks every few hours.
+func cronStaleContactsNudge(e *Engine, cfg CronConfig) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		now := time.Now().In(amsterdam)
+		if now.Weekday() != time.Monday || now.Hour() < 8 || now.Hour() >= 12 {
+			return nil
+		}
+		if !e.shouldFireAlert("contacts-reconnect-nudge", 6*24*time.Hour) {
+			return nil
+		}
+		const staleDays = 90
+		stale, err := store.NewContactStore(e.db).StaleContacts(ctx, cfg.UserID, staleDays, 50)
+		if err != nil {
+			slog.Warn("cronStaleContactsNudge: query failed", "error", err)
+			return nil
+		}
+		// Only nudge for close relationships we've actually spoken to before, so
+		// the list stays meaningful (never-contacted rows are excluded).
+		type cand struct {
+			name string
+			days int
+		}
+		cands := []cand{}
+		for _, sc := range stale {
+			if sc.DaysSince == nil {
+				continue
+			}
+			if !hasAnyRelationship(sc.RelationshipTypes, "family", "friend") {
+				continue
+			}
+			cands = append(cands, cand{name: sc.DisplayName, days: *sc.DaysSince})
+			if len(cands) >= 5 {
+				break
+			}
+		}
+		if len(cands) == 0 {
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString("👋 Wie je weer eens kunt spreken:\n")
+		for _, c := range cands {
+			months := c.days / 30
+			var ago string
+			if months >= 2 {
+				ago = fmt.Sprintf("%d maanden", months)
+			} else {
+				ago = fmt.Sprintf("%d dagen", c.days)
+			}
+			b.WriteString(fmt.Sprintf("• %s — %s geleden gesproken\n", c.name, ago))
+		}
+		if err := e.SendProactiveNotification(ctx, b.String()); err != nil {
+			slog.Warn("cronStaleContactsNudge: send failed", "error", err)
+		}
+		return nil
+	}
+}
+
+// hasAnyRelationship reports whether the relationship-type slice contains any of
+// the given types.
+func hasAnyRelationship(types []string, needles ...string) bool {
+	for _, h := range types {
+		for _, n := range needles {
+			if h == n {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) error {
