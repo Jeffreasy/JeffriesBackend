@@ -35,6 +35,38 @@ type Contact struct {
 	// the per-user catalog. Hydrated by List/Get; never overwritten by the
 	// LaventeCare mirror sync, so a business contact can also be tagged e.g. VIP.
 	Labels []ContactLabel `json:"labels,omitempty" db:"-"`
+	// Channels are the contact's additional emails/phones beyond the primary
+	// email/phone on the row; Interactions is the recent touchpoint timeline.
+	// Both hydrated by Get only (kept off the light List response).
+	Channels     []ContactChannel     `json:"channels,omitempty" db:"-"`
+	Interactions []ContactInteraction `json:"interactions,omitempty" db:"-"`
+}
+
+// ContactChannel is an additional way to reach a contact — a second email, a work
+// phone, etc. — beyond the primary email/phone stored on the contact row. Kind is
+// email|phone|other; Label is a free hint ("werk", "privé", "mobiel").
+type ContactChannel struct {
+	ID        uuid.UUID `json:"id" db:"id"`
+	UserID    string    `json:"user_id" db:"user_id"`
+	ContactID uuid.UUID `json:"contact_id" db:"contact_id"`
+	Kind      string    `json:"kind" db:"kind"`
+	Value     string    `json:"value" db:"value"`
+	Label     *string   `json:"label" db:"label"`
+	IsPrimary bool      `json:"is_primary" db:"is_primary"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// ContactInteraction is a logged touchpoint (call, meeting, message…) with a
+// contact. Adding one advances the contact's last_contacted_at, which feeds the
+// "wie moet ik weer eens spreken" nudges. Kind is call|meeting|message|email|note|other.
+type ContactInteraction struct {
+	ID         uuid.UUID `json:"id" db:"id"`
+	UserID     string    `json:"user_id" db:"user_id"`
+	ContactID  uuid.UUID `json:"contact_id" db:"contact_id"`
+	Kind       string    `json:"kind" db:"kind"`
+	Summary    *string   `json:"summary" db:"summary"`
+	OccurredAt time.Time `json:"occurred_at" db:"occurred_at"`
+	CreatedAt  time.Time `json:"created_at" db:"created_at"`
 }
 
 // ContactLabel is a free-form, colour-coded tag in the per-user catalog — the
