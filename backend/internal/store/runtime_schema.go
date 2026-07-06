@@ -131,6 +131,16 @@ CREATE TABLE IF NOT EXISTS briefing_sent (
     day     DATE        PRIMARY KEY,
     sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Persistent once-per-window claim for proactive notifications (birthday reminder,
+-- reconnect nudge, …). Survives restarts, unlike the in-memory shouldFireAlert map,
+-- so a deploy inside the send window can't fire a duplicate message.
+CREATE TABLE IF NOT EXISTS cron_claim (
+    claim_key  TEXT        NOT NULL,
+    window_key TEXT        NOT NULL,
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (claim_key, window_key)
+);
 `)
 	return err
 }

@@ -605,15 +605,17 @@ func cronContactsReminders(e *Engine, cfg CronConfig) func(ctx context.Context) 
 		if now.Hour() < 7 || now.Hour() >= 12 {
 			return nil
 		}
-		if !e.shouldFireAlert("contacts-daily-reminder", 20*time.Hour) {
-			return nil
-		}
 		dates, err := store.NewContactStore(e.db).UpcomingImportantDates(ctx, cfg.UserID, 7)
 		if err != nil {
 			slog.Warn("cronContactsReminders: query failed", "error", err)
 			return nil
 		}
 		if len(dates) == 0 {
+			return nil
+		}
+		// Claim the day only once we actually have something to send (an empty tick
+		// mustn't burn the window) — persistent so a redeploy can't double-fire.
+		if !e.claimCronWindow(ctx, "contacts-daily-reminder", now.Format("2006-01-02")) {
 			return nil
 		}
 		var b strings.Builder
@@ -654,9 +656,6 @@ func cronStaleContactsNudge(e *Engine, cfg CronConfig) func(ctx context.Context)
 		if now.Weekday() != time.Monday || now.Hour() < 8 || now.Hour() >= 12 {
 			return nil
 		}
-		if !e.shouldFireAlert("contacts-reconnect-nudge", 6*24*time.Hour) {
-			return nil
-		}
 		const staleDays = 90
 		stale, err := store.NewContactStore(e.db).StaleContacts(ctx, cfg.UserID, staleDays, 50)
 		if err != nil {
@@ -683,6 +682,12 @@ func cronStaleContactsNudge(e *Engine, cfg CronConfig) func(ctx context.Context)
 			}
 		}
 		if len(cands) == 0 {
+			return nil
+		}
+		// Claim the week only now that there's a real candidate list — persistent
+		// (per ISO week) so a Monday-morning redeploy can't send it twice.
+		isoYear, isoWeek := now.ISOWeek()
+		if !e.claimCronWindow(ctx, "contacts-reconnect-nudge", fmt.Sprintf("%d-W%02d", isoYear, isoWeek)) {
 			return nil
 		}
 		var b strings.Builder

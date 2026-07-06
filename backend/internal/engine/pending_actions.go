@@ -77,6 +77,8 @@ func (e *ConfirmingExecutor) Execute(ctx context.Context, toolName string, argsJ
 			summary = e.enrichPaymentRequestSummary(ctx, argsJSON, summary)
 		case "afspraakMaken", "afspraakBewerken":
 			summary = e.enrichAppointmentSummary(ctx, toolName, argsJSON, summary)
+		case "contactBijwerken", "contactFeitOnthouden", "contactLabelToevoegen":
+			summary = e.enrichContactSummary(ctx, toolName, argsJSON, summary)
 		}
 		action, err := e.pending.Create(ctx, e.userID, e.agentID, toolName, argsJSON, summary)
 		if err != nil {
@@ -294,9 +296,83 @@ func (e *ConfirmingExecutor) enrichAppointmentSummary(ctx context.Context, toolN
 	return fallback + " — ⚠️ " + conflict
 }
 
+// enrichContactSummary resolves contact_id → the contact's display name so the
+// approver sees WHO a change/fact/label attaches to (not an opaque UUID), and
+// spells out which fields an update touches.
+func (e *ConfirmingExecutor) enrichContactSummary(ctx context.Context, toolName, argsJSON, fallback string) string {
+	var args struct {
+		ContactID         string    `json:"contact_id"`
+		Fact              string    `json:"fact"`
+		Label             string    `json:"label"`
+		DisplayName       *string   `json:"display_name"`
+		Email             *string   `json:"email"`
+		Phone             *string   `json:"phone"`
+		Address           *string   `json:"address"`
+		Notes             *string   `json:"notes"`
+		RelationshipTypes *[]string `json:"relationship_types"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fallback
+	}
+	id, err := uuid.Parse(strings.TrimSpace(args.ContactID))
+	if err != nil {
+		return fallback
+	}
+	c, err := store.NewContactStore(&store.DB{Pool: e.pool}).Get(ctx, e.userID, id)
+	if err != nil {
+		return fallback
+	}
+	switch toolName {
+	case "contactFeitOnthouden":
+		return cleanSummary("Feit onthouden bij "+c.DisplayName, bodyPreview(args.Fact))
+	case "contactLabelToevoegen":
+		return cleanSummary("Label toevoegen aan "+c.DisplayName, args.Label)
+	case "contactBijwerken":
+		changed := []string{}
+		if args.DisplayName != nil {
+			changed = append(changed, "naam")
+		}
+		if args.Email != nil {
+			changed = append(changed, "e-mail")
+		}
+		if args.Phone != nil {
+			changed = append(changed, "telefoon")
+		}
+		if args.Address != nil {
+			changed = append(changed, "adres")
+		}
+		if args.Notes != nil {
+			changed = append(changed, "notitie")
+		}
+		if args.RelationshipTypes != nil {
+			changed = append(changed, "relatie-types")
+		}
+		return cleanSummary("Bijwerken: "+c.DisplayName, strings.Join(changed, ", "))
+	}
+	return fallback
+}
+
 func summarizePendingTool(toolName, argsJSON string) string {
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
+
+	arrayValue := func(key string) string {
+		raw, ok := args[key]
+		if !ok {
+			return ""
+		}
+		arr, ok := raw.([]any)
+		if !ok {
+			return ""
+		}
+		parts := []string{}
+		for _, v := range arr {
+			if s := strings.TrimSpace(fmt.Sprint(v)); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
 
 	value := func(keys ...string) string {
 		for _, key := range keys {
@@ -351,7 +427,8 @@ func summarizePendingTool(toolName, argsJSON string) string {
 	case "laventecareContactMaken":
 		return cleanSummary("LaventeCare contact maken", value("naam"), value("company_id"))
 	case "contactMaken":
-		return cleanSummary("Contact aanmaken", value("display_name", "naam"))
+		return cleanSummary("Contact aanmaken", value("display_name", "naam"), value("email"),
+			arrayValue("relationship_types"), arrayValue("labels"))
 	case "contactBijwerken":
 		return cleanSummary("Contact bijwerken", value("contact_id"), value("display_name"))
 	case "contactFeitOnthouden":

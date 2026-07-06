@@ -135,6 +135,21 @@ func (e *Engine) shouldFireAlert(key string, window time.Duration) bool {
 	return true
 }
 
+// claimCronWindow atomically claims a once-per-window slot for a proactive
+// notification, persisted in cron_claim so it survives restarts/deploys (the
+// in-memory shouldFireAlert would let a redeploy inside the send window fire a
+// duplicate). Returns true exactly once per (claimKey, windowKey); on a DB error
+// it falls back to the in-memory guard so a transient failure doesn't spam.
+func (e *Engine) claimCronWindow(ctx context.Context, claimKey, windowKey string) bool {
+	tag, err := e.db.Pool.Exec(ctx,
+		`INSERT INTO cron_claim (claim_key, window_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, claimKey, windowKey)
+	if err != nil {
+		slog.Warn("claimCronWindow: persistent claim failed, falling back to in-memory", "key", claimKey, "error", err)
+		return e.shouldFireAlert(claimKey+":"+windowKey, 12*time.Hour)
+	}
+	return tag.RowsAffected() > 0
+}
+
 // alertGoogleReauthOnce sends a single de-duplicated re-auth reminder (max once
 // per 24h) when Google sync fails with an expired/revoked refresh token.
 func (e *Engine) alertGoogleReauthOnce(ctx context.Context) {
