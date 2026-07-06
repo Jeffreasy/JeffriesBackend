@@ -1143,6 +1143,102 @@ func (s *ContactStore) ListOrganizations(ctx context.Context, userID string, con
 	return out, rows.Err()
 }
 
+// getOrganizationLink returns a single org link (with resolved company name).
+func (s *ContactStore) getOrganizationLink(ctx context.Context, userID string, id uuid.UUID) (model.ContactOrganization, error) {
+	var o model.ContactOrganization
+	err := s.db.Pool.QueryRow(ctx, `
+		SELECT o.id, o.user_id, o.contact_id, o.organization_id, o.role, o.source, o.created_at, co.naam
+		FROM contact_organizations o
+		LEFT JOIN lc_companies co ON co.id = o.organization_id AND co.user_id = o.user_id
+		WHERE o.user_id = $1 AND o.id = $2`, userID, id).
+		Scan(&o.ID, &o.UserID, &o.ContactID, &o.OrganizationID, &o.Role, &o.Source, &o.CreatedAt, &o.OrganizationName)
+	return o, err
+}
+
+// AddManualOrganization links a contact to a company (source='manual', so the
+// LaventeCare sync leaves it alone). organizationID is a soft ref to lc_companies.
+func (s *ContactStore) AddManualOrganization(ctx context.Context, userID string, contactID uuid.UUID, organizationID *uuid.UUID, role string) (model.ContactOrganization, error) {
+	if err := s.assertOwns(ctx, userID, contactID); err != nil {
+		return model.ContactOrganization{}, err
+	}
+	var id uuid.UUID
+	if err := s.db.Pool.QueryRow(ctx, `
+		INSERT INTO contact_organizations (user_id, contact_id, organization_id, role, source)
+		VALUES ($1, $2, $3, NULLIF(btrim($4), ''), 'manual')
+		RETURNING id`, userID, contactID, organizationID, role).Scan(&id); err != nil {
+		return model.ContactOrganization{}, err
+	}
+	return s.getOrganizationLink(ctx, userID, id)
+}
+
+// UpdateManualOrganization edits a manual org link's company/role. LaventeCare
+// links are mirror-managed and return pgx.ErrNoRows here.
+func (s *ContactStore) UpdateManualOrganization(ctx context.Context, userID string, id uuid.UUID, organizationID *uuid.UUID, clearOrg bool, role *string) (model.ContactOrganization, error) {
+	set := []string{}
+	args := []any{}
+	if clearOrg {
+		set = append(set, "organization_id = NULL")
+	} else if organizationID != nil {
+		args = append(args, *organizationID)
+		set = append(set, fmt.Sprintf("organization_id = $%d", len(args)))
+	}
+	if role != nil {
+		args = append(args, strings.TrimSpace(*role))
+		set = append(set, fmt.Sprintf("role = NULLIF($%d, '')", len(args)))
+	}
+	if len(set) == 0 {
+		return s.getOrganizationLink(ctx, userID, id)
+	}
+	set = append(set, "updated_at = now()")
+	args = append(args, userID, id)
+	tag, err := s.db.Pool.Exec(ctx, fmt.Sprintf(`
+		UPDATE contact_organizations SET %s
+		WHERE user_id = $%d AND id = $%d AND source = 'manual'`,
+		strings.Join(set, ", "), len(args)-1, len(args)), args...)
+	if err != nil {
+		return model.ContactOrganization{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return model.ContactOrganization{}, pgx.ErrNoRows
+	}
+	return s.getOrganizationLink(ctx, userID, id)
+}
+
+// RemoveManualOrganization deletes a manual org link. Refuses LaventeCare links
+// (they'd be re-created by the sync) via the source='manual' guard.
+func (s *ContactStore) RemoveManualOrganization(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM contact_organizations WHERE user_id = $1 AND id = $2 AND source = 'manual'`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// FindPossibleDuplicate returns an existing non-archived contact that matches the
+// given email (case-insensitive) or, failing that, the exact display name — the
+// substrate for warn-on-create duplicate detection. Empty email is ignored.
+func (s *ContactStore) FindPossibleDuplicate(ctx context.Context, userID, displayName, email string) (*model.Contact, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	name := strings.ToLower(strings.TrimSpace(displayName))
+	q := fmt.Sprintf(`SELECT %s FROM contacts
+		WHERE user_id = $1 AND archived = false
+		  AND ( ($2 <> '' AND lower(email) = $2) OR lower(display_name) = $3 )
+		ORDER BY (($2 <> '' AND lower(email) = $2)) DESC
+		LIMIT 1`, contactCols)
+	c, err := scanContactRow(s.db.Pool.QueryRow(ctx, q, userID, email, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
 // hydrateOrganizations bulk-loads org affiliations for a slice of contacts in one
 // query (no N+1) and attaches them by contact id.
 func (s *ContactStore) hydrateOrganizations(ctx context.Context, userID string, contacts []model.Contact) error {
