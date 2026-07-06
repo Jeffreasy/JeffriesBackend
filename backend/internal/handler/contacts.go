@@ -42,6 +42,19 @@ func parseOptionalUUID(s *string) (*uuid.UUID, error) {
 	return &id, nil
 }
 
+// maxDayForMonth returns the highest valid day for a 1-based month. February
+// allows 29 so a leap-day birthday (or one with an unknown year) is accepted.
+func maxDayForMonth(month int) int {
+	switch month {
+	case 2:
+		return 29
+	case 4, 6, 9, 11:
+		return 30
+	default:
+		return 31
+	}
+}
+
 // List returns contacts for a user; optional ?q=, ?type=, ?includeArchived=, ?limit=.
 func (h *ContactHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := contactUserID(r)
@@ -228,14 +241,58 @@ func (h *ContactHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Delete(r.Context(), userID, id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
 			Error(w, http.StatusNotFound, "Contact niet gevonden.")
-			return
+		case errors.Is(err, store.ErrManagedContact):
+			Error(w, http.StatusConflict, "Dit contact wordt beheerd in LaventeCare en kan hier niet worden verwijderd.")
+		default:
+			InternalError(w, r, err)
 		}
-		InternalError(w, r, err)
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type mergeContactBody struct {
+	Into string `json:"into"` // survivor contact id; this contact ({id}) is folded into it
+}
+
+// Merge folds contact {id} into the `into` contact (survivor).
+func (h *ContactHandler) Merge(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	fromID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	var body mergeContactBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	toID, err := uuid.Parse(strings.TrimSpace(body.Into))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig doel-contact (into).")
+		return
+	}
+	merged, err := h.store.MergeContacts(r.Context(), userID, fromID, toID)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrCannotMergeSelf):
+			Error(w, http.StatusBadRequest, "Kan een contact niet met zichzelf samenvoegen.")
+		case errors.Is(err, pgx.ErrNoRows):
+			Error(w, http.StatusNotFound, "Contact niet gevonden.")
+		default:
+			InternalError(w, r, err)
+		}
+		return
+	}
+	JSON(w, http.StatusOK, merged)
 }
 
 // ─── Important dates ─────────────────────────────────────────────────────────
@@ -266,8 +323,8 @@ func (h *ContactHandler) AddDate(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if body.Month < 1 || body.Month > 12 || body.Day < 1 || body.Day > 31 {
-		Error(w, http.StatusBadRequest, "Ongeldige datum (maand 1-12, dag 1-31).")
+	if body.Month < 1 || body.Month > 12 || body.Day < 1 || body.Day > maxDayForMonth(body.Month) {
+		Error(w, http.StatusBadRequest, "Ongeldige datum (controleer dag/maand).")
 		return
 	}
 	recurring := true

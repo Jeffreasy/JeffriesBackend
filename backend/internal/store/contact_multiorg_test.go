@@ -24,6 +24,19 @@ func TestLaventeCareIdentityKey(t *testing.T) {
 	}
 }
 
+func TestUnionStrings(t *testing.T) {
+	got := unionStrings([]string{"business", "friend"}, []string{"friend", "family", ""})
+	want := []string{"business", "friend", "family"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
 func TestPickPrimaryLC(t *testing.T) {
 	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)

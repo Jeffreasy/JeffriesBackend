@@ -9,13 +9,17 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
 
-// loweredNonEmpty trims, lower-cases and drops empty entries — used to normalize
-// label-name filters before an =ANY() match.
+// loweredNonEmpty trims, lower-cases, de-duplicates and drops empty entries — used
+// to normalize label-name filters before an =ANY() match. De-duplication matters
+// for the LabelMatchAll path: the required COUNT(DISTINCT lower(name)) is compared
+// against len(names), so a caller passing ['VIP','vip'] must not inflate the count.
 func loweredNonEmpty(in []string) []string {
+	seen := map[string]bool{}
 	out := make([]string, 0, len(in))
 	for _, s := range in {
 		s = strings.ToLower(strings.TrimSpace(s))
-		if s != "" {
+		if s != "" && !seen[s] {
+			seen[s] = true
 			out = append(out, s)
 		}
 	}
