@@ -33,6 +33,7 @@ func registerRoutes(
 	syncH *handler.SyncHandler,
 	pendingH *handler.PendingActionHandler,
 	focusH *handler.FocusHandler,
+	contactH *handler.ContactHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
 	// The local LAN bridge authenticates with its own key, but we accept the app
@@ -256,6 +257,19 @@ func registerRoutes(
 				r.With(authMw).Patch("/actions/{id}/status", lcH.UpdateActionStatus)
 				r.With(authMw).Post("/signals/convert-lead", lcH.ConvertSignalToLead)
 				r.With(authMw).Post("/documents/seed", lcH.SeedDocuments)
+			})
+
+			// Contacts / Relationships (unified module — PostgreSQL)
+			r.Route("/contacts", func(r chi.Router) {
+				r.Get("/", contactH.List)
+				r.Get("/{id}", contactH.Get)
+				r.With(authMw).Post("/", contactH.Create)
+				r.With(authMw).Patch("/{id}", contactH.Update)
+				r.With(authMw).Delete("/{id}", contactH.Delete)
+				r.With(authMw).Post("/{id}/dates", contactH.AddDate)
+				r.With(authMw).Delete("/{id}/dates/{dateID}", contactH.DeleteDate)
+				r.With(authMw).Post("/{id}/facts", contactH.AddFact)
+				r.With(authMw).Delete("/{id}/facts/{factID}", contactH.DeleteFact)
 			})
 
 			// Settings

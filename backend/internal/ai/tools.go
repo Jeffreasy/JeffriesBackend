@@ -944,6 +944,89 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "contactenOpvragen",
+			Description: "Haalt contacten/relaties op uit de globale Contacten-module (familie, vrienden, collega's, zakelijk). Optioneel filteren op relatie-type of zoekterm op naam/e-mail/notitie.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {"type": "number", "description": "Aantal contacten (max 50)."},
+					"query": {"type": "string", "description": "Optionele zoekterm op naam, e-mail of notitie."},
+					"type": {"type": "string", "description": "Optioneel relatie-type: family, friend, colleague, business."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "belangrijkeDatumsOpvragen",
+			Description: "Haalt aankomende belangrijke datums van contacten op (verjaardagen, jubilea) binnen een venster, gesorteerd op eerstvolgende. Gebruik dit voor vragen als 'wie is er binnenkort jarig?'.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"days": {"type": "number", "description": "Vooruitkijk-venster in dagen (standaard 30, max 365)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contactMaken",
+			Description: "Maakt een nieuw contact/relatie aan in de Contacten-module. Vereist een naam; relationship_types zijn optioneel (family, friend, colleague, business).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"display_name": {"type": "string", "description": "Naam van de persoon."},
+					"relationship_types": {"type": "array", "items": {"type": "string"}, "description": "Optioneel: family, friend, colleague, business."},
+					"email": {"type": "string"},
+					"phone": {"type": "string"},
+					"notes": {"type": "string", "description": "Optionele vrije notitie."}
+				},
+				"required": ["display_name"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contactBijwerken",
+			Description: "Werkt een bestaand contact bij. Geef contact_id mee (uit contactenOpvragen) en alleen de velden die wijzigen.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"contact_id": {"type": "string", "description": "UUID van het contact."},
+					"display_name": {"type": "string"},
+					"relationship_types": {"type": "array", "items": {"type": "string"}},
+					"email": {"type": "string"},
+					"phone": {"type": "string"},
+					"address": {"type": "string"},
+					"notes": {"type": "string"}
+				},
+				"required": ["contact_id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "contactFeitOnthouden",
+			Description: "Onthoudt een los feit bij een contact (bijv. 'Piet is verhuisd naar Amsterdam'). Geef contact_id mee (uit contactenOpvragen).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"contact_id": {"type": "string", "description": "UUID van het contact."},
+					"fact": {"type": "string", "description": "Het feit om te onthouden."}
+				},
+				"required": ["contact_id", "fact"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareLeadsOpvragen",
 			Description: "Haalt recente LaventeCare leads op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je leads van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{

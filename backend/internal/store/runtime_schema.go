@@ -64,6 +64,9 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureSyncRunsSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure sync runs schema: %w", err)
 	}
+	if err := ensureContactsSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure contacts schema: %w", err)
+	}
 	return nil
 }
 

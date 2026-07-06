@@ -111,6 +111,12 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 			Interval: 1 * time.Hour,
 			RunFunc:  cronTelegramHealthAlert(e, cfg),
 		})
+
+		s.Register(CronJob{
+			Name:     "contacts-reminders",
+			Interval: 1 * time.Hour,
+			RunFunc:  cronContactsReminders(e, cfg),
+		})
 	}
 
 	// ── Gmail sync — every 5 minutes ─────────────────────────────────────────
@@ -564,6 +570,55 @@ func pushScheduleToTodoist(ctx context.Context, db *store.DB, cfg CronConfig) (*
 }
 
 // ── Telegram cron implementations ────────────────────────────────────────────
+
+// cronContactsReminders sends a once-a-morning Telegram nudge for upcoming
+// contact birthdays/anniversaries (within a week). The morning window + a 20h
+// shouldFireAlert cooldown keep it to one message per day even though the job
+// ticks hourly.
+func cronContactsReminders(e *Engine, cfg CronConfig) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		now := time.Now().In(amsterdam)
+		if now.Hour() < 7 || now.Hour() >= 12 {
+			return nil
+		}
+		if !e.shouldFireAlert("contacts-daily-reminder", 20*time.Hour) {
+			return nil
+		}
+		dates, err := store.NewContactStore(e.db).UpcomingImportantDates(ctx, cfg.UserID, 7)
+		if err != nil {
+			slog.Warn("cronContactsReminders: query failed", "error", err)
+			return nil
+		}
+		if len(dates) == 0 {
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString("🎂 Belangrijke datums deze week:\n")
+		for _, d := range dates {
+			when := "vandaag"
+			if d.DaysUntil == 1 {
+				when = "morgen"
+			} else if d.DaysUntil > 1 {
+				when = fmt.Sprintf("over %d dagen", d.DaysUntil)
+			}
+			kind := "verjaardag"
+			if d.Kind == "anniversary" {
+				kind = "jubileum"
+			} else if d.Kind != "birthday" && d.Label != nil && strings.TrimSpace(*d.Label) != "" {
+				kind = strings.TrimSpace(*d.Label)
+			}
+			line := fmt.Sprintf("• %s — %s %s", d.ContactName, kind, when)
+			if d.TurningAge != nil {
+				line += fmt.Sprintf(" (wordt %d)", *d.TurningAge)
+			}
+			b.WriteString(line + "\n")
+		}
+		if err := e.SendProactiveNotification(ctx, b.String()); err != nil {
+			slog.Warn("cronContactsReminders: send failed", "error", err)
+		}
+		return nil
+	}
+}
 
 func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
