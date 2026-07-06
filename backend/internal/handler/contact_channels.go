@@ -63,6 +63,150 @@ func (h *ContactHandler) AddChannel(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, created)
 }
 
+type channelUpdateBody struct {
+	Kind      *string `json:"kind"`
+	Value     *string `json:"value"`
+	Label     *string `json:"label"`
+	IsPrimary *bool   `json:"is_primary"`
+}
+
+// UpdateChannel edits a channel / promotes it to primary.
+func (h *ContactHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	channelID, err := uuid.Parse(chi.URLParam(r, "channelID"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	var body channelUpdateBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	updated, err := h.store.UpdateChannel(r.Context(), userID, channelID, body.Kind, body.Value, body.Label, body.IsPrimary)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Kanaal niet gevonden.")
+			return
+		}
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusOK, updated)
+}
+
+// ─── Organizations (person ↔ companies) ──────────────────────────────────────
+
+type orgBody struct {
+	OrganizationID *string `json:"organization_id"`
+	Role           string  `json:"role"`
+}
+
+// AddOrganization links a contact to a company (manual affiliation).
+func (h *ContactHandler) AddOrganization(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	var body orgBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	orgID, err := parseOptionalUUID(body.OrganizationID)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig organization_id.")
+		return
+	}
+	created, err := h.store.AddManualOrganization(r.Context(), userID, contactID, orgID, body.Role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Contact niet gevonden.")
+			return
+		}
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusCreated, created)
+}
+
+type orgUpdateBody struct {
+	OrganizationID *string `json:"organization_id"` // "" clears
+	Role           *string `json:"role"`
+}
+
+// UpdateOrganization edits a manual org link.
+func (h *ContactHandler) UpdateOrganization(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	orgID, err := uuid.Parse(chi.URLParam(r, "orgID"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	var body orgUpdateBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	var organizationID *uuid.UUID
+	clearOrg := false
+	if body.OrganizationID != nil {
+		if strings.TrimSpace(*body.OrganizationID) == "" {
+			clearOrg = true
+		} else if organizationID, err = parseOptionalUUID(body.OrganizationID); err != nil {
+			Error(w, http.StatusBadRequest, "Ongeldig organization_id.")
+			return
+		}
+	}
+	updated, err := h.store.UpdateManualOrganization(r.Context(), userID, orgID, organizationID, clearOrg, body.Role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Koppeling niet gevonden (of wordt beheerd in LaventeCare).")
+			return
+		}
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusOK, updated)
+}
+
+// RemoveOrganization deletes a manual org link.
+func (h *ContactHandler) RemoveOrganization(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	orgID, err := uuid.Parse(chi.URLParam(r, "orgID"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	if err := h.store.RemoveManualOrganization(r.Context(), userID, orgID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Koppeling niet gevonden (of wordt beheerd in LaventeCare).")
+			return
+		}
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 // DeleteChannel removes a channel.
 func (h *ContactHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID := contactUserID(r)

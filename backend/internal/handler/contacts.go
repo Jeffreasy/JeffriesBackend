@@ -113,9 +113,12 @@ type contactCreateBody struct {
 	Address           *string  `json:"address"`
 	OrganizationID    *string  `json:"organization_id"`
 	BusinessRole      *string  `json:"business_role"`
+	Force             bool     `json:"force"` // create even if a possible duplicate exists
 }
 
-// Create adds a new contact.
+// Create adds a new contact. Without `force`, a contact matching an existing
+// email/name returns 409 with the existing contact so the UI can offer
+// "open bestaande" / "toch aanmaken".
 func (h *ContactHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := contactUserID(r)
 	if userID == "" {
@@ -136,6 +139,20 @@ func (h *ContactHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error(w, http.StatusBadRequest, "Ongeldig organization_id.")
 		return
+	}
+	if !body.Force {
+		email := ""
+		if body.Email != nil {
+			email = *body.Email
+		}
+		if dup, derr := h.store.FindPossibleDuplicate(r.Context(), userID, name, email); derr == nil && dup != nil {
+			JSON(w, http.StatusConflict, map[string]any{
+				"error":              "possible_duplicate",
+				"message":            "Er bestaat mogelijk al een contact met deze naam of e-mail.",
+				"possible_duplicate": dup,
+			})
+			return
+		}
 	}
 	c := model.Contact{
 		DisplayName:       name,
@@ -491,8 +508,11 @@ func (h *ContactHandler) WhatsAppImport(w http.ResponseWriter, r *http.Request) 
 			chatName = "WhatsApp"
 		}
 	}
+	// A chat with more than two distinct participants (beyond "jij") is a group;
+	// flag it so the summary/AI don't treat group chatter as 1:1 with this contact.
+	isGroup := body.IsGroup || len(parsed.Participants) > 2
 	conv, summary, err := h.store.ImportWhatsAppConversation(
-		r.Context(), userID, contactID, chatName, body.SourceFilename, body.IsGroup, parsed.Messages,
+		r.Context(), userID, contactID, chatName, body.SourceFilename, isGroup, parsed.Messages,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

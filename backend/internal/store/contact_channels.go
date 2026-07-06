@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -86,6 +87,63 @@ func (s *ContactStore) AddChannel(ctx context.Context, userID string, c model.Co
 		return model.ContactChannel{}, err
 	}
 	return created, nil
+}
+
+// UpdateChannel edits a channel's value/label/kind and/or promotes it to primary
+// (demoting same-kind siblings). Nil pointers leave a field unchanged.
+func (s *ContactStore) UpdateChannel(ctx context.Context, userID string, id uuid.UUID, kind, value, label *string, isPrimary *bool) (model.ContactChannel, error) {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return model.ContactChannel{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var contactID uuid.UUID
+	var curKind string
+	if err := tx.QueryRow(ctx,
+		`SELECT contact_id, kind FROM contact_channels WHERE user_id = $1 AND id = $2`, userID, id).Scan(&contactID, &curKind); err != nil {
+		return model.ContactChannel{}, err // pgx.ErrNoRows when not found
+	}
+	newKind := curKind
+	if kind != nil {
+		newKind = normalizeChannelKind(*kind)
+	}
+
+	set := []string{}
+	args := []any{}
+	set = append(set, fmt.Sprintf("kind = $%d", len(args)+1))
+	args = append(args, newKind)
+	if value != nil {
+		args = append(args, strings.TrimSpace(*value))
+		set = append(set, fmt.Sprintf("value = $%d", len(args)))
+	}
+	if label != nil {
+		args = append(args, strings.TrimSpace(*label))
+		set = append(set, fmt.Sprintf("label = NULLIF($%d, '')", len(args)))
+	}
+	if isPrimary != nil {
+		args = append(args, *isPrimary)
+		set = append(set, fmt.Sprintf("is_primary = $%d", len(args)))
+		if *isPrimary {
+			if _, err := tx.Exec(ctx, `
+				UPDATE contact_channels SET is_primary = false
+				WHERE user_id = $1 AND contact_id = $2 AND kind = $3 AND id <> $4`, userID, contactID, newKind, id); err != nil {
+				return model.ContactChannel{}, err
+			}
+		}
+	}
+	args = append(args, userID, id)
+	updated, err := scanChannel(tx.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE contact_channels SET %s WHERE user_id = $%d AND id = $%d
+		RETURNING id, user_id, contact_id, kind, value, label, is_primary, created_at`,
+		strings.Join(set, ", "), len(args)-1, len(args)), args...))
+	if err != nil {
+		return model.ContactChannel{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.ContactChannel{}, err
+	}
+	return updated, nil
 }
 
 // DeleteChannel removes a channel.
