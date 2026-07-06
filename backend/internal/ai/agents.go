@@ -53,6 +53,10 @@ var Policies = map[string]ToolPolicy{
 	// Contacten / Relaties (globale module) — read-only
 	"contactenOpvragen":         {Agents: []string{"brain", "dashboard", "agenda", "laventecare"}, Mutates: false, RequiresConfirmation: false},
 	"belangrijkeDatumsOpvragen": {Agents: []string{"brain", "dashboard", "agenda"}, Mutates: false, RequiresConfirmation: false},
+	// Contacten / Relaties — writes (bevestiging vereist)
+	"contactMaken":         {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactBijwerken":     {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
+	"contactFeitOnthouden": {Agents: []string{"brain", "laventecare"}, Mutates: true, RequiresConfirmation: true},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},

@@ -3749,6 +3749,86 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"instruction": "Aankomende verjaardagen/jubilea, gesorteerd op days_until (0 = vandaag). turning_age is de leeftijd die iemand wordt als het geboortejaar bekend is.",
 		}, err)
 
+	case "contactMaken":
+		var args struct {
+			DisplayName       string   `json:"display_name"`
+			Naam              string   `json:"naam"`
+			RelationshipTypes []string `json:"relationship_types"`
+			Notes             *string  `json:"notes"`
+			Email             *string  `json:"email"`
+			Phone             *string  `json:"phone"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		name := strings.TrimSpace(firstNonEmpty(args.DisplayName, args.Naam))
+		if name == "" {
+			return e.jsonResponse(nil, fmt.Errorf("naam verplicht"))
+		}
+		contact, err := e.contactStore.Create(ctx, e.userID, model.Contact{
+			DisplayName:       name,
+			RelationshipTypes: args.RelationshipTypes,
+			Notes:             args.Notes,
+			Email:             args.Email,
+			Phone:             args.Phone,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "contact": contact}, err)
+
+	case "contactBijwerken":
+		var args struct {
+			ContactID         string    `json:"contact_id"`
+			DisplayName       *string   `json:"display_name"`
+			RelationshipTypes *[]string `json:"relationship_types"`
+			Notes             *string   `json:"notes"`
+			Email             *string   `json:"email"`
+			Phone             *string   `json:"phone"`
+			Address           *string   `json:"address"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		contactID, err := parseOptionalUUID(args.ContactID)
+		if err != nil {
+			return e.invalidUUIDResponse("contact_id", err)
+		}
+		if contactID == nil {
+			return e.jsonResponse(nil, fmt.Errorf("contact_id verplicht"))
+		}
+		updated, err := e.contactStore.Update(ctx, e.userID, *contactID, store.ContactUpdate{
+			DisplayName:       args.DisplayName,
+			RelationshipTypes: args.RelationshipTypes,
+			Notes:             args.Notes,
+			Email:             args.Email,
+			Phone:             args.Phone,
+			Address:           args.Address,
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "contact": updated}, err)
+
+	case "contactFeitOnthouden":
+		var args struct {
+			ContactID string `json:"contact_id"`
+			Fact      string `json:"fact"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		if strings.TrimSpace(args.Fact) == "" {
+			return e.jsonResponse(nil, fmt.Errorf("feit verplicht"))
+		}
+		contactID, err := parseOptionalUUID(args.ContactID)
+		if err != nil {
+			return e.invalidUUIDResponse("contact_id", err)
+		}
+		if contactID == nil {
+			return e.jsonResponse(nil, fmt.Errorf("contact_id verplicht"))
+		}
+		fact, err := e.contactStore.AddFact(ctx, e.userID, model.ContactFact{
+			ContactID: *contactID,
+			Fact:      strings.TrimSpace(args.Fact),
+			Source:    "telegram",
+		})
+		return e.jsonResponse(map[string]any{"ok": true, "fact": fact}, err)
+
 	default:
 		return fmt.Sprintf(`{"error": "Tool '%s' niet geïmplementeerd in Go."}`, toolName)
 	}
