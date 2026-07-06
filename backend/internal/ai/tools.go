@@ -1027,6 +1027,21 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "whatsappSamenvattingOpvragen",
+			Description: "Haalt samenvattingen (metadata, GEEN letterlijke berichten) van geïmporteerde WhatsApp-gesprekken op, optioneel voor één contact via contact_id.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"contact_id": {"type": "string", "description": "Optioneel: UUID van het contact."},
+					"limit": {"type": "number", "description": "Aantal samenvattingen (max 30)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareLeadsOpvragen",
 			Description: "Haalt recente LaventeCare leads op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je leads van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{

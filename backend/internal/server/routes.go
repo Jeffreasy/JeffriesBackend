@@ -270,6 +270,9 @@ func registerRoutes(
 				r.With(authMw).Delete("/{id}/dates/{dateID}", contactH.DeleteDate)
 				r.With(authMw).Post("/{id}/facts", contactH.AddFact)
 				r.With(authMw).Delete("/{id}/facts/{factID}", contactH.DeleteFact)
+				r.With(authMw).Post("/{id}/whatsapp/import", contactH.WhatsAppImport)
+				r.Get("/{id}/whatsapp", contactH.WhatsAppList)
+				r.Get("/{id}/whatsapp/{convID}/messages", contactH.WhatsAppMessages)
 			})
 
 			// Settings

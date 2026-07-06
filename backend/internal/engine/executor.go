@@ -3829,6 +3829,26 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		})
 		return e.jsonResponse(map[string]any{"ok": true, "fact": fact}, err)
 
+	case "whatsappSamenvattingOpvragen":
+		var args struct {
+			ContactID string `json:"contact_id"`
+			Limit     int    `json:"limit"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		contactID, err := parseOptionalUUID(args.ContactID)
+		if err != nil {
+			return e.invalidUUIDResponse("contact_id", err)
+		}
+		summaries, err := e.contactStore.ListWhatsAppSummaries(ctx, e.userID, contactID, clampToolLimit(args.Limit, 10, 30))
+		return e.jsonResponse(map[string]any{
+			"scope":       "whatsapp samenvattingen",
+			"count":       len(summaries),
+			"items":       summaries,
+			"instruction": "Dit zijn samenvattingen (metadata) van geïmporteerde WhatsApp-gesprekken — géén letterlijke berichten. Gebruik ze als context; verzin geen gespreksinhoud.",
+		}, err)
+
 	default:
 		return fmt.Sprintf(`{"error": "Tool '%s' niet geïmplementeerd in Go."}`, toolName)
 	}

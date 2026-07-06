@@ -13,6 +13,7 @@ import (
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
+	"github.com/Jeffreasy/JeffriesBackend/internal/whatsapp"
 )
 
 // ContactHandler serves the unified Contacts/Relationships module.
@@ -387,4 +388,112 @@ func (h *ContactHandler) DeleteFact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// ─── WhatsApp import ─────────────────────────────────────────────────────────
+
+type whatsappImportBody struct {
+	ChatName       string `json:"chat_name"`
+	SourceFilename string `json:"source_filename"`
+	IsGroup        bool   `json:"is_group"`
+	Text           string `json:"text"`
+}
+
+// WhatsAppImport parses an exported chat (.txt content in `text`) and stores it
+// for the contact, returning the conversation + its metadata summary.
+func (h *ContactHandler) WhatsAppImport(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	var body whatsappImportBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondDecodeError(w, err)
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		Error(w, http.StatusBadRequest, "Geen chat-tekst meegestuurd.")
+		return
+	}
+	parsed := whatsapp.Parse(body.Text)
+	if len(parsed.Messages) == 0 {
+		Error(w, http.StatusBadRequest, "Kon geen berichten herkennen in het geëxporteerde bestand.")
+		return
+	}
+	chatName := strings.TrimSpace(body.ChatName)
+	if chatName == "" {
+		if len(parsed.Participants) > 0 {
+			chatName = parsed.Participants[0]
+		} else {
+			chatName = "WhatsApp"
+		}
+	}
+	conv, summary, err := h.store.ImportWhatsAppConversation(
+		r.Context(), userID, contactID, chatName, body.SourceFilename, body.IsGroup, parsed.Messages,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Contact niet gevonden.")
+			return
+		}
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusCreated, map[string]any{
+		"conversation": conv,
+		"summary":      summary,
+		"participants": parsed.Participants,
+		"imported":     len(parsed.Messages),
+	})
+}
+
+// WhatsAppList returns a contact's imported conversations + their summaries.
+func (h *ContactHandler) WhatsAppList(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	convs, err := h.store.ListWhatsAppConversations(r.Context(), userID, contactID)
+	if err != nil {
+		InternalError(w, r, err)
+		return
+	}
+	summaries, err := h.store.ListWhatsAppSummaries(r.Context(), userID, &contactID, 50)
+	if err != nil {
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"conversations": convs, "summaries": summaries})
+}
+
+// WhatsAppMessages returns the (local) messages of a conversation.
+func (h *ContactHandler) WhatsAppMessages(w http.ResponseWriter, r *http.Request) {
+	userID := contactUserID(r)
+	if userID == "" {
+		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	convID, err := uuid.Parse(chi.URLParam(r, "convID"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig id.")
+		return
+	}
+	msgs, err := h.store.ListWhatsAppMessages(r.Context(), userID, convID, 5000)
+	if err != nil {
+		InternalError(w, r, err)
+		return
+	}
+	JSON(w, http.StatusOK, msgs)
 }
