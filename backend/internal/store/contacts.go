@@ -83,6 +83,29 @@ CREATE TABLE IF NOT EXISTS contact_facts (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_contact_facts_contact ON contact_facts (contact_id);
+
+-- Enterprise labelling: a per-user catalog of colour-coded tags (the rich layer
+-- above relationship_types) + a join to contacts. First-class so labels can be
+-- renamed/merged/recoloured in one place.
+CREATE TABLE IF NOT EXISTS contact_labels (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    color      TEXT NOT NULL DEFAULT 'slate',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_labels_user_name ON contact_labels (user_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS contact_label_assignments (
+    contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    label_id   UUID NOT NULL REFERENCES contact_labels(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (contact_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_label_assign_label ON contact_label_assignments (label_id);
+CREATE INDEX IF NOT EXISTS idx_contact_label_assign_user ON contact_label_assignments (user_id);
 `)
 	return err
 }
@@ -144,7 +167,15 @@ func (s *ContactStore) List(ctx context.Context, userID string, opts ListContact
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Rows are fully drained above; safe to run the label-hydration query on the
+	// same pool connection now.
+	if err := s.hydrateLabels(ctx, userID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Get returns a single contact with its important dates and facts.
@@ -158,6 +189,9 @@ func (s *ContactStore) Get(ctx context.Context, userID string, id uuid.UUID) (mo
 		return model.Contact{}, err
 	}
 	if c.Facts, err = s.ListFacts(ctx, userID, id); err != nil {
+		return model.Contact{}, err
+	}
+	if c.Labels, err = s.labelsForContact(ctx, userID, id); err != nil {
 		return model.Contact{}, err
 	}
 	return c, nil

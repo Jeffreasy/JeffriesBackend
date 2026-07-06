@@ -31,6 +31,27 @@ type Contact struct {
 	// Nested detail, populated by Get (not stored on the contacts row).
 	ImportantDates []ContactImportantDate `json:"important_dates,omitempty" db:"-"`
 	Facts          []ContactFact          `json:"facts,omitempty" db:"-"`
+	// Labels are the free-form, colour-coded tags assigned to this contact from
+	// the per-user catalog. Hydrated by List/Get; never overwritten by the
+	// LaventeCare mirror sync, so a business contact can also be tagged e.g. VIP.
+	Labels []ContactLabel `json:"labels,omitempty" db:"-"`
+}
+
+// ContactLabel is a free-form, colour-coded tag in the per-user catalog — the
+// rich labelling layer above the fixed relationship_types (family/friend/…).
+// Examples: "hardloopmaatje", "investeerder", "VIP", "kerstkaart". Labels are
+// first-class (rename/merge/recolour) and feed AI context. Color is a palette
+// key (see store.NormalizeLabelColor), not raw CSS, so the UI/AI stay consistent.
+type ContactLabel struct {
+	ID        uuid.UUID `json:"id" db:"id"`
+	UserID    string    `json:"user_id" db:"user_id"`
+	Name      string    `json:"name" db:"name"`
+	Color     string    `json:"color" db:"color"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+
+	// ContactCount is populated only by ListLabels (usage count); omitted elsewhere.
+	ContactCount int `json:"contact_count,omitempty" db:"-"`
 }
 
 // ContactImportantDate is a recurring (or one-off) date for a contact —
