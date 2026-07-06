@@ -88,13 +88,13 @@ CREATE INDEX IF NOT EXISTS idx_contact_facts_contact ON contact_facts (contact_i
 }
 
 const contactCols = `id, user_id, display_name, relationship_types, notes, email, phone, address,
-	organization_id, business_role, last_contacted_at, archived, created_at, updated_at`
+	organization_id, business_role, last_contacted_at, archived, created_at, updated_at, source`
 
 func scanContactRow(row pgx.Row) (model.Contact, error) {
 	var c model.Contact
 	err := row.Scan(&c.ID, &c.UserID, &c.DisplayName, &c.RelationshipTypes, &c.Notes, &c.Email,
 		&c.Phone, &c.Address, &c.OrganizationID, &c.BusinessRole, &c.LastContactedAt,
-		&c.Archived, &c.CreatedAt, &c.UpdatedAt)
+		&c.Archived, &c.CreatedAt, &c.UpdatedAt, &c.Source)
 	if c.RelationshipTypes == nil {
 		c.RelationshipTypes = []string{}
 	}
@@ -508,23 +508,55 @@ func clampDate(year, month, day int, loc *time.Location) time.Time {
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
 }
 
-// BackfillLaventeCareContacts mirrors LaventeCare business contacts (lc_contacts)
-// into the unified contacts table as relationship_type "business", linked to
-// their organization. Create-only (ON CONFLICT DO NOTHING on lc_contact_id) so it
-// never clobbers a contact once mirrored — safe to run repeatedly. Returns the
-// number newly mirrored. Phase 3 keeps LaventeCare's own screens/store untouched;
-// this surfaces business contacts in the unified module + AI without a risky
-// write-through refactor.
-func (s *ContactStore) BackfillLaventeCareContacts(ctx context.Context, userID string) (int, error) {
-	tag, err := s.db.Pool.Exec(ctx, `
+// SyncLaventeCareContactMirror upserts LaventeCare business contacts (lc_contacts)
+// into the unified contacts table as relationship_type "business", linked to their
+// organization and tagged source="laventecare". lc_contacts stays the source of
+// truth: the mirrored display_name/email/phone/notes/business_role/organization_id
+// converge to it, but relationship_types are NOT overwritten so a business contact
+// can also be tagged e.g. "friend" in the module.
+//
+// onlyID scopes the sync to a single lc_contact (the write-through hooks in
+// CreateContact/UpdateContact); nil syncs all of the user's business contacts and
+// prunes mirrors whose LaventeCare contact was deleted. Returns the upserted count.
+func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string, onlyID *uuid.UUID) (int, error) {
+	q := `
 		INSERT INTO contacts
 			(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, lc_contact_id)
 		SELECT user_id, naam, ARRAY['business']::text[], email, telefoon, notities, rol, company_id, 'laventecare', id
 		FROM lc_contacts
-		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''
-		ON CONFLICT (lc_contact_id) DO NOTHING`, userID)
+		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''`
+	args := []any{userID}
+	if onlyID != nil {
+		args = append(args, *onlyID)
+		q += fmt.Sprintf(" AND id = $%d", len(args))
+	}
+	q += `
+		ON CONFLICT (lc_contact_id) DO UPDATE SET
+			display_name    = EXCLUDED.display_name,
+			email           = EXCLUDED.email,
+			phone           = EXCLUDED.phone,
+			notes           = EXCLUDED.notes,
+			business_role   = EXCLUDED.business_role,
+			organization_id = EXCLUDED.organization_id,
+			updated_at      = now()`
+	tag, err := db.Pool.Exec(ctx, q, args...)
 	if err != nil {
 		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	if onlyID == nil {
+		// Prune mirrors whose LaventeCare contact no longer exists.
+		_, _ = db.Pool.Exec(ctx, `
+			DELETE FROM contacts
+			WHERE user_id = $1 AND source = 'laventecare' AND lc_contact_id IS NOT NULL
+			  AND lc_contact_id NOT IN (SELECT id FROM lc_contacts WHERE user_id = $1)`, userID)
+	}
+	return n, nil
+}
+
+// BackfillLaventeCareContacts syncs all of the user's LaventeCare business
+// contacts into the unified module (create + update + prune). Called by the
+// contacts-laventecare-sync cron.
+func (s *ContactStore) BackfillLaventeCareContacts(ctx context.Context, userID string) (int, error) {
+	return SyncLaventeCareContactMirror(ctx, s.db, userID, nil)
 }
