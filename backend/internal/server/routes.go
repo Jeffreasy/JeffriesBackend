@@ -274,6 +274,7 @@ func registerRoutes(
 				r.With(authMw).Post("/", contactH.Create)
 				r.With(authMw).Patch("/{id}", contactH.Update)
 				r.With(authMw).Delete("/{id}", contactH.Delete)
+				r.With(authMw).Post("/{id}/merge", contactH.Merge)
 				r.With(authMw).Post("/{id}/dates", contactH.AddDate)
 				r.With(authMw).Delete("/{id}/dates/{dateID}", contactH.DeleteDate)
 				r.With(authMw).Post("/{id}/facts", contactH.AddFact)

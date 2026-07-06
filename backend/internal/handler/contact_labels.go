@@ -282,6 +282,10 @@ func (h *ContactHandler) RemoveLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.RemoveLabel(r.Context(), userID, contactID, labelID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Label niet gevonden op dit contact.")
+			return
+		}
 		InternalError(w, r, err)
 		return
 	}

@@ -284,7 +284,9 @@ func (s *ContactStore) Get(ctx context.Context, userID string, id uuid.UUID) (mo
 	return c, nil
 }
 
-// Create inserts a new contact.
+// Create inserts a new contact. Text fields are trimmed and empty strings stored
+// as NULL, matching Update's addText so `phone IS NULL` behaves consistently
+// regardless of which path wrote the row.
 func (s *ContactStore) Create(ctx context.Context, userID string, c model.Contact) (model.Contact, error) {
 	types := c.RelationshipTypes
 	if types == nil {
@@ -293,10 +295,20 @@ func (s *ContactStore) Create(ctx context.Context, userID string, c model.Contac
 	q := fmt.Sprintf(`
 		INSERT INTO contacts (user_id, display_name, relationship_types, notes, email, phone, address,
 			organization_id, business_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, NULLIF(btrim($4), ''), NULLIF(btrim($5), ''), NULLIF(btrim($6), ''),
+			NULLIF(btrim($7), ''), $8, NULLIF(btrim($9), ''))
 		RETURNING %s`, contactCols)
-	return scanContactRow(s.db.Pool.QueryRow(ctx, q, userID, c.DisplayName, types, c.Notes, c.Email,
-		c.Phone, c.Address, c.OrganizationID, c.BusinessRole))
+	return scanContactRow(s.db.Pool.QueryRow(ctx, q, userID, strings.TrimSpace(c.DisplayName), types,
+		derefTrim(c.Notes), derefTrim(c.Email), derefTrim(c.Phone), derefTrim(c.Address), c.OrganizationID, derefTrim(c.BusinessRole)))
+}
+
+// derefTrim returns the trimmed pointed-to string, or "" for nil (paired with a
+// NULLIF(btrim(...),'') on the SQL side so empty/whitespace becomes NULL).
+func derefTrim(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(*s)
 }
 
 // ContactUpdate holds partial-update fields. A nil pointer means "leave
@@ -377,8 +389,22 @@ func (s *ContactStore) getBare(ctx context.Context, userID string, id uuid.UUID)
 	return scanContactRow(s.db.Pool.QueryRow(ctx, q, userID, id))
 }
 
-// Delete removes a contact (dates/facts cascade).
+// ErrManagedContact is returned when trying to hard-delete a LaventeCare-managed
+// contact; deleting it would only lose local enrichment and get resurrected by the
+// mirror sync. Manage such contacts in LaventeCare (or merge them).
+var ErrManagedContact = errors.New("contact is managed in LaventeCare")
+
+// Delete removes a contact (dates/facts/labels/etc. cascade). Refuses
+// LaventeCare-sourced contacts: they'd be re-created by the mirror sync, so a
+// delete would only silently drop the user's local enrichment.
 func (s *ContactStore) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+	var source string
+	if err := s.db.Pool.QueryRow(ctx, `SELECT source FROM contacts WHERE user_id = $1 AND id = $2`, userID, id).Scan(&source); err != nil {
+		return err // pgx.ErrNoRows when not found
+	}
+	if source == "laventecare" {
+		return ErrManagedContact
+	}
 	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM contacts WHERE user_id = $1 AND id = $2`, userID, id)
 	if err != nil {
 		return err
@@ -652,24 +678,47 @@ type lcMirrorRow struct {
 // SyncLaventeCareContactMirror reconciles the unified contacts mirror from
 // lc_contacts. lc_contacts stays the source of truth, but a person who appears at
 // multiple companies (one lc_contacts row per company) becomes ONE unified contact
-// (deduped by laventeCareIdentityKey) with one contact_organizations link per
-// company. Core fields converge to the person's primary lc_contact; relationship_
-// types, labels, dates, facts, channels and interactions are never overwritten.
-// Full reconcile every call (cheap at this scale): upsert people + org links,
-// collapse any pre-existing duplicate mirror rows, prune vanished ones. Returns
-// the number of unified people synced.
+// with one contact_organizations link per company.
+//
+// Identity is resolved by the STABLE lc_contact_id link first (so renaming a
+// LaventeCare person keeps them on the same unified contact), falling back to the
+// person-identity key (name|email) only for lc_contacts not yet linked. A manual
+// merge stays durable because it repoints the org links onto the survivor. Core
+// fields converge to the person's primary lc_contact only when the resolved contact
+// is still LaventeCare-sourced; relationship_types, labels, dates, facts, channels,
+// interactions, WhatsApp and a manual survivor's core fields are never overwritten.
+// People left with no LaventeCare link are demoted to source='manual' if they carry
+// local enrichment, else deleted. A per-user advisory lock serializes concurrent
+// syncs (cron + write-through) so they neither race nor deadlock.
 func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (int, error) {
-	rows, err := db.Pool.Query(ctx, `
-		SELECT id, company_id, naam, COALESCE(email, ''), COALESCE(telefoon, ''), COALESCE(rol, ''),
-		       COALESCE(notities, ''), is_primary, updated_at
-		FROM lc_contacts
-		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''`, userID)
+	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
-	// Group lc_contacts by person identity, preserving first-seen order.
-	groups := map[string][]lcMirrorRow{}
-	order := []string{}
+	defer tx.Rollback(ctx)
+
+	// Serialize per-user: two overlapping syncs would otherwise race to create the
+	// same person and could deadlock acquiring row locks in different orders.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, userID); err != nil {
+		return 0, err
+	}
+
+	// Fold any pre-existing same-identity duplicate LaventeCare contacts into the
+	// oldest, preserving all their enrichment (defensive; steady state has none).
+	if err := collapseAllLegacyDuplicates(ctx, tx, userID); err != nil {
+		return 0, err
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, company_id, naam, COALESCE(email, ''), COALESCE(telefoon, ''), COALESCE(rol, ''),
+		       COALESCE(notities, ''), is_primary, updated_at
+		FROM lc_contacts
+		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''
+		ORDER BY id`, userID) // deterministic order → consistent lock acquisition
+	if err != nil {
+		return 0, err
+	}
+	var lcRows []lcMirrorRow
 	for rows.Next() {
 		var r lcMirrorRow
 		if err := rows.Scan(&r.id, &r.companyID, &r.naam, &r.email, &r.telefoon, &r.rol,
@@ -677,63 +726,94 @@ func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (i
 			rows.Close()
 			return 0, err
 		}
-		key := laventeCareIdentityKey(r.naam, r.email)
-		if _, ok := groups[key]; !ok {
-			order = append(order, key)
-		}
-		groups[key] = append(groups[key], r)
+		lcRows = append(lcRows, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
 
-	tx, err := db.Pool.Begin(ctx)
+	// Existing links: which unified contact each lc_contact already belongs to.
+	linkRows, err := tx.Query(ctx, `
+		SELECT lc_contact_id, contact_id FROM contact_organizations
+		WHERE user_id = $1 AND source = 'laventecare' AND lc_contact_id IS NOT NULL`, userID)
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(ctx)
+	linked := map[uuid.UUID]uuid.UUID{}
+	for linkRows.Next() {
+		var lcID, cID uuid.UUID
+		if err := linkRows.Scan(&lcID, &cID); err != nil {
+			linkRows.Close()
+			return 0, err
+		}
+		linked[lcID] = cID
+	}
+	linkRows.Close()
+	if err := linkRows.Err(); err != nil {
+		return 0, err
+	}
 
-	n := 0
-	for _, key := range order {
-		group := groups[key]
+	// Assign each lc_contact to a target unified contact, grouping by target.
+	keyToContact := map[string]uuid.UUID{} // run-local: identity_key → chosen contact
+	groups := map[uuid.UUID][]lcMirrorRow{}
+	groupOrder := []uuid.UUID{}
+	for _, r := range lcRows {
+		key := laventeCareIdentityKey(r.naam, r.email)
+		var target uuid.UUID
+		if c, ok := linked[r.id]; ok {
+			target = c // stable: already linked (survives rename/merge)
+		} else if c, ok := keyToContact[key]; ok {
+			target = c // a sibling this run already resolved the person
+		} else {
+			// New lc_contact: join an existing LaventeCare person with this identity,
+			// else create one.
+			err := tx.QueryRow(ctx, `
+				SELECT id FROM contacts
+				WHERE user_id = $1 AND source = 'laventecare' AND identity_key = $2
+				ORDER BY created_at ASC LIMIT 1`, userID, key).Scan(&target)
+			if errors.Is(err, pgx.ErrNoRows) {
+				if err := tx.QueryRow(ctx, `
+					INSERT INTO contacts
+						(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, identity_key)
+					VALUES ($1, $2, ARRAY['business']::text[], NULLIF($3,''), NULLIF($4,''), NULLIF($5,''), NULLIF($6,''), $7, 'laventecare', $8)
+					RETURNING id`,
+					userID, r.naam, r.email, r.telefoon, r.notities, r.rol, r.companyID, key).Scan(&target); err != nil {
+					return 0, err
+				}
+			} else if err != nil {
+				return 0, err
+			}
+		}
+		keyToContact[key] = target
+		if _, ok := groups[target]; !ok {
+			groupOrder = append(groupOrder, target)
+		}
+		groups[target] = append(groups[target], r)
+	}
+
+	for _, target := range groupOrder {
+		group := groups[target]
 		best := pickPrimaryLC(group)
 
-		// Find-or-create the unified person by identity, then converge core fields.
-		var contactID uuid.UUID
-		err := tx.QueryRow(ctx, `
-			SELECT id FROM contacts
-			WHERE user_id = $1 AND source = 'laventecare' AND identity_key = $2
-			ORDER BY created_at ASC LIMIT 1`, userID, key).Scan(&contactID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			if err := tx.QueryRow(ctx, `
-				INSERT INTO contacts
-					(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, identity_key)
-				VALUES ($1, $2, ARRAY['business']::text[], NULLIF($3,''), NULLIF($4,''), NULLIF($5,''), NULLIF($6,''), $7, 'laventecare', $8)
-				RETURNING id`,
-				userID, best.naam, best.email, best.telefoon, best.notities, best.rol, best.companyID, key).Scan(&contactID); err != nil {
-				return 0, err
-			}
-		} else if err != nil {
+		// Converge core fields + refresh the identity key only when the target is
+		// still a LaventeCare contact (a manual merge survivor keeps its own core).
+		var source string
+		if err := tx.QueryRow(ctx, `SELECT source FROM contacts WHERE id = $1`, target).Scan(&source); err != nil {
 			return 0, err
-		} else {
+		}
+		if source == "laventecare" {
 			if _, err := tx.Exec(ctx, `
 				UPDATE contacts SET display_name = $2, email = NULLIF($3,''), phone = NULLIF($4,''),
-					notes = NULLIF($5,''), business_role = NULLIF($6,''), organization_id = $7, updated_at = now()
+					notes = NULLIF($5,''), business_role = NULLIF($6,''), organization_id = $7,
+					identity_key = $8, updated_at = now()
 				WHERE id = $1`,
-				contactID, best.naam, best.email, best.telefoon, best.notities, best.rol, best.companyID); err != nil {
+				target, best.naam, best.email, best.telefoon, best.notities, best.rol, best.companyID,
+				laventeCareIdentityKey(best.naam, best.email)); err != nil {
 				return 0, err
 			}
 		}
-		n++
 
-		// Collapse any older duplicate mirror rows for this person into the canonical
-		// one, preserving their labels/dates/facts/channels/interactions/org links.
-		if err := collapseDuplicateContacts(ctx, tx, userID, key, contactID); err != nil {
-			return 0, err
-		}
-
-		// One org link per lc_contact (keyed on lc_contact_id).
 		for _, r := range group {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO contact_organizations (user_id, contact_id, organization_id, role, source, lc_contact_id)
@@ -741,29 +821,120 @@ func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (i
 				ON CONFLICT (lc_contact_id) WHERE lc_contact_id IS NOT NULL
 				DO UPDATE SET contact_id = EXCLUDED.contact_id, organization_id = EXCLUDED.organization_id,
 					role = EXCLUDED.role, updated_at = now()`,
-				userID, contactID, r.companyID, r.rol, r.id); err != nil {
+				userID, target, r.companyID, r.rol, r.id); err != nil {
 				return 0, err
 			}
 		}
 	}
 
-	// Prune links whose lc_contact vanished, then people with no LaventeCare link left.
+	// Prune LaventeCare org links whose lc_contact vanished.
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM contact_organizations
 		WHERE user_id = $1 AND source = 'laventecare'
 		  AND lc_contact_id NOT IN (SELECT id FROM lc_contacts WHERE user_id = $1)`, userID); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM contacts
+	// People left with no LaventeCare link: keep (demote to manual) if they carry
+	// local enrichment, otherwise delete the bare mirror.
+	orphanRows, err := tx.Query(ctx, `
+		SELECT id FROM contacts
 		WHERE user_id = $1 AND source = 'laventecare'
-		  AND id NOT IN (SELECT contact_id FROM contact_organizations WHERE user_id = $1 AND source = 'laventecare')`, userID); err != nil {
+		  AND id NOT IN (SELECT contact_id FROM contact_organizations WHERE user_id = $1 AND source = 'laventecare')`, userID)
+	if err != nil {
 		return 0, err
+	}
+	var orphans []uuid.UUID
+	for orphanRows.Next() {
+		var id uuid.UUID
+		if err := orphanRows.Scan(&id); err != nil {
+			orphanRows.Close()
+			return 0, err
+		}
+		orphans = append(orphans, id)
+	}
+	orphanRows.Close()
+	if err := orphanRows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range orphans {
+		enriched, err := contactHasEnrichment(ctx, tx, id)
+		if err != nil {
+			return 0, err
+		}
+		if enriched {
+			// organization_id was a scalar pointer to the now-gone company; clear it
+			// (affiliations live in contact_organizations, already pruned).
+			if _, err := tx.Exec(ctx, `
+				UPDATE contacts SET source = 'manual', identity_key = NULL, organization_id = NULL, updated_at = now() WHERE id = $1`, id); err != nil {
+				return 0, err
+			}
+		} else if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return n, nil
+	return len(groupOrder), nil
+}
+
+// collapseAllLegacyDuplicates folds any LaventeCare contacts that share an
+// identity_key into the oldest of the group (re-pointing all enrichment first).
+// Steady state has none; this repairs any residual pre-migration duplicates safely.
+func collapseAllLegacyDuplicates(ctx context.Context, tx pgx.Tx, userID string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT identity_key FROM contacts
+		WHERE user_id = $1 AND source = 'laventecare' AND identity_key IS NOT NULL
+		GROUP BY identity_key HAVING COUNT(*) > 1`, userID)
+	if err != nil {
+		return err
+	}
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		var canonical uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			SELECT id FROM contacts
+			WHERE user_id = $1 AND source = 'laventecare' AND identity_key = $2
+			ORDER BY created_at ASC LIMIT 1`, userID, key).Scan(&canonical); err != nil {
+			return err
+		}
+		if err := collapseDuplicateContacts(ctx, tx, userID, key, canonical); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unionStrings returns first followed by any entries of second not already
+// present (case-sensitive), dropping empties — preserving order.
+func unionStrings(first, second []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range first {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, t := range second {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // pickPrimaryLC chooses the lc_contacts row whose fields represent the person:
@@ -780,9 +951,59 @@ func pickPrimaryLC(group []lcMirrorRow) lcMirrorRow {
 	return best
 }
 
+// contactChildTables are the child tables (besides label assignments, handled
+// specially) that reference contacts(id) and must be RE-POINTED — not
+// cascade-deleted — when folding one contact into another. whatsapp_messages
+// follows its conversation FK, so re-pointing whatsapp_conversations covers it.
+var contactChildTables = []string{
+	"contact_important_dates",
+	"contact_facts",
+	"contact_channels",
+	"contact_interactions",
+	"contact_organizations",
+	"whatsapp_conversations",
+	"whatsapp_summaries",
+}
+
+// repointContactChildren moves every child row from fromID onto toID within tx.
+// The caller deletes fromID afterwards. Labels use a composite PK so are merged
+// (copy-missing then drop the source's), preventing a PK collision.
+func repointContactChildren(ctx context.Context, tx pgx.Tx, fromID, toID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO contact_label_assignments (contact_id, label_id, user_id)
+		SELECT $2, label_id, user_id FROM contact_label_assignments WHERE contact_id = $1
+		ON CONFLICT DO NOTHING`, fromID, toID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM contact_label_assignments WHERE contact_id = $1`, fromID); err != nil {
+		return err
+	}
+	for _, table := range contactChildTables {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET contact_id = $2 WHERE contact_id = $1`, table), fromID, toID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// contactHasEnrichment reports whether a contact carries local data worth keeping
+// (labels, dates, facts, channels, interactions, or imported WhatsApp).
+func contactHasEnrichment(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	var has bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM contact_label_assignments WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM contact_important_dates   WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM contact_facts             WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM contact_channels          WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM contact_interactions      WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM whatsapp_conversations    WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM contact_organizations     WHERE contact_id = $1 AND source <> 'laventecare')`, id).Scan(&has)
+	return has, err
+}
+
 // collapseDuplicateContacts folds any other LaventeCare contacts sharing this
-// identity into canonicalID (re-pointing their enrichment first), then deletes
-// them — so pre-migration duplicates converge to one person.
+// identity into canonicalID (re-pointing all their enrichment first), then deletes
+// them — so legacy duplicates converge to one person without data loss.
 func collapseDuplicateContacts(ctx context.Context, tx pgx.Tx, userID, identityKey string, canonicalID uuid.UUID) error {
 	rows, err := tx.Query(ctx, `
 		SELECT id FROM contacts
@@ -805,23 +1026,88 @@ func collapseDuplicateContacts(ctx context.Context, tx pgx.Tx, userID, identityK
 		return err
 	}
 	for _, dup := range dups {
-		// Labels have a composite PK (contact_id, label_id) → merge with DO NOTHING.
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO contact_label_assignments (contact_id, label_id, user_id)
-			SELECT $2, label_id, user_id FROM contact_label_assignments WHERE contact_id = $1
-			ON CONFLICT DO NOTHING`, dup, canonicalID); err != nil {
+		if err := repointContactChildren(ctx, tx, dup, canonicalID); err != nil {
 			return err
-		}
-		for _, table := range []string{"contact_important_dates", "contact_facts", "contact_channels", "contact_interactions", "contact_organizations"} {
-			if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET contact_id = $2 WHERE contact_id = $1`, table), dup, canonicalID); err != nil {
-				return err
-			}
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, dup); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ErrCannotMergeSelf is returned when a merge names the same contact twice.
+var ErrCannotMergeSelf = errors.New("cannot merge a contact into itself")
+
+// MergeContacts folds fromID into toID (the survivor): all enrichment (labels,
+// dates, facts, channels, interactions, org links, WhatsApp) moves onto toID,
+// relationship_types are unioned, and fromID is deleted. Durable against the
+// LaventeCare sync because the org links are repointed onto the survivor — a person
+// split across differing emails stays merged. Blank core fields on the survivor are
+// filled from the source ONLY when the survivor is manual; a LaventeCare survivor's
+// core fields stay owned by the mirror (they would otherwise be reverted next sync).
+func (s *ContactStore) MergeContacts(ctx context.Context, userID string, fromID, toID uuid.UUID) (model.Contact, error) {
+	if fromID == toID {
+		return model.Contact{}, ErrCannotMergeSelf
+	}
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return model.Contact{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize against the LaventeCare mirror sync (same per-user lock) so a merge
+	// and a concurrent reconcile can't race on the shared contact_organizations rows.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, userID); err != nil {
+		return model.Contact{}, err
+	}
+
+	// Load + ownership-check both sides (source of the survivor decides core-fill).
+	var fromTypes, toTypes []string
+	var toSource string
+	if err := tx.QueryRow(ctx, `SELECT relationship_types FROM contacts WHERE user_id = $1 AND id = $2`, userID, fromID).Scan(&fromTypes); err != nil {
+		return model.Contact{}, err // pgx.ErrNoRows if not owned/found
+	}
+	if err := tx.QueryRow(ctx, `SELECT relationship_types, source FROM contacts WHERE user_id = $1 AND id = $2`, userID, toID).Scan(&toTypes, &toSource); err != nil {
+		return model.Contact{}, err
+	}
+
+	if err := repointContactChildren(ctx, tx, fromID, toID); err != nil {
+		return model.Contact{}, err
+	}
+
+	// Union relationship_types (preserve target order, append new).
+	merged := unionStrings(toTypes, fromTypes)
+	if toSource == "laventecare" {
+		// Survivor's core is mirror-owned; only union types + advance last-contacted.
+		if _, err := tx.Exec(ctx, `
+			UPDATE contacts t SET relationship_types = $3,
+				last_contacted_at = GREATEST(t.last_contacted_at, f.last_contacted_at), updated_at = now()
+			FROM contacts f WHERE t.id = $1 AND f.id = $2`, toID, fromID, merged); err != nil {
+			return model.Contact{}, err
+		}
+	} else if _, err := tx.Exec(ctx, `
+		UPDATE contacts t SET
+			relationship_types = $3,
+			email          = COALESCE(t.email, f.email),
+			phone          = COALESCE(t.phone, f.phone),
+			address        = COALESCE(t.address, f.address),
+			notes          = COALESCE(t.notes, f.notes),
+			business_role  = COALESCE(t.business_role, f.business_role),
+			organization_id = COALESCE(t.organization_id, f.organization_id),
+			last_contacted_at = GREATEST(t.last_contacted_at, f.last_contacted_at),
+			updated_at     = now()
+		FROM contacts f
+		WHERE t.id = $1 AND f.id = $2`, toID, fromID, merged); err != nil {
+		return model.Contact{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE user_id = $1 AND id = $2`, userID, fromID); err != nil {
+		return model.Contact{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Contact{}, err
+	}
+	return s.Get(ctx, userID, toID)
 }
 
 // BackfillLaventeCareContacts reconciles all of the user's LaventeCare business

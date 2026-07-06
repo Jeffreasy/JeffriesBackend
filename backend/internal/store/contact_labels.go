@@ -215,17 +215,29 @@ func (s *ContactStore) AssignLabel(ctx context.Context, userID string, contactID
 	return err
 }
 
-// RemoveLabel untags a contact.
+// RemoveLabel untags a contact. Returns pgx.ErrNoRows when no such assignment
+// existed, so the handler reports 404 instead of a misleading success.
 func (s *ContactStore) RemoveLabel(ctx context.Context, userID string, contactID, labelID uuid.UUID) error {
-	_, err := s.db.Pool.Exec(ctx,
+	tag, err := s.db.Pool.Exec(ctx,
 		`DELETE FROM contact_label_assignments WHERE user_id = $1 AND contact_id = $2 AND label_id = $3`,
 		userID, contactID, labelID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // AssignLabelByName tags a contact with a label identified by name, creating the
-// label first if it doesn't exist yet — the convenient path for the AI.
+// label first if it doesn't exist yet — the convenient path for the AI. Ownership
+// of the contact is checked BEFORE the label is created, so an AI misfire with a
+// bad contact_id can't leave an orphan zero-count label polluting the catalog.
 func (s *ContactStore) AssignLabelByName(ctx context.Context, userID string, contactID uuid.UUID, name, color string) (model.ContactLabel, error) {
+	if err := s.assertOwns(ctx, userID, contactID); err != nil {
+		return model.ContactLabel{}, err
+	}
 	label, err := s.CreateLabel(ctx, userID, name, color)
 	if err != nil {
 		return model.ContactLabel{}, err

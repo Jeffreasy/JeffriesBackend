@@ -157,8 +157,12 @@ func (s *ContactStore) AddInteraction(ctx context.Context, userID string, in mod
 		return model.ContactInteraction{}, err
 	}
 	occurred := in.OccurredAt
-	if occurred.IsZero() {
-		occurred = time.Now()
+	now := time.Now()
+	if occurred.IsZero() || occurred.After(now) {
+		// A missing or future timestamp (e.g. a wrong-year typo) would push
+		// last_contacted_at into the future and permanently suppress the stale/
+		// reconnect logic — clamp to now.
+		occurred = now
 	}
 	kind := normalizeInteractionKind(in.Kind)
 
@@ -187,12 +191,15 @@ func (s *ContactStore) AddInteraction(ctx context.Context, userID string, in mod
 	return created, nil
 }
 
-// DeleteInteraction removes a touchpoint and recomputes last_contacted_at from the
-// remaining interactions (NULL if none remain).
+// DeleteInteraction removes a touchpoint. It only recomputes last_contacted_at
+// when the deleted interaction was the one driving it (its occurred_at equals the
+// stored value) — so deleting an older touchpoint, or one superseded by a manual
+// "just contacted" touch or a WhatsApp import, leaves last_contacted_at untouched.
 func (s *ContactStore) DeleteInteraction(ctx context.Context, userID string, id uuid.UUID) error {
 	var contactID uuid.UUID
+	var occurred time.Time
 	err := s.db.Pool.QueryRow(ctx,
-		`DELETE FROM contact_interactions WHERE user_id = $1 AND id = $2 RETURNING contact_id`, userID, id).Scan(&contactID)
+		`DELETE FROM contact_interactions WHERE user_id = $1 AND id = $2 RETURNING contact_id, occurred_at`, userID, id).Scan(&contactID, &occurred)
 	if err != nil {
 		return err // pgx.ErrNoRows when not found
 	}
@@ -200,6 +207,6 @@ func (s *ContactStore) DeleteInteraction(ctx context.Context, userID string, id 
 		UPDATE contacts SET last_contacted_at = (
 			SELECT MAX(occurred_at) FROM contact_interactions WHERE user_id = $1 AND contact_id = $2
 		), updated_at = now()
-		WHERE user_id = $1 AND id = $2`, userID, contactID)
+		WHERE user_id = $1 AND id = $2 AND last_contacted_at = $3`, userID, contactID, occurred)
 	return err
 }
