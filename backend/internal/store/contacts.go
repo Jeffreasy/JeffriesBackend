@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -131,6 +132,39 @@ CREATE TABLE IF NOT EXISTS contact_interactions (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_contact_interactions_contact ON contact_interactions (contact_id, occurred_at DESC);
+
+-- One person = one contact, affiliated with (possibly) multiple organizations.
+-- A LaventeCare contact who works with two customers becomes ONE contact with two
+-- org links here, deduped by identity_key (see SyncLaventeCareContactMirror).
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS identity_key TEXT;
+
+CREATE TABLE IF NOT EXISTS contact_organizations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         TEXT NOT NULL,
+    contact_id      UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    organization_id UUID,
+    role            TEXT,
+    source          TEXT NOT NULL DEFAULT 'manual',
+    lc_contact_id   UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_orgs_lc ON contact_organizations (lc_contact_id) WHERE lc_contact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_contact_orgs_contact ON contact_organizations (contact_id);
+
+-- Migration to the person/multi-org model (idempotent):
+-- 1) tag existing LaventeCare mirrors with their person-identity key,
+UPDATE contacts
+   SET identity_key = lower(btrim(display_name)) || '|' || lower(btrim(coalesce(email, '')))
+ WHERE source = 'laventecare' AND identity_key IS NULL;
+-- 2) move the old 1:1 lc_contact_id link onto the association table,
+INSERT INTO contact_organizations (user_id, contact_id, organization_id, role, source, lc_contact_id)
+SELECT user_id, id, organization_id, business_role, 'laventecare', lc_contact_id
+  FROM contacts
+ WHERE source = 'laventecare' AND lc_contact_id IS NOT NULL
+ON CONFLICT (lc_contact_id) WHERE lc_contact_id IS NOT NULL DO NOTHING;
+-- 3) retire the legacy 1:1 column so the sync's dedup can collapse duplicates.
+UPDATE contacts SET lc_contact_id = NULL WHERE source = 'laventecare' AND lc_contact_id IS NOT NULL;
 `)
 	return err
 }
@@ -212,9 +246,11 @@ func (s *ContactStore) List(ctx context.Context, userID string, opts ListContact
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Rows are fully drained above; safe to run the label-hydration query on the
-	// same pool connection now.
+	// Rows are fully drained above; safe to run the hydration queries now.
 	if err := s.hydrateLabels(ctx, userID, out); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateOrganizations(ctx, userID, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -240,6 +276,9 @@ func (s *ContactStore) Get(ctx context.Context, userID string, id uuid.UUID) (mo
 		return model.Contact{}, err
 	}
 	if c.Interactions, err = s.ListInteractions(ctx, userID, id, 50); err != nil {
+		return model.Contact{}, err
+	}
+	if c.Organizations, err = s.ListOrganizations(ctx, userID, id); err != nil {
 		return model.Contact{}, err
 	}
 	return c, nil
@@ -590,55 +629,267 @@ func clampDate(year, month, day int, loc *time.Location) time.Time {
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
 }
 
-// SyncLaventeCareContactMirror upserts LaventeCare business contacts (lc_contacts)
-// into the unified contacts table as relationship_type "business", linked to their
-// organization and tagged source="laventecare". lc_contacts stays the source of
-// truth: the mirrored display_name/email/phone/notes/business_role/organization_id
-// converge to it, but relationship_types are NOT overwritten so a business contact
-// can also be tagged e.g. "friend" in the module.
-//
-// onlyID scopes the sync to a single lc_contact (the write-through hooks in
-// CreateContact/UpdateContact); nil syncs all of the user's business contacts and
-// prunes mirrors whose LaventeCare contact was deleted. Returns the upserted count.
-func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string, onlyID *uuid.UUID) (int, error) {
-	q := `
-		INSERT INTO contacts
-			(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, lc_contact_id)
-		SELECT user_id, naam, ARRAY['business']::text[], email, telefoon, notities, rol, company_id, 'laventecare', id
+// laventeCareIdentityKey is the person-identity used to dedup lc_contacts across
+// companies: same name AND same email (or both empty) → one unified contact. Must
+// stay in sync with the SQL backfill in ensureContactsSchema.
+func laventeCareIdentityKey(naam, email string) string {
+	return strings.ToLower(strings.TrimSpace(naam)) + "|" + strings.ToLower(strings.TrimSpace(email))
+}
+
+// lcMirrorRow is a lc_contacts row loaded for the mirror sync.
+type lcMirrorRow struct {
+	id        uuid.UUID
+	companyID *uuid.UUID
+	naam      string
+	email     string
+	telefoon  string
+	rol       string
+	notities  string
+	isPrimary bool
+	updatedAt time.Time
+}
+
+// SyncLaventeCareContactMirror reconciles the unified contacts mirror from
+// lc_contacts. lc_contacts stays the source of truth, but a person who appears at
+// multiple companies (one lc_contacts row per company) becomes ONE unified contact
+// (deduped by laventeCareIdentityKey) with one contact_organizations link per
+// company. Core fields converge to the person's primary lc_contact; relationship_
+// types, labels, dates, facts, channels and interactions are never overwritten.
+// Full reconcile every call (cheap at this scale): upsert people + org links,
+// collapse any pre-existing duplicate mirror rows, prune vanished ones. Returns
+// the number of unified people synced.
+func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (int, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, company_id, naam, COALESCE(email, ''), COALESCE(telefoon, ''), COALESCE(rol, ''),
+		       COALESCE(notities, ''), is_primary, updated_at
 		FROM lc_contacts
-		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''`
-	args := []any{userID}
-	if onlyID != nil {
-		args = append(args, *onlyID)
-		q += fmt.Sprintf(" AND id = $%d", len(args))
-	}
-	q += `
-		ON CONFLICT (lc_contact_id) DO UPDATE SET
-			display_name    = EXCLUDED.display_name,
-			email           = EXCLUDED.email,
-			phone           = EXCLUDED.phone,
-			notes           = EXCLUDED.notes,
-			business_role   = EXCLUDED.business_role,
-			organization_id = EXCLUDED.organization_id,
-			updated_at      = now()`
-	tag, err := db.Pool.Exec(ctx, q, args...)
+		WHERE user_id = $1 AND naam IS NOT NULL AND btrim(naam) <> ''`, userID)
 	if err != nil {
 		return 0, err
 	}
-	n := int(tag.RowsAffected())
-	if onlyID == nil {
-		// Prune mirrors whose LaventeCare contact no longer exists.
-		_, _ = db.Pool.Exec(ctx, `
-			DELETE FROM contacts
-			WHERE user_id = $1 AND source = 'laventecare' AND lc_contact_id IS NOT NULL
-			  AND lc_contact_id NOT IN (SELECT id FROM lc_contacts WHERE user_id = $1)`, userID)
+	// Group lc_contacts by person identity, preserving first-seen order.
+	groups := map[string][]lcMirrorRow{}
+	order := []string{}
+	for rows.Next() {
+		var r lcMirrorRow
+		if err := rows.Scan(&r.id, &r.companyID, &r.naam, &r.email, &r.telefoon, &r.rol,
+			&r.notities, &r.isPrimary, &r.updatedAt); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		key := laventeCareIdentityKey(r.naam, r.email)
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	n := 0
+	for _, key := range order {
+		group := groups[key]
+		best := pickPrimaryLC(group)
+
+		// Find-or-create the unified person by identity, then converge core fields.
+		var contactID uuid.UUID
+		err := tx.QueryRow(ctx, `
+			SELECT id FROM contacts
+			WHERE user_id = $1 AND source = 'laventecare' AND identity_key = $2
+			ORDER BY created_at ASC LIMIT 1`, userID, key).Scan(&contactID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO contacts
+					(user_id, display_name, relationship_types, email, phone, notes, business_role, organization_id, source, identity_key)
+				VALUES ($1, $2, ARRAY['business']::text[], NULLIF($3,''), NULLIF($4,''), NULLIF($5,''), NULLIF($6,''), $7, 'laventecare', $8)
+				RETURNING id`,
+				userID, best.naam, best.email, best.telefoon, best.notities, best.rol, best.companyID, key).Scan(&contactID); err != nil {
+				return 0, err
+			}
+		} else if err != nil {
+			return 0, err
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE contacts SET display_name = $2, email = NULLIF($3,''), phone = NULLIF($4,''),
+					notes = NULLIF($5,''), business_role = NULLIF($6,''), organization_id = $7, updated_at = now()
+				WHERE id = $1`,
+				contactID, best.naam, best.email, best.telefoon, best.notities, best.rol, best.companyID); err != nil {
+				return 0, err
+			}
+		}
+		n++
+
+		// Collapse any older duplicate mirror rows for this person into the canonical
+		// one, preserving their labels/dates/facts/channels/interactions/org links.
+		if err := collapseDuplicateContacts(ctx, tx, userID, key, contactID); err != nil {
+			return 0, err
+		}
+
+		// One org link per lc_contact (keyed on lc_contact_id).
+		for _, r := range group {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO contact_organizations (user_id, contact_id, organization_id, role, source, lc_contact_id)
+				VALUES ($1, $2, $3, NULLIF($4,''), 'laventecare', $5)
+				ON CONFLICT (lc_contact_id) WHERE lc_contact_id IS NOT NULL
+				DO UPDATE SET contact_id = EXCLUDED.contact_id, organization_id = EXCLUDED.organization_id,
+					role = EXCLUDED.role, updated_at = now()`,
+				userID, contactID, r.companyID, r.rol, r.id); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	// Prune links whose lc_contact vanished, then people with no LaventeCare link left.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM contact_organizations
+		WHERE user_id = $1 AND source = 'laventecare'
+		  AND lc_contact_id NOT IN (SELECT id FROM lc_contacts WHERE user_id = $1)`, userID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM contacts
+		WHERE user_id = $1 AND source = 'laventecare'
+		  AND id NOT IN (SELECT contact_id FROM contact_organizations WHERE user_id = $1 AND source = 'laventecare')`, userID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
 	}
 	return n, nil
 }
 
-// BackfillLaventeCareContacts syncs all of the user's LaventeCare business
-// contacts into the unified module (create + update + prune). Called by the
-// contacts-laventecare-sync cron.
+// pickPrimaryLC chooses the lc_contacts row whose fields represent the person:
+// the primary one, else the most recently updated.
+func pickPrimaryLC(group []lcMirrorRow) lcMirrorRow {
+	best := group[0]
+	for _, r := range group[1:] {
+		if r.isPrimary && !best.isPrimary {
+			best = r
+		} else if r.isPrimary == best.isPrimary && r.updatedAt.After(best.updatedAt) {
+			best = r
+		}
+	}
+	return best
+}
+
+// collapseDuplicateContacts folds any other LaventeCare contacts sharing this
+// identity into canonicalID (re-pointing their enrichment first), then deletes
+// them — so pre-migration duplicates converge to one person.
+func collapseDuplicateContacts(ctx context.Context, tx pgx.Tx, userID, identityKey string, canonicalID uuid.UUID) error {
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM contacts
+		WHERE user_id = $1 AND source = 'laventecare' AND identity_key = $2 AND id <> $3`,
+		userID, identityKey, canonicalID)
+	if err != nil {
+		return err
+	}
+	var dups []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		dups = append(dups, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, dup := range dups {
+		// Labels have a composite PK (contact_id, label_id) → merge with DO NOTHING.
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO contact_label_assignments (contact_id, label_id, user_id)
+			SELECT $2, label_id, user_id FROM contact_label_assignments WHERE contact_id = $1
+			ON CONFLICT DO NOTHING`, dup, canonicalID); err != nil {
+			return err
+		}
+		for _, table := range []string{"contact_important_dates", "contact_facts", "contact_channels", "contact_interactions", "contact_organizations"} {
+			if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET contact_id = $2 WHERE contact_id = $1`, table), dup, canonicalID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, dup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BackfillLaventeCareContacts reconciles all of the user's LaventeCare business
+// contacts into the unified module (dedup + org links + collapse + prune). Called
+// by the contacts-laventecare-sync cron.
 func (s *ContactStore) BackfillLaventeCareContacts(ctx context.Context, userID string) (int, error) {
-	return SyncLaventeCareContactMirror(ctx, s.db, userID, nil)
+	return SyncLaventeCareContactMirror(ctx, s.db, userID)
+}
+
+// ─── Organizations (person ↔ companies) ──────────────────────────────────────
+
+// ListOrganizations returns a contact's organization affiliations with company
+// names resolved from lc_companies.
+func (s *ContactStore) ListOrganizations(ctx context.Context, userID string, contactID uuid.UUID) ([]model.ContactOrganization, error) {
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT o.id, o.user_id, o.contact_id, o.organization_id, o.role, o.source, o.created_at, co.naam
+		FROM contact_organizations o
+		LEFT JOIN lc_companies co ON co.id = o.organization_id AND co.user_id = o.user_id
+		WHERE o.user_id = $1 AND o.contact_id = $2
+		ORDER BY co.naam ASC NULLS LAST, o.created_at ASC`, userID, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.ContactOrganization{}
+	for rows.Next() {
+		var o model.ContactOrganization
+		if err := rows.Scan(&o.ID, &o.UserID, &o.ContactID, &o.OrganizationID, &o.Role, &o.Source, &o.CreatedAt, &o.OrganizationName); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// hydrateOrganizations bulk-loads org affiliations for a slice of contacts in one
+// query (no N+1) and attaches them by contact id.
+func (s *ContactStore) hydrateOrganizations(ctx context.Context, userID string, contacts []model.Contact) error {
+	if len(contacts) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(contacts))
+	for i, c := range contacts {
+		ids[i] = c.ID
+	}
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT o.id, o.user_id, o.contact_id, o.organization_id, o.role, o.source, o.created_at, co.naam
+		FROM contact_organizations o
+		LEFT JOIN lc_companies co ON co.id = o.organization_id AND co.user_id = o.user_id
+		WHERE o.user_id = $1 AND o.contact_id = ANY($2)
+		ORDER BY co.naam ASC NULLS LAST, o.created_at ASC`, userID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byContact := map[uuid.UUID][]model.ContactOrganization{}
+	for rows.Next() {
+		var o model.ContactOrganization
+		if err := rows.Scan(&o.ID, &o.UserID, &o.ContactID, &o.OrganizationID, &o.Role, &o.Source, &o.CreatedAt, &o.OrganizationName); err != nil {
+			return err
+		}
+		byContact[o.ContactID] = append(byContact[o.ContactID], o)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range contacts {
+		contacts[i].Organizations = byContact[contacts[i].ID]
+	}
+	return nil
 }
