@@ -40,6 +40,25 @@ type Contact struct {
 	// Both hydrated by Get only (kept off the light List response).
 	Channels     []ContactChannel     `json:"channels,omitempty" db:"-"`
 	Interactions []ContactInteraction `json:"interactions,omitempty" db:"-"`
+	// Organizations are the (possibly multiple) companies a person is affiliated
+	// with. A LaventeCare contact who works with two customers is ONE contact here
+	// with two organization links (deduped by person identity). Hydrated by List+Get.
+	Organizations []ContactOrganization `json:"organizations,omitempty" db:"-"`
+}
+
+// ContactOrganization links a contact to an organization (soft ref to
+// lc_companies). A person can have several. For LaventeCare-sourced links,
+// lc_contact_id ties the affiliation back to its lc_contacts row so the sync can
+// upsert/prune it. OrganizationName is resolved from lc_companies for display.
+type ContactOrganization struct {
+	ID               uuid.UUID  `json:"id" db:"id"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	ContactID        uuid.UUID  `json:"contact_id" db:"contact_id"`
+	OrganizationID   *uuid.UUID `json:"organization_id" db:"organization_id"`
+	OrganizationName *string    `json:"organization_name" db:"-"`
+	Role             *string    `json:"role" db:"role"`
+	Source           string     `json:"source" db:"source"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 }
 
 // ContactChannel is an additional way to reach a contact — a second email, a work
