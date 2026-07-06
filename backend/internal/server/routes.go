@@ -261,6 +261,14 @@ func registerRoutes(
 
 			// Contacts / Relationships (unified module — PostgreSQL)
 			r.Route("/contacts", func(r chi.Router) {
+				// Label catalog (static /labels segment registered before /{id}).
+				r.Get("/labels", contactH.ListLabels)
+				r.With(authMw).Post("/labels", contactH.CreateLabel)
+				r.With(authMw).Patch("/labels/{labelID}", contactH.UpdateLabel)
+				r.With(authMw).Delete("/labels/{labelID}", contactH.DeleteLabel)
+				r.With(authMw).Post("/labels/{labelID}/merge", contactH.MergeLabels)
+				r.With(authMw).Post("/labels/{labelID}/bulk", contactH.BulkLabel)
+
 				r.Get("/", contactH.List)
 				r.Get("/{id}", contactH.Get)
 				r.With(authMw).Post("/", contactH.Create)
@@ -270,6 +278,9 @@ func registerRoutes(
 				r.With(authMw).Delete("/{id}/dates/{dateID}", contactH.DeleteDate)
 				r.With(authMw).Post("/{id}/facts", contactH.AddFact)
 				r.With(authMw).Delete("/{id}/facts/{factID}", contactH.DeleteFact)
+				r.With(authMw).Put("/{id}/labels", contactH.SetLabels)
+				r.With(authMw).Post("/{id}/labels", contactH.AssignLabel)
+				r.With(authMw).Delete("/{id}/labels/{labelID}", contactH.RemoveLabel)
 				r.With(authMw).Post("/{id}/whatsapp/import", contactH.WhatsAppImport)
 				r.Get("/{id}/whatsapp", contactH.WhatsAppList)
 				r.Get("/{id}/whatsapp/{convID}/messages", contactH.WhatsAppMessages)
