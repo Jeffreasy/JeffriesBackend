@@ -37,6 +37,7 @@ type HomeBotExecutor struct {
 	habitStore       *store.HabitStore
 	automationStore  *store.AutomationStore
 	laventeCareStore *store.LaventeCareStore
+	contactStore     *store.ContactStore
 	googleClient     *google.OAuthClient
 }
 
@@ -58,6 +59,7 @@ func NewHomeBotExecutorWithGoogle(pool *pgxpool.Pool, userID string, googleClien
 		habitStore:       store.NewHabitStore(db),
 		automationStore:  store.NewAutomationStore(db),
 		laventeCareStore: store.NewLaventeCareStore(db),
+		contactStore:     store.NewContactStore(db),
 		googleClient:     googleClient,
 	}
 }
@@ -3709,6 +3711,43 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			"actie":   actie,
 			"message": "Lampopdracht in de wachtrij gezet voor alle lampen.",
 		}, nil)
+
+	case "contactenOpvragen":
+		var args struct {
+			Limit int    `json:"limit"`
+			Query string `json:"query"`
+			Q     string `json:"q"`
+			Type  string `json:"type"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		contacts, err := e.contactStore.List(ctx, e.userID, store.ListContactsOptions{
+			Query:            firstNonEmpty(args.Query, args.Q),
+			RelationshipType: args.Type,
+			Limit:            clampToolLimit(args.Limit, 25, 50),
+		})
+		return e.jsonResponse(map[string]any{
+			"scope":       "contacten",
+			"count":       len(contacts),
+			"items":       contacts,
+			"instruction": "Dit zijn de relaties/contacten van de gebruiker (familie, vrienden, collega's, zakelijk). Gebruik notes en gekoppelde belangrijke datums voor context; verzin geen gegevens die hier niet staan.",
+		}, err)
+
+	case "belangrijkeDatumsOpvragen":
+		var args struct {
+			Days int `json:"days"`
+		}
+		if err := e.parseArgs(argsJSON, &args); err != nil {
+			return e.jsonResponse(nil, err)
+		}
+		dates, err := e.contactStore.UpcomingImportantDates(ctx, e.userID, clampToolLimit(args.Days, 30, 365))
+		return e.jsonResponse(map[string]any{
+			"scope":       "belangrijke datums",
+			"count":       len(dates),
+			"items":       dates,
+			"instruction": "Aankomende verjaardagen/jubilea, gesorteerd op days_until (0 = vandaag). turning_age is de leeftijd die iemand wordt als het geboortejaar bekend is.",
+		}, err)
 
 	default:
 		return fmt.Sprintf(`{"error": "Tool '%s' niet geïmplementeerd in Go."}`, toolName)

@@ -3,13 +3,25 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 )
+
+// amsterdamLoc pins reminder/birthday math to the Europe/Amsterdam calendar so a
+// date lands on the right day regardless of the server timezone.
+var amsterdamLoc = func() *time.Location {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}()
 
 // ContactStore is the data layer for the unified Contacts/Relationships module.
 type ContactStore struct{ db *DB }
@@ -380,4 +392,114 @@ func (s *ContactStore) assertOwns(ctx context.Context, userID string, contactID 
 		return pgx.ErrNoRows
 	}
 	return nil
+}
+
+// ─── Upcoming dates (reminders / AI) ─────────────────────────────────────────
+
+// UpcomingDate is a computed view of an important date's next occurrence.
+type UpcomingDate struct {
+	ContactID   uuid.UUID `json:"contact_id"`
+	ContactName string    `json:"contact_name"`
+	Kind        string    `json:"kind"`
+	Label       *string   `json:"label"`
+	Month       int       `json:"month"`
+	Day         int       `json:"day"`
+	NextDate    string    `json:"next_date"` // YYYY-MM-DD of the next occurrence
+	DaysUntil   int       `json:"days_until"`
+	TurningAge  *int      `json:"turning_age,omitempty"`
+}
+
+// UpcomingImportantDates returns important dates whose next occurrence falls
+// within `withinDays` days (Amsterdam calendar), soonest first. Recurring dates
+// roll to next year once this year's has passed; a non-recurring past date is
+// skipped. Archived contacts are excluded.
+func (s *ContactStore) UpcomingImportantDates(ctx context.Context, userID string, withinDays int) ([]UpcomingDate, error) {
+	if withinDays <= 0 {
+		withinDays = 30
+	}
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT d.contact_id, c.display_name, d.kind, d.label, d.month, d.day, d.year, d.recurring
+		FROM contact_important_dates d
+		JOIN contacts c ON c.id = d.contact_id AND c.user_id = d.user_id
+		WHERE d.user_id = $1 AND c.archived = false`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	now := time.Now().In(amsterdamLoc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, amsterdamLoc)
+	out := []UpcomingDate{}
+	for rows.Next() {
+		var (
+			contactID uuid.UUID
+			name      string
+			kind      string
+			label     *string
+			month     int
+			day       int
+			year      *int
+			recurring bool
+		)
+		if err := rows.Scan(&contactID, &name, &kind, &label, &month, &day, &year, &recurring); err != nil {
+			return nil, err
+		}
+		if month < 1 || month > 12 || day < 1 || day > 31 {
+			continue
+		}
+		next := nextOccurrence(today, month, day, recurring)
+		if next == nil {
+			continue
+		}
+		daysUntil := int(next.Sub(today).Hours()/24 + 0.5)
+		if daysUntil < 0 || daysUntil > withinDays {
+			continue
+		}
+		u := UpcomingDate{
+			ContactID:   contactID,
+			ContactName: name,
+			Kind:        kind,
+			Label:       label,
+			Month:       month,
+			Day:         day,
+			NextDate:    next.Format("2006-01-02"),
+			DaysUntil:   daysUntil,
+		}
+		if year != nil && kind == "birthday" && *year > 0 {
+			age := next.Year() - *year
+			u.TurningAge = &age
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DaysUntil < out[j].DaysUntil })
+	return out, nil
+}
+
+// nextOccurrence returns the next date on/after `today` for month/day. Recurring
+// dates roll to next year when this year's has passed; non-recurring past dates
+// return nil.
+func nextOccurrence(today time.Time, month, day int, recurring bool) *time.Time {
+	candidate := clampDate(today.Year(), month, day, today.Location())
+	if !candidate.Before(today) {
+		return &candidate
+	}
+	if !recurring {
+		return nil
+	}
+	next := clampDate(today.Year()+1, month, day, today.Location())
+	return &next
+}
+
+// clampDate builds a date, clamping an out-of-range day (e.g. Feb 29 in a common
+// year) down to the month's last valid day so it never rolls into the next month.
+func clampDate(year, month, day int, loc *time.Location) time.Time {
+	first := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, loc)
+	lastDay := first.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
 }

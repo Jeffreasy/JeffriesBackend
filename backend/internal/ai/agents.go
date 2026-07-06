@@ -50,6 +50,9 @@ var Policies = map[string]ToolPolicy{
 	"syncStatusOpvragen":      {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"automationsOverzicht":    {Agents: []string{"automations", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"contextBriefingOpvragen": {Agents: []string{"brain", "dashboard", "agenda", "email", "notes", "laventecare"}, Mutates: false, RequiresConfirmation: false},
+	// Contacten / Relaties (globale module) — read-only
+	"contactenOpvragen":         {Agents: []string{"brain", "dashboard", "agenda", "laventecare"}, Mutates: false, RequiresConfirmation: false},
+	"belangrijkeDatumsOpvragen": {Agents: []string{"brain", "dashboard", "agenda"}, Mutates: false, RequiresConfirmation: false},
 	// Email writes
 	"markeerGelezen":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"verwijderEmail":     {Agents: []string{"email", "brain"}, Mutates: true, RequiresConfirmation: true},

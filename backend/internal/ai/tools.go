@@ -944,6 +944,36 @@ var AllTools = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "contactenOpvragen",
+			Description: "Haalt contacten/relaties op uit de globale Contacten-module (familie, vrienden, collega's, zakelijk). Optioneel filteren op relatie-type of zoekterm op naam/e-mail/notitie.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"limit": {"type": "number", "description": "Aantal contacten (max 50)."},
+					"query": {"type": "string", "description": "Optionele zoekterm op naam, e-mail of notitie."},
+					"type": {"type": "string", "description": "Optioneel relatie-type: family, friend, colleague, business."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "belangrijkeDatumsOpvragen",
+			Description: "Haalt aankomende belangrijke datums van contacten op (verjaardagen, jubilea) binnen een venster, gesorteerd op eerstvolgende. Gebruik dit voor vragen als 'wie is er binnenkort jarig?'.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"days": {"type": "number", "description": "Vooruitkijk-venster in dagen (standaard 30, max 365)."}
+				},
+				"required": []
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "laventecareLeadsOpvragen",
 			Description: "Haalt recente LaventeCare leads op. Geef company_id mee als de vraag over een specifiek klantdossier gaat, anders krijg je leads van alle klanten door elkaar.",
 			Parameters: json.RawMessage(`{
