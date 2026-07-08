@@ -123,6 +123,18 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 			Interval: 3 * time.Hour,
 			RunFunc:  cronStaleContactsNudge(e, cfg),
 		})
+
+		s.Register(CronJob{
+			Name:     "telegram-daily-agenda-digest",
+			Interval: 15 * time.Minute,
+			RunFunc:  cronDailyAgendaDigest(e, cfg),
+		})
+
+		s.Register(CronJob{
+			Name:     "telegram-appointment-reminders",
+			Interval: 10 * time.Minute,
+			RunFunc:  cronAppointmentReminders(e, cfg),
+		})
 	}
 
 	// ── Contacts: mirror LaventeCare business contacts into the unified module ──
