@@ -90,12 +90,30 @@ func (s *NoteStore) List(ctx context.Context, userID string) ([]model.Note, erro
 	return s.ListPaged(ctx, userID, 0, 0, false)
 }
 
+// NoteListOptions controls pagination/payload size and optionally restricts the
+// result to an owned business context. ContextType by itself filters all notes
+// of that type; ContextID additionally validates ownership and matches one
+// specific object.
+type NoteListOptions struct {
+	Limit       int
+	Offset      int
+	Summary     bool
+	ContextType string
+	ContextID   string
+}
+
 // ListPaged returns notes for a user with optional pagination and a summary
 // mode that skips the (potentially large) inhoud column. limit/offset of 0 keep
 // the historical unlimited/full behaviour; summary=true returns inhoud as "".
 func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset int, summary bool) ([]model.Note, error) {
+	return s.ListWithOptions(ctx, userID, NoteListOptions{Limit: limit, Offset: offset, Summary: summary})
+}
+
+// ListWithOptions is the context-aware list implementation. ListPaged remains
+// as a backward-compatible wrapper for kiosk, Telegram and existing callers.
+func (s *NoteStore) ListWithOptions(ctx context.Context, userID string, opts NoteListOptions) ([]model.Note, error) {
 	cols := noteCols
-	if summary {
+	if opts.Summary {
 		// Same column list/order as noteCols, but with inhoud blanked (payloads
 		// stay small) and a trailing left(inhoud,80) preview so untitled notes
 		// still render a meaningful line on the kiosk instead of "Naamloze notitie".
@@ -105,20 +123,46 @@ func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset 
 	// win, then newest) so the kiosk's newest-N window doesn't truncate away the
 	// overdue heavyweights; full mode keeps the pinned-then-newest ordering.
 	order := "is_pinned DESC, gewijzigd DESC"
-	if summary {
+	if opts.Summary {
 		order = "is_pinned DESC, (deadline IS NULL), deadline ASC, gewijzigd DESC"
 	}
-	q := fmt.Sprintf(`
-		SELECT %s FROM notes WHERE user_id = $1
-		ORDER BY %s
-	`, cols, order)
+	q := fmt.Sprintf(`SELECT %s FROM notes WHERE user_id = $1`, cols)
 	args := []any{userID}
-	if limit > 0 {
-		args = append(args, limit)
+
+	contextType := strings.ToLower(strings.TrimSpace(opts.ContextType))
+	contextID := strings.TrimSpace(opts.ContextID)
+	if contextType == "" && contextID != "" {
+		return nil, fmt.Errorf("%w: contextType ontbreekt", ErrInvalidBusinessContext)
+	}
+	if contextType != "" {
+		spec, ok := businessContextSpecs[contextType]
+		if !ok {
+			return nil, fmt.Errorf("%w: onbekend type %q", ErrInvalidBusinessContext, contextType)
+		}
+		args = append(args, contextType)
+		q += fmt.Sprintf(" AND business_context_type = $%d", len(args))
+		if contextID != "" {
+			if !spec.requiresID {
+				return nil, fmt.Errorf("%w: %s accepteert geen id", ErrInvalidBusinessContext, contextType)
+			}
+			normalizedType, normalizedID, _, err := normalizeBusinessContext(ctx, s.db.Pool, userID, &contextType, &contextID, nil)
+			if err != nil {
+				return nil, err
+			}
+			// normalizedType is resolved from the same allowlist but assign it for
+			// completeness if future aliases are introduced.
+			args[len(args)-1] = *normalizedType
+			args = append(args, *normalizedID)
+			q += fmt.Sprintf(" AND business_context_id = $%d", len(args))
+		}
+	}
+	q += fmt.Sprintf(" ORDER BY %s", order)
+	if opts.Limit > 0 {
+		args = append(args, opts.Limit)
 		q += fmt.Sprintf(" LIMIT $%d", len(args))
 	}
-	if offset > 0 {
-		args = append(args, offset)
+	if opts.Offset > 0 {
+		args = append(args, opts.Offset)
 		q += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
 	rows, err := s.db.Pool.Query(ctx, q, args...)
@@ -131,7 +175,7 @@ func (s *NoteStore) ListPaged(ctx context.Context, userID string, limit, offset 
 		dest := []any{&n.ID, &n.UserID, &n.Titel, &n.Inhoud, &n.Tags, &n.Kleur,
 			&n.IsPinned, &n.IsArchived, &n.IsCompleted, &n.CompletedAt, &n.Deadline, &n.LinkedEventID, &n.Prioriteit,
 			&n.Symbol, &n.BusinessContextType, &n.BusinessContextID, &n.BusinessContextTitle, &n.TriageFlag, &n.Aangemaakt, &n.Gewijzigd}
-		if summary {
+		if opts.Summary {
 			dest = append(dest, &n.Preview)
 		}
 		err := row.Scan(dest...)
@@ -168,7 +212,25 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		n.Tags = []string{}
 	}
 
-	created, err := scanNote(s.db.Pool.QueryRow(ctx, fmt.Sprintf(`
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return model.Note{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if n.BusinessContextType != nil || n.BusinessContextID != nil || n.BusinessContextTitle != nil {
+		if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+			return model.Note{}, err
+		}
+	}
+	n.BusinessContextType, n.BusinessContextID, n.BusinessContextTitle, err = normalizeBusinessContext(
+		ctx, tx, userID, n.BusinessContextType, n.BusinessContextID, n.BusinessContextTitle,
+	)
+	if err != nil {
+		return model.Note{}, err
+	}
+
+	created, err := scanNote(tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO notes (id, user_id, titel, inhoud, tags, kleur, is_pinned, is_archived, is_completed, completed_at,
 			deadline, linked_event_id, prioriteit, symbol, business_context_type, business_context_id,
 			business_context_title, triage_flag, aangemaakt, gewijzigd)
@@ -180,6 +242,9 @@ func (s *NoteStore) Create(ctx context.Context, userID string, n model.Note) (mo
 		n.Symbol, n.BusinessContextType, n.BusinessContextID, n.BusinessContextTitle, n.TriageFlag, n.Aangemaakt, n.Gewijzigd,
 	))
 	if err != nil {
+		return created, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return created, err
 	}
 	if err := s.SyncLinksFromContent(ctx, userID, created.ID, created.Inhoud); err != nil {
@@ -263,6 +328,17 @@ func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fie
 		return model.Note{}, err
 	}
 	defer tx.Rollback(ctx)
+	if hasBusinessContextFields(fields) {
+		lockUserID := userID
+		if lockUserID == "" {
+			if err := tx.QueryRow(ctx, `SELECT user_id FROM notes WHERE id = $1`, id).Scan(&lockUserID); err != nil {
+				return model.Note{}, err
+			}
+		}
+		if err := lockBusinessContextGraph(ctx, tx, lockUserID); err != nil {
+			return model.Note{}, err
+		}
+	}
 
 	if expected != nil || shouldCheckNoteRevision(fields) {
 		selectWhere := "id = $1"
@@ -279,6 +355,23 @@ func (s *NoteStore) update(ctx context.Context, id uuid.UUID, userID string, fie
 		}
 		if expected != nil && !sameOptionalTime(&current.Gewijzigd, expected) {
 			return current, ErrNoteConflict
+		}
+		if hasBusinessContextFields(fields) {
+			requestedType, requestedID, requestedTitle := mergedBusinessContext(
+				current.BusinessContextType, current.BusinessContextID, current.BusinessContextTitle, fields,
+			)
+			resolvedType, resolvedID, resolvedTitle, err := normalizeBusinessContext(
+				ctx, tx, current.UserID, requestedType, requestedID, requestedTitle,
+			)
+			if err != nil {
+				return current, err
+			}
+			// A context is one value even though it occupies three columns. Always
+			// write the complete canonical triplet so partial patches cannot leave
+			// a mixed type/id/title behind.
+			fields["business_context_type"] = resolvedType
+			fields["business_context_id"] = resolvedID
+			fields["business_context_title"] = resolvedTitle
 		}
 		if shouldCheckNoteRevision(fields) && noteRevisionFieldsChanged(current, fields) {
 			if err := insertNoteRevision(ctx, tx, current); err != nil {
@@ -557,6 +650,9 @@ func (s *NoteStore) RestoreRevision(ctx context.Context, userID string, noteID, 
 		return model.Note{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+		return model.Note{}, err
+	}
 
 	rev, err := scanNoteRevision(tx.QueryRow(ctx, fmt.Sprintf(`
 		SELECT %s
@@ -577,6 +673,20 @@ func (s *NoteStore) RestoreRevision(ctx context.Context, userID string, noteID, 
 		return model.Note{}, err
 	}
 
+	// Re-resolve historical context before restoring it. Lifecycle operations
+	// keep revisions in sync, but this also sanitizes legacy revisions that may
+	// still point at a deleted or no-longer-owned object.
+	restoredContextType, restoredContextID, restoredContextTitle, contextErr := normalizeBusinessContext(
+		ctx, tx, userID, rev.BusinessContextType, rev.BusinessContextID, rev.BusinessContextTitle,
+	)
+	if contextErr != nil {
+		if errors.Is(contextErr, ErrInvalidBusinessContext) || errors.Is(contextErr, ErrBusinessContextNotFound) {
+			restoredContextType, restoredContextID, restoredContextTitle = nil, nil, nil
+		} else {
+			return model.Note{}, contextErr
+		}
+	}
+
 	updated, err := scanNote(tx.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE notes
 		   SET titel = $1,
@@ -594,8 +704,8 @@ func (s *NoteStore) RestoreRevision(ctx context.Context, userID string, noteID, 
 		 WHERE id = $13 AND user_id = $14
 		RETURNING %s
 	`, noteCols), rev.Titel, rev.Inhoud, rev.Tags, rev.Kleur, rev.Deadline,
-		rev.LinkedEventID, rev.Prioriteit, rev.Symbol, rev.BusinessContextType, rev.BusinessContextID,
-		rev.BusinessContextTitle, time.Now(), noteID, userID))
+		rev.LinkedEventID, rev.Prioriteit, rev.Symbol, restoredContextType, restoredContextID,
+		restoredContextTitle, time.Now(), noteID, userID))
 	if err != nil {
 		return updated, err
 	}
@@ -652,16 +762,17 @@ func (s *NoteStore) Search(ctx context.Context, userID, query string, limit int)
 		WHERE user_id = $1
 		  AND NOT is_archived
 		  AND (
-			  to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud) @@ q.tsq
+			  to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud || ' ' || COALESCE(business_context_title,'')) @@ q.tsq
 			  OR lower(COALESCE(prioriteit,'')) LIKE q.likeq ESCAPE '\'
 			  OR lower(COALESCE(symbol,'')) LIKE q.likeq ESCAPE '\'
+			  OR lower(COALESCE(business_context_title,'')) LIKE q.likeq ESCAPE '\'
 			  OR EXISTS (
 				  SELECT 1
 				  FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag
 				  WHERE lower(tag) LIKE q.likeq ESCAPE '\'
 			  )
 		  )
-		ORDER BY ts_rank(to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud), q.tsq) DESC,
+		ORDER BY ts_rank(to_tsvector('dutch', COALESCE(titel,'') || ' ' || inhoud || ' ' || COALESCE(business_context_title,'')), q.tsq) DESC,
 		         is_pinned DESC, gewijzigd DESC
 		LIMIT $3
 	`, noteCols), userID, query, limit)

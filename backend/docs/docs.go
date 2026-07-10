@@ -903,6 +903,34 @@ const docTemplate = `{
                 }
             }
         },
+        "/focus/summary": {
+            "get": {
+                "description": "Returns a compact read-only cross-domain status snapshot for the tablet focus dashboard",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Focus"
+                ],
+                "summary": "Get Focus summary",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handler.FocusSummary"
+                        }
+                    }
+                }
+            }
+        },
         "/habits": {
             "get": {
                 "description": "Returns all active habits for the user",
@@ -1436,7 +1464,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Logs a negative incident for a habit",
+                "description": "Logs a negative incident for a habit, optionally on a past date (max 30 days back)",
                 "consumes": [
                     "application/json"
                 ],
@@ -1463,7 +1491,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Incident details (trigger, notitie)",
+                        "description": "Incident details (trigger, notitie, datum YYYY-MM-DD)",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -1482,7 +1510,57 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "invalid JSON or id",
+                        "description": "invalid JSON, id or datum",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Removes the incident log for a habit on a date (default today, Amsterdam)",
+                "tags": [
+                    "Habits"
+                ],
+                "summary": "Delete habit incident",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Habit ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Date (YYYY-MM-DD, default today)",
+                        "name": "datum",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "invalid id or datum",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "no incident logged on that date",
                         "schema": {
                             "type": "string"
                         }
@@ -1654,6 +1732,12 @@ const docTemplate = `{
                         "description": "Limit count",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1664,6 +1748,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/model.LCActionItem"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -1794,6 +1884,379 @@ const docTemplate = `{
                 }
             }
         },
+        "/laventecare/activity": {
+            "get": {
+                "description": "Returns recent LaventeCare customer dossier activity events",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List Activity Events",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCActivityEvent"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Logs a customer contact moment, note, decision or project update in the customer dossier timeline",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Activity Event",
+                "parameters": [
+                    {
+                        "description": "Activity Event",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCActivityEventCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCActivityEvent"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing required field",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Related customer object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/ai/dossier-advice": {
+            "get": {
+                "description": "Returns read-only dossier completeness, document recommendations and evidence for a customer, lead, project or workstream.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Get LaventeCare Dossier Advice",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Lead ID (UUID)",
+                        "name": "leadId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID)",
+                        "name": "projectId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workstream ID (UUID)",
+                        "name": "workstreamId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Free text context",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 8,
+                        "description": "Recommendation limit",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCDossierAdvice"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid query parameter",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/billing": {
+            "get": {
+                "description": "Returns the commercial LaventeCare workflow: quotes, hours and invoices",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Get LaventeCare Billing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 40,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCBilling"
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/changes": {
+            "get": {
+                "description": "Returns open change requests",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List LaventeCare Change Requests",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCChangeRequest"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a scope/planning/budget change request",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create LaventeCare Change Request",
+                "parameters": [
+                    {
+                        "description": "Change request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCChangeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCChangeRequest"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/changes/{id}/status": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update LaventeCare Change Request Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Change request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/laventecare/cockpit": {
             "get": {
                 "description": "Returns the aggregated CRM dashboard data",
@@ -1809,6 +2272,535 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/model.LCCockpit"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/companies": {
+            "get": {
+                "description": "Returns LaventeCare customer/company dossiers",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List Companies",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Search by name or website",
+                        "name": "q",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCCompany"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a reusable customer/company dossier",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Company",
+                "parameters": [
+                    {
+                        "description": "Company Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCCompanyCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCCompany"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing name",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/companies/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Deletes a customer, cascading their contacts, access credentials and activity timeline",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Delete Company",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status deleted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Company not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates a reusable customer/company dossier",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Company",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Company Update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCCompanyUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Company not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/contacts": {
+            "get": {
+                "description": "Returns contacts, optionally filtered by company",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List Contacts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCContact"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a reusable contact for a customer/company",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Contact",
+                "parameters": [
+                    {
+                        "description": "Contact Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCContactCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCContact"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing name",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Company not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/contacts/{id}": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates a reusable contact",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Contact",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Contact ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Contact Update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCContactUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Contact not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/decisions": {
+            "get": {
+                "description": "Returns recent decision log records",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List LaventeCare Decisions",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCDecision"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a decision log record for governance/audit trail",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create LaventeCare Decision",
+                "parameters": [
+                    {
+                        "description": "Decision",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCDecision"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCDecision"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/decisions/{id}/status": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update LaventeCare Decision Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Decision ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -1903,6 +2895,410 @@ const docTemplate = `{
                 }
             }
         },
+        "/laventecare/dossier-documents": {
+            "get": {
+                "description": "Returns generated PDF dossier document history, optionally filtered by lead or project",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List Dossier Documents",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Lead ID (UUID)",
+                        "name": "leadId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID)",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCDossierDocument"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid query parameter",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Logs a generated PDF URL against a lead or project dossier",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Dossier Document",
+                "parameters": [
+                    {
+                        "description": "Dossier Document Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCDossierDocumentCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCDossierDocument"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing required field",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Lead or project not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/invoices": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates an invoice from manual lines or selected time entries",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Invoice",
+                "parameters": [
+                    {
+                        "description": "Invoice",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoiceCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoice"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing lines",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Related customer object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/invoices/{id}/document": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Generates a print-ready invoice document and UBL XML export",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Get Invoice Document",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "json, html or ubl",
+                        "name": "format",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoiceDocument"
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig factuur-id.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Invoice not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/invoices/{id}/payment-refresh": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Fetches the linked bunq RequestInquiry and updates local invoice payment metadata",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Refresh Invoice Payment Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoicePaymentRefresh"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid invoice or bunq configuration",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Invoice not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "502": {
+                        "description": "bunq error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/invoices/{id}/payment-request": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a pending confirmation action that creates a bunq RequestInquiry after approval",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Queue Invoice Payment Request",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "pending action",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid invoice",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Invoice not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/invoices/{id}/status": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates invoice status and optional bunq/payment metadata",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Invoice Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Invoice Status",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoiceStatusUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Invoice not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/laventecare/leads": {
             "get": {
                 "description": "Returns all active CRM leads",
@@ -1920,6 +3316,12 @@ const docTemplate = `{
                         "description": "Limit count",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1930,6 +3332,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/model.LCLead"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -2121,6 +3529,171 @@ const docTemplate = `{
                 }
             }
         },
+        "/laventecare/mailbox": {
+            "get": {
+                "description": "Returns templated mail workspace and outbox history",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Get LaventeCare Mailbox",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCMailbox"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/mailbox/ai-suggest": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Builds a safe draft context from LaventeCare, agenda, rooster and notes. It does not create or send mail.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Suggest LaventeCare mail content",
+                "parameters": [
+                    {
+                        "description": "Mail AI suggestion request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCMailAISuggestionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCMailAISuggestion"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Template or context object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/mailbox/inbox-sync": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Sync inbound LaventeCare mail",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/mailbox/send-template": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Renders a LaventeCare mail template with customer context. If send=true, sends through Microsoft Graph.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create or send LaventeCare templated mail",
+                "parameters": [
+                    {
+                        "description": "Mail send request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCMailSendRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCMailOutboxItem"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Template or related customer object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Mail provider not configured",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/laventecare/projects": {
             "get": {
                 "description": "Returns all CRM projects",
@@ -2138,6 +3711,12 @@ const docTemplate = `{
                         "description": "Limit count",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2148,6 +3727,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/model.LCProject"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -2275,6 +3860,185 @@ const docTemplate = `{
                 }
             }
         },
+        "/laventecare/quotes": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a quote draft that can later become an invoice",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create LaventeCare Quote",
+                "parameters": [
+                    {
+                        "description": "Quote",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCQuoteCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCQuote"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Related customer object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/quotes/{id}/invoice": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Converts an accepted quote to one invoice draft and returns an existing active invoice if it was already converted",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Invoice From Quote",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Quote ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCInvoice"
+                        }
+                    },
+                    "400": {
+                        "description": "Quote is not accepted or has no lines",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Quote not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/quotes/{id}/status": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates a quote status such as verzonden or geaccepteerd",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Quote Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Quote ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Quote not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/laventecare/signals/convert-lead": {
             "post": {
                 "security": [
@@ -2314,6 +4078,570 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/sla-incidents": {
+            "get": {
+                "description": "Returns open SLA/support incidents",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List LaventeCare SLA Incidents",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCSlaIncident"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates an incident for support/SLA tracking",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create LaventeCare SLA Incident",
+                "parameters": [
+                    {
+                        "description": "SLA incident",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCSlaIncident"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/sla-incidents/{id}/status": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update LaventeCare SLA Incident Status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Incident ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/time-entries": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Logs billable or non-billable work time for a customer/project/workstream",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Time Entry",
+                "parameters": [
+                    {
+                        "description": "Time Entry",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCTimeEntryCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCTimeEntry"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Related customer object not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/time-entries/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Deletes an uninvoiced time entry",
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Delete Time Entry",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Time Entry ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Invalid id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Time entry not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Time entry already invoiced",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Edits description, minutes or status (open/afgeschreven) of an uninvoiced time entry",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Time Entry",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Time Entry ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Time Entry Update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCTimeEntryUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCTimeEntry"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or values",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Time entry not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Time entry already invoiced",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/workstreams": {
+            "get": {
+                "description": "Returns LaventeCare opdrachten for small and medium workstreams",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "List Workstreams",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Limit count",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include closed/completed workstreams",
+                        "name": "includeClosed",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Company ID (UUID)",
+                        "name": "companyId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LCWorkstream"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Ongeldig klant-id.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates a LaventeCare opdracht for flexible small/medium engagements",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Create Workstream",
+                "parameters": [
+                    {
+                        "description": "Workstream Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCWorkstreamCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCWorkstream"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing title",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/workstreams/{id}": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Modifies a LaventeCare opdracht",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Update Workstream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workstream ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Updated Workstream Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCWorkstreamUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Workstream not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/laventecare/workstreams/{id}/convert-project": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Converts a flexible opdracht into a full delivery project",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LaventeCare"
+                ],
+                "summary": "Convert Workstream to Project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workstream ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Conversion Details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LCConvertWorkstreamToProject"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.LCProject"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Workstream not found",
                         "schema": {
                             "type": "string"
                         }
@@ -2424,7 +4752,7 @@ const docTemplate = `{
         },
         "/notes": {
             "get": {
-                "description": "Returns all notes for the user",
+                "description": "Returns notes for the user; supports optional limit/offset and fields=summary",
                 "produces": [
                     "application/json"
                 ],
@@ -2439,6 +4767,36 @@ const docTemplate = `{
                         "name": "userId",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max number of notes (default unlimited)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Offset for pagination",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Set to 'summary' to omit inhoud",
+                        "name": "fields",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Business-context type (for example contact)",
+                        "name": "contextType",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Specific owned business-context UUID",
+                        "name": "contextId",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3899,8 +6257,17 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "activated / failed device counts",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
                     "204": {
-                        "description": "No Content"
+                        "description": "No Content (scene has no actions or commands were queued)"
                     },
                     "400": {
                         "description": "Invalid scene ID",
@@ -3919,13 +6286,19 @@ const docTemplate = `{
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    "502": {
+                        "description": "No device responded",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             }
         },
         "/schedule": {
             "get": {
-                "description": "Returns all schedule events for the user",
+                "description": "Returns schedule events for the user, optionally bounded by from/to (YYYY-MM-DD)",
                 "produces": [
                     "application/json"
                 ],
@@ -3940,6 +6313,18 @@ const docTemplate = `{
                         "name": "userId",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD)",
+                        "name": "to",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3951,6 +6336,44 @@ const docTemplate = `{
                                 "$ref": "#/definitions/model.Schedule"
                             }
                         }
+                    },
+                    "400": {
+                        "description": "userId verplicht",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Deletes all schedule rows and import metadata for the user",
+                "tags": [
+                    "Schedule"
+                ],
+                "summary": "Clear schedule",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
                     },
                     "400": {
                         "description": "userId verplicht",
@@ -4112,37 +6535,22 @@ const docTemplate = `{
                 }
             }
         },
-        "/settings/backup": {
+        "/settings/ai/diagnostics": {
             "get": {
-                "description": "Generates a JSON backup of all user data",
+                "description": "Returns Grok/Groq connectivity status and HomeBot tool capabilities without exposing secrets.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Settings"
                 ],
-                "summary": "Export user data",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "User ID",
-                        "name": "userId",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
+                "summary": "Get AI diagnostics",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "userId required",
-                        "schema": {
-                            "type": "string"
                         }
                     }
                 }
@@ -4248,17 +6656,29 @@ const docTemplate = `{
                 "security": [
                     {
                         "ApiKeyAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
                     }
                 ],
                 "description": "Triggers a manual sync of Gmail messages",
                 "produces": [
+                    "application/json",
                     "application/json"
                 ],
                 "tags": [
+                    "Sync",
                     "Sync"
                 ],
-                "summary": "Sync Gmail",
+                "summary": "Trigger Todoist sync",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "User ID",
@@ -4272,7 +6692,9 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
                         }
                     },
                     "400": {
@@ -4300,6 +6722,61 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/sync/todoist": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Triggers a manual sync of Gmail messages",
+                "produces": [
+                    "application/json",
+                    "application/json"
+                ],
+                "tags": [
+                    "Sync",
+                    "Sync"
+                ],
+                "summary": "Trigger Todoist sync",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userId",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "userId required",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -4603,6 +7080,221 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "handler.FocusAttention": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "href": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handler.FocusBusinessStatus": {
+            "type": "object",
+            "properties": {
+                "activeLeads": {
+                    "type": "integer"
+                },
+                "activeProjects": {
+                    "type": "integer"
+                },
+                "activeWorkstreams": {
+                    "type": "integer"
+                },
+                "openActions": {
+                    "type": "integer"
+                },
+                "openInvoices": {
+                    "type": "integer"
+                },
+                "openQuotes": {
+                    "type": "integer"
+                },
+                "outstandingCents": {
+                    "type": "integer"
+                },
+                "overdueActions": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handler.FocusCounts": {
+            "type": "object",
+            "properties": {
+                "habitsActive": {
+                    "type": "integer"
+                },
+                "habitsCompleted": {
+                    "type": "integer"
+                },
+                "habitsTodayDue": {
+                    "type": "integer"
+                },
+                "notesActive": {
+                    "type": "integer"
+                },
+                "notesDueToday": {
+                    "type": "integer"
+                },
+                "notesOverdue": {
+                    "type": "integer"
+                },
+                "notesPinned": {
+                    "type": "integer"
+                },
+                "notesTriage": {
+                    "type": "integer"
+                },
+                "personalPending": {
+                    "type": "integer"
+                },
+                "personalUpcoming": {
+                    "type": "integer"
+                },
+                "scheduleTotal": {
+                    "type": "integer"
+                },
+                "scheduleUpcoming": {
+                    "type": "integer"
+                },
+                "unreadEmails": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handler.FocusHealth": {
+            "type": "object",
+            "properties": {
+                "bridgeLastSeenAt": {
+                    "type": "string"
+                },
+                "bridgeOnline": {
+                    "type": "boolean"
+                },
+                "bridgeStatus": {
+                    "type": "string"
+                },
+                "commandsFailed": {
+                    "type": "integer"
+                },
+                "commandsPending": {
+                    "type": "integer"
+                },
+                "commandsProcessing": {
+                    "type": "integer"
+                },
+                "devicesOffline": {
+                    "type": "integer"
+                },
+                "devicesOn": {
+                    "type": "integer"
+                },
+                "devicesOnline": {
+                    "type": "integer"
+                },
+                "devicesTotal": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handler.FocusSummary": {
+            "type": "object",
+            "properties": {
+                "attention": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handler.FocusAttention"
+                    }
+                },
+                "business": {
+                    "$ref": "#/definitions/handler.FocusBusinessStatus"
+                },
+                "counts": {
+                    "$ref": "#/definitions/handler.FocusCounts"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "generatedAt": {
+                    "type": "string"
+                },
+                "health": {
+                    "$ref": "#/definitions/handler.FocusHealth"
+                },
+                "period": {
+                    "type": "string"
+                },
+                "sync": {
+                    "$ref": "#/definitions/handler.FocusSyncSummary"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "userId": {
+                    "type": "string"
+                }
+            }
+        },
+        "handler.FocusSyncSummary": {
+            "type": "object",
+            "properties": {
+                "gmail": {
+                    "$ref": "#/definitions/handler.FocusSyncTarget"
+                },
+                "personal": {
+                    "$ref": "#/definitions/handler.FocusSyncTarget"
+                },
+                "schedule": {
+                    "$ref": "#/definitions/handler.FocusSyncTarget"
+                }
+            }
+        },
+        "handler.FocusSyncTarget": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "handler.LoonstrokenImportRequest": {
             "type": "object",
             "properties": {
@@ -4628,6 +7320,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "total": {
+                    "type": "integer"
+                },
+                "updated": {
                     "type": "integer"
                 }
             }
@@ -4669,6 +7364,15 @@ const docTemplate = `{
         "handler.noteCreateBody": {
             "type": "object",
             "properties": {
+                "businessContextId": {
+                    "type": "string"
+                },
+                "businessContextTitle": {
+                    "type": "string"
+                },
+                "businessContextType": {
+                    "type": "string"
+                },
                 "deadline": {
                     "type": "string"
                 },
@@ -4701,7 +7405,20 @@ const docTemplate = `{
         "handler.noteUpdateBody": {
             "type": "object",
             "properties": {
+                "businessContextId": {
+                    "type": "string"
+                },
+                "businessContextTitle": {
+                    "type": "string"
+                },
+                "businessContextType": {
+                    "type": "string"
+                },
                 "deadline": {
+                    "type": "string"
+                },
+                "expectedGewijzigd": {
+                    "description": "ExpectedGewijzigd, when set, enables optimistic-concurrency: the update is\nrejected (409) if the note was changed since this timestamp. Sent by the\ncontent-overwriting surfaces (editor save, card checkbox toggle).",
                     "type": "string"
                 },
                 "inhoud": {
@@ -5070,6 +7787,92 @@ const docTemplate = `{
                 }
             }
         },
+        "model.LCAccessCredential": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "contact_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "login_url": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "owner_contact": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "secret_configured": {
+                    "type": "boolean"
+                },
+                "secret_hint": {
+                    "type": "string"
+                },
+                "secret_label": {
+                    "type": "string"
+                },
+                "sharing_policy": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                },
+                "workstream_title": {
+                    "type": "string"
+                }
+            }
+        },
         "model.LCActionCreate": {
             "type": "object",
             "properties": {
@@ -5079,10 +7882,19 @@ const docTemplate = `{
                 "due_date": {
                     "type": "string"
                 },
+                "due_time": {
+                    "type": "string"
+                },
+                "linked_company_id": {
+                    "type": "string"
+                },
                 "linked_lead_id": {
                     "type": "string"
                 },
                 "linked_project_id": {
+                    "type": "string"
+                },
+                "linked_workstream_id": {
                     "type": "string"
                 },
                 "priority": {
@@ -5108,13 +7920,26 @@ const docTemplate = `{
                 "action_type": {
                     "type": "string"
                 },
+                "company_name": {
+                    "description": "Join-only display fields (not persisted on lc_action_items itself).",
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
                 "due_date": {
                     "type": "string"
                 },
+                "due_time": {
+                    "type": "string"
+                },
                 "id": {
+                    "type": "string"
+                },
+                "lead_title": {
+                    "type": "string"
+                },
+                "linked_company_id": {
                     "type": "string"
                 },
                 "linked_lead_id": {
@@ -5123,10 +7948,25 @@ const docTemplate = `{
                 "linked_project_id": {
                     "type": "string"
                 },
+                "linked_workstream_id": {
+                    "type": "string"
+                },
                 "priority": {
                     "type": "string"
                 },
+                "project_name": {
+                    "type": "string"
+                },
                 "source": {
+                    "type": "string"
+                },
+                "source_activity_at": {
+                    "type": "string"
+                },
+                "source_activity_id": {
+                    "type": "string"
+                },
+                "source_activity_title": {
                     "type": "string"
                 },
                 "source_id": {
@@ -5146,6 +7986,194 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                },
+                "workstream_title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCActivityEvent": {
+            "type": "object",
+            "properties": {
+                "action_item_id": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "contact_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "linked_action_status": {
+                    "type": "string"
+                },
+                "linked_action_title": {
+                    "type": "string"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                },
+                "workstream_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCActivityEventCreate": {
+            "type": "object",
+            "properties": {
+                "action_item_id": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCBilling": {
+            "type": "object",
+            "properties": {
+                "invoiceLines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCInvoiceLine"
+                    }
+                },
+                "invoices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCInvoice"
+                    }
+                },
+                "quoteLines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCQuoteLine"
+                    }
+                },
+                "quotes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCQuote"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/model.LCBillingSummary"
+                },
+                "timeEntries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCTimeEntry"
+                    }
+                }
+            }
+        },
+        "model.LCBillingSummary": {
+            "type": "object",
+            "properties": {
+                "billableMinutes": {
+                    "type": "integer"
+                },
+                "bunqReady": {
+                    "type": "boolean"
+                },
+                "defaultProvider": {
+                    "type": "string"
+                },
+                "invoices": {
+                    "type": "integer"
+                },
+                "nextStepDescription": {
+                    "type": "string"
+                },
+                "openInvoices": {
+                    "type": "integer"
+                },
+                "openQuotes": {
+                    "type": "integer"
+                },
+                "outstandingCents": {
+                    "type": "integer"
+                },
+                "paidCents": {
+                    "type": "integer"
+                },
+                "quotes": {
+                    "type": "integer"
+                },
+                "timeEntries": {
+                    "type": "integer"
+                },
+                "uninvoicedMinutes": {
+                    "type": "integer"
                 }
             }
         },
@@ -5216,6 +8244,12 @@ const docTemplate = `{
         "model.LCCockpit": {
             "type": "object",
             "properties": {
+                "accessCredentials": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCAccessCredential"
+                    }
+                },
                 "actionItems": {
                     "type": "array",
                     "items": {
@@ -5234,10 +8268,34 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.LCProject"
                     }
                 },
+                "activeWorkstreams": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCWorkstream"
+                    }
+                },
+                "activityEvents": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCActivityEvent"
+                    }
+                },
                 "businessSignals": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/model.LCBusinessSignal"
+                    }
+                },
+                "companies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCCompany"
+                    }
+                },
+                "contacts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCContact"
                     }
                 },
                 "documentCatalog": {
@@ -5246,11 +8304,20 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.LCDocument"
                     }
                 },
+                "dossierDocuments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCDossierDocument"
+                    }
+                },
                 "followUps": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/model.LCFollowUpSignal"
                     }
+                },
+                "mailbox": {
+                    "$ref": "#/definitions/model.LCMailboxSummary"
                 },
                 "openChanges": {
                     "type": "array",
@@ -5278,6 +8345,9 @@ const docTemplate = `{
         "model.LCCockpitSummary": {
             "type": "object",
             "properties": {
+                "accessCredentials": {
+                    "type": "integer"
+                },
                 "actionItems": {
                     "type": "integer"
                 },
@@ -5287,7 +8357,19 @@ const docTemplate = `{
                 "activeProjects": {
                     "type": "integer"
                 },
+                "activeWorkstreams": {
+                    "type": "integer"
+                },
+                "activityEvents": {
+                    "type": "integer"
+                },
                 "businessSignals": {
+                    "type": "integer"
+                },
+                "companies": {
+                    "type": "integer"
+                },
+                "contacts": {
                     "type": "integer"
                 },
                 "decisions": {
@@ -5299,10 +8381,22 @@ const docTemplate = `{
                 "documentsSeeded": {
                     "type": "boolean"
                 },
+                "dossierDocuments": {
+                    "type": "integer"
+                },
                 "followUps": {
                     "type": "integer"
                 },
                 "leads": {
+                    "type": "integer"
+                },
+                "mailConfigured": {
+                    "type": "boolean"
+                },
+                "mailOutbox": {
+                    "type": "integer"
+                },
+                "mailTemplates": {
                     "type": "integer"
                 },
                 "openChanges": {
@@ -5313,6 +8407,351 @@ const docTemplate = `{
                 },
                 "projects": {
                     "type": "integer"
+                },
+                "workstreams": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCCompany": {
+            "type": "object",
+            "properties": {
+                "actionItems": {
+                    "type": "integer"
+                },
+                "billing_address": {
+                    "type": "string"
+                },
+                "billing_email": {
+                    "type": "string"
+                },
+                "billing_reference": {
+                    "type": "string"
+                },
+                "contacts": {
+                    "type": "integer"
+                },
+                "contract_status": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "data_processing_status": {
+                    "type": "string"
+                },
+                "default_login_url": {
+                    "type": "string"
+                },
+                "dossierDocuments": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kvk_number": {
+                    "type": "string"
+                },
+                "laatste_contact": {
+                    "type": "string"
+                },
+                "leads": {
+                    "type": "integer"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "onboarding_status": {
+                    "type": "string"
+                },
+                "payment_terms_days": {
+                    "type": "integer"
+                },
+                "portal_url": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "projects": {
+                    "type": "integer"
+                },
+                "relatie_type": {
+                    "type": "string"
+                },
+                "sector": {
+                    "type": "string"
+                },
+                "service_level": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "vat_number": {
+                    "type": "string"
+                },
+                "volgende_actie": {
+                    "type": "string"
+                },
+                "website": {
+                    "type": "string"
+                },
+                "workstreams": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCCompanyCreate": {
+            "type": "object",
+            "properties": {
+                "billing_address": {
+                    "type": "string"
+                },
+                "billing_email": {
+                    "type": "string"
+                },
+                "billing_reference": {
+                    "type": "string"
+                },
+                "contract_status": {
+                    "type": "string"
+                },
+                "data_processing_status": {
+                    "type": "string"
+                },
+                "default_login_url": {
+                    "type": "string"
+                },
+                "kvk_number": {
+                    "type": "string"
+                },
+                "laatste_contact": {
+                    "type": "string"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "onboarding_status": {
+                    "type": "string"
+                },
+                "payment_terms_days": {
+                    "type": "integer"
+                },
+                "portal_url": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "relatie_type": {
+                    "type": "string"
+                },
+                "sector": {
+                    "type": "string"
+                },
+                "service_level": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "vat_number": {
+                    "type": "string"
+                },
+                "volgende_actie": {
+                    "type": "string"
+                },
+                "website": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCCompanyUpdate": {
+            "type": "object",
+            "properties": {
+                "billing_address": {
+                    "type": "string"
+                },
+                "billing_email": {
+                    "type": "string"
+                },
+                "billing_reference": {
+                    "type": "string"
+                },
+                "contract_status": {
+                    "type": "string"
+                },
+                "data_processing_status": {
+                    "type": "string"
+                },
+                "default_login_url": {
+                    "type": "string"
+                },
+                "kvk_number": {
+                    "type": "string"
+                },
+                "laatste_contact": {
+                    "type": "string"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "onboarding_status": {
+                    "type": "string"
+                },
+                "payment_terms_days": {
+                    "type": "integer"
+                },
+                "portal_url": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "relatie_type": {
+                    "type": "string"
+                },
+                "sector": {
+                    "type": "string"
+                },
+                "service_level": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "vat_number": {
+                    "type": "string"
+                },
+                "volgende_actie": {
+                    "type": "string"
+                },
+                "website": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCContact": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "decision_role": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_primary": {
+                    "type": "boolean"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "rol": {
+                    "type": "string"
+                },
+                "telefoon": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCContactCreate": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "decision_role": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "is_primary": {
+                    "type": "boolean"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "rol": {
+                    "type": "string"
+                },
+                "telefoon": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCContactUpdate": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "decision_role": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "is_primary": {
+                    "type": "boolean"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "notities": {
+                    "type": "string"
+                },
+                "preferred_channel": {
+                    "type": "string"
+                },
+                "rol": {
+                    "type": "string"
+                },
+                "telefoon": {
+                    "type": "string"
                 }
             }
         },
@@ -5361,6 +8800,29 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "urgency": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCConvertWorkstreamToProject": {
+            "type": "object",
+            "properties": {
+                "fase": {
+                    "type": "string"
+                },
+                "naam": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "samenvatting": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "workstream_id": {
                     "type": "string"
                 }
             }
@@ -5444,6 +8906,255 @@ const docTemplate = `{
                 }
             }
         },
+        "model.LCDocumentRecommendation": {
+            "type": "object",
+            "properties": {
+                "alreadyInDossier": {
+                    "type": "boolean"
+                },
+                "document": {
+                    "$ref": "#/definitions/model.LCDocument"
+                },
+                "dossierCreatedAt": {
+                    "type": "string"
+                },
+                "dossierDocumentId": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "reasons": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "score": {
+                    "type": "integer"
+                },
+                "usage": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCDossierAdvice": {
+            "type": "object",
+            "properties": {
+                "coverage": {
+                    "type": "integer"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "generatedAt": {
+                    "type": "string"
+                },
+                "matchedDossierDocuments": {
+                    "type": "integer"
+                },
+                "nextActions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "presentDocuments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCDossierDocument"
+                    }
+                },
+                "recommendations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCDocumentRecommendation"
+                    }
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCDossierRequirement"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "target": {
+                    "$ref": "#/definitions/model.LCDossierAdviceTarget"
+                },
+                "totalDossierDocuments": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCDossierAdviceTarget": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "query": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subtitle": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCDossierDocument": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "context_id": {
+                    "type": "string"
+                },
+                "context_title": {
+                    "type": "string"
+                },
+                "context_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "delivery": {
+                    "type": "string"
+                },
+                "document_key": {
+                    "type": "string"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pdf_url": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "template_label": {
+                    "type": "string"
+                },
+                "theme": {
+                    "type": "string"
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCDossierDocumentCreate": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "context_id": {
+                    "type": "string"
+                },
+                "context_title": {
+                    "type": "string"
+                },
+                "context_type": {
+                    "type": "string"
+                },
+                "delivery": {
+                    "type": "string"
+                },
+                "document_key": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pdf_url": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "template_label": {
+                    "type": "string"
+                },
+                "theme": {
+                    "type": "string"
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCDossierRequirement": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "recommendedDocumentKeys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "model.LCFollowUpSignal": {
             "type": "object",
             "properties": {
@@ -5466,6 +9177,317 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCInvoice": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "document_generated_at": {
+                    "type": "string"
+                },
+                "document_url": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoice_number": {
+                    "type": "string"
+                },
+                "issue_date": {
+                    "type": "string"
+                },
+                "last_reminder_at": {
+                    "type": "string"
+                },
+                "merchant_reference": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "paid_cents": {
+                    "type": "integer"
+                },
+                "payment_checked_at": {
+                    "type": "string"
+                },
+                "payment_last_error": {
+                    "type": "string"
+                },
+                "payment_provider": {
+                    "type": "string"
+                },
+                "payment_status": {
+                    "type": "string"
+                },
+                "payment_url": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "provider_request_id": {
+                    "type": "string"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "reminder_count": {
+                    "type": "integer"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subtotal_cents": {
+                    "type": "integer"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "ubl_generated_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "vat_cents": {
+                    "type": "integer"
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                },
+                "workstream_id": {
+                    "type": "string"
+                },
+                "workstream_title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCInvoiceCreate": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "issue_date": {
+                    "type": "string"
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCInvoiceLineCreate"
+                    }
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "time_entry_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCInvoiceDocument": {
+            "type": "object",
+            "properties": {
+                "company": {
+                    "$ref": "#/definitions/model.LCCompany"
+                },
+                "download_name": {
+                    "type": "string"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "html": {
+                    "type": "string"
+                },
+                "invoice": {
+                    "$ref": "#/definitions/model.LCInvoice"
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCInvoiceLine"
+                    }
+                },
+                "text": {
+                    "type": "string"
+                },
+                "ubl_xml": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCInvoiceLine": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoice_id": {
+                    "type": "string"
+                },
+                "quantity_minutes": {
+                    "type": "integer"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "source_time_entry_id": {
+                    "type": "string"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "unit_amount_cents": {
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCInvoiceLineCreate": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "quantity_minutes": {
+                    "type": "integer"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "source_time_entry_id": {
+                    "type": "string"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "unit_amount_cents": {
+                    "type": "integer"
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCInvoicePaymentRefresh": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "boolean"
+                },
+                "checked_at": {
+                    "type": "string"
+                },
+                "invoice": {
+                    "$ref": "#/definitions/model.LCInvoice"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "provider_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCInvoiceStatusUpdate": {
+            "type": "object",
+            "properties": {
+                "merchant_reference": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "paid_cents": {
+                    "type": "integer"
+                },
+                "payment_checked_at": {
+                    "type": "string"
+                },
+                "payment_last_error": {
+                    "type": "string"
+                },
+                "payment_provider": {
+                    "type": "string"
+                },
+                "payment_status": {
+                    "type": "string"
+                },
+                "payment_url": {
+                    "type": "string"
+                },
+                "provider_request_id": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 }
             }
@@ -5526,7 +9548,13 @@ const docTemplate = `{
                 "bron": {
                     "type": "string"
                 },
+                "company_id": {
+                    "type": "string"
+                },
                 "company_name": {
+                    "type": "string"
+                },
+                "contact_id": {
                     "type": "string"
                 },
                 "fit_score": {
@@ -5558,6 +9586,15 @@ const docTemplate = `{
         "model.LCLeadUpdate": {
             "type": "object",
             "properties": {
+                "bron": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
                 "fit_score": {
                     "type": "integer"
                 },
@@ -5575,6 +9612,472 @@ const docTemplate = `{
                 },
                 "volgende_stap": {
                     "type": "string"
+                }
+            }
+        },
+        "model.LCMailAIContextAttachment": {
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "extracted_text": {
+                    "type": "string"
+                },
+                "extraction_status": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pages": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "summary": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailAISource": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailAISuggestion": {
+            "type": "object",
+            "properties": {
+                "briefing": {
+                    "type": "string"
+                },
+                "confidence": {
+                    "type": "string"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailAISource"
+                    }
+                },
+                "subject_hint": {
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.LCMailAISuggestionRequest": {
+            "type": "object",
+            "properties": {
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailAIContextAttachment"
+                    }
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "intent": {
+                    "type": "string"
+                },
+                "invoice_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "to_email": {
+                    "type": "string"
+                },
+                "to_name": {
+                    "type": "string"
+                },
+                "tone": {
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailAttachment": {
+            "type": "object",
+            "properties": {
+                "content_bytes": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailInboxItem": {
+            "type": "object",
+            "properties": {
+                "body_preview": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "from_email": {
+                    "type": "string"
+                },
+                "from_name": {
+                    "type": "string"
+                },
+                "has_attachments": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_read": {
+                    "type": "boolean"
+                },
+                "message_id": {
+                    "type": "string"
+                },
+                "received_at": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "web_link": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailOutboxItem": {
+            "type": "object",
+            "properties": {
+                "bcc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "body_html": {
+                    "type": "string"
+                },
+                "body_text": {
+                    "type": "string"
+                },
+                "cc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "contact_name": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoice_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "provider_message_id": {
+                    "type": "string"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "template_name": {
+                    "type": "string"
+                },
+                "to_email": {
+                    "type": "string"
+                },
+                "to_name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailSendRequest": {
+            "type": "object",
+            "properties": {
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailAttachment"
+                    }
+                },
+                "bcc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "cc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "description": "ConversationID links this outbound mail to the Graph conversation of the\nmessage being replied to, so the UI can thread them together. It is stored\nfor grouping only; the mail is sent as a fresh message, not a true Graph\nreply. Optional.",
+                    "type": "string"
+                },
+                "invoice_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "send": {
+                    "type": "boolean"
+                },
+                "subject": {
+                    "description": "Subject overrides the rendered template subject — used by the reply flow\n(\"Re: \u003corigineel onderwerp\u003e\"). Optional.",
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "to_email": {
+                    "type": "string"
+                },
+                "to_name": {
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailTemplate": {
+            "type": "object",
+            "properties": {
+                "body_html": {
+                    "type": "string"
+                },
+                "body_text": {
+                    "type": "string"
+                },
+                "category": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "default_bcc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "default_cc": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject_template": {
+                    "type": "string"
+                },
+                "template_key": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCMailbox": {
+            "type": "object",
+            "properties": {
+                "inbox": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailInboxItem"
+                    }
+                },
+                "inboxError": {
+                    "description": "InboxError carries a Dutch message when the inbox could not be fetched —\nwithout it a fetch failure was indistinguishable from an empty inbox.",
+                    "type": "string"
+                },
+                "outbox": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailOutboxItem"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/model.LCMailboxSummary"
+                },
+                "templates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCMailTemplate"
+                    }
+                }
+            }
+        },
+        "model.LCMailboxSummary": {
+            "type": "object",
+            "properties": {
+                "activeTemplates": {
+                    "type": "integer"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "drafts": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "nextStep": {
+                    "type": "string"
+                },
+                "outbox": {
+                    "type": "integer"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "senderEmail": {
+                    "type": "string"
+                },
+                "sent": {
+                    "type": "integer"
+                },
+                "templates": {
+                    "type": "integer"
                 }
             }
         },
@@ -5625,6 +10128,12 @@ const docTemplate = `{
         "model.LCProjectCreate": {
             "type": "object",
             "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
                 "deadline": {
                     "type": "string"
                 },
@@ -5645,12 +10154,18 @@ const docTemplate = `{
                 },
                 "waarde_indicatie": {
                     "type": "integer"
+                },
+                "website": {
+                    "type": "string"
                 }
             }
         },
         "model.LCProjectUpdate": {
             "type": "object",
             "properties": {
+                "company_id": {
+                    "type": "string"
+                },
                 "deadline": {
                     "type": "string"
                 },
@@ -5667,6 +10182,167 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "waarde_indicatie": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCQuote": {
+            "type": "object",
+            "properties": {
+                "accepted_at": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "issue_date": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "quote_number": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subtotal_cents": {
+                    "type": "integer"
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "valid_until": {
+                    "type": "string"
+                },
+                "vat_cents": {
+                    "type": "integer"
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                },
+                "workstream_id": {
+                    "type": "string"
+                },
+                "workstream_title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCQuoteCreate": {
+            "type": "object",
+            "properties": {
+                "company_id": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "issue_date": {
+                    "type": "string"
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LCQuoteLineCreate"
+                    }
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "valid_until": {
+                    "type": "string"
+                },
+                "vat_rate_bps": {
+                    "type": "integer"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCQuoteLine": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "integer"
+                },
+                "quote_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "unit_amount_cents": {
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCQuoteLineCreate": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "integer"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "total_cents": {
+                    "type": "integer"
+                },
+                "unit_amount_cents": {
                     "type": "integer"
                 }
             }
@@ -5723,6 +10399,342 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "model.LCTimeEntry": {
+            "type": "object",
+            "properties": {
+                "activity_event_id": {
+                    "type": "string"
+                },
+                "billable": {
+                    "type": "boolean"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "company_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "entry_date": {
+                    "type": "string"
+                },
+                "hourly_rate_cents": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoice_id": {
+                    "type": "string"
+                },
+                "minutes": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "source_type": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                },
+                "workstream_title": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCTimeEntryCreate": {
+            "type": "object",
+            "properties": {
+                "activity_event_id": {
+                    "type": "string"
+                },
+                "billable": {
+                    "type": "boolean"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "entry_date": {
+                    "type": "string"
+                },
+                "hourly_rate_cents": {
+                    "type": "integer"
+                },
+                "minutes": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "source_type": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "workstream_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCTimeEntryUpdate": {
+            "type": "object",
+            "properties": {
+                "minuten": {
+                    "type": "integer"
+                },
+                "omschrijving": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.LCWorkstream": {
+            "type": "object",
+            "properties": {
+                "bevindingen": {
+                    "type": "string"
+                },
+                "bron": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deadline": {
+                    "type": "string"
+                },
+                "deliverable": {
+                    "type": "string"
+                },
+                "doel": {
+                    "type": "string"
+                },
+                "geschatte_minuten": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "klant_naam": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "prioriteit": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "stack_tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "volgende_stap": {
+                    "type": "string"
+                },
+                "waarde_indicatie": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCWorkstreamCreate": {
+            "type": "object",
+            "properties": {
+                "bevindingen": {
+                    "type": "string"
+                },
+                "bron": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "deadline": {
+                    "type": "string"
+                },
+                "deliverable": {
+                    "type": "string"
+                },
+                "doel": {
+                    "type": "string"
+                },
+                "geschatte_minuten": {
+                    "type": "integer"
+                },
+                "klant_naam": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "prioriteit": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "stack_tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "titel": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "volgende_stap": {
+                    "type": "string"
+                },
+                "waarde_indicatie": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LCWorkstreamUpdate": {
+            "type": "object",
+            "properties": {
+                "bevindingen": {
+                    "type": "string"
+                },
+                "company_id": {
+                    "type": "string"
+                },
+                "deadline": {
+                    "type": "string"
+                },
+                "deliverable": {
+                    "type": "string"
+                },
+                "doel": {
+                    "type": "string"
+                },
+                "geschatte_minuten": {
+                    "type": "integer"
+                },
+                "klant_naam": {
+                    "type": "string"
+                },
+                "prioriteit": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "stack_tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "type": {
+                    "type": "string"
+                },
+                "volgende_stap": {
+                    "type": "string"
+                },
+                "waarde_indicatie": {
+                    "type": "integer"
                 }
             }
         },
@@ -5818,6 +10830,15 @@ const docTemplate = `{
                 "aangemaakt": {
                     "type": "string"
                 },
+                "business_context_id": {
+                    "type": "string"
+                },
+                "business_context_title": {
+                    "type": "string"
+                },
+                "business_context_type": {
+                    "type": "string"
+                },
                 "completed_at": {
                     "type": "string"
                 },
@@ -5848,6 +10869,10 @@ const docTemplate = `{
                 "linked_event_id": {
                     "type": "string"
                 },
+                "preview": {
+                    "description": "Preview is only populated in summary mode (fields=summary), where inhoud is\nblanked to keep payloads small. It holds the first ~80 chars of the body so\nthe kiosk can show a meaningful line for untitled notes instead of\n\"Naamloze notitie\". Omitted (nil) in full mode.",
+                    "type": "string"
+                },
                 "prioriteit": {
                     "type": "string"
                 },
@@ -5875,6 +10900,15 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "aangemaakt": {
+                    "type": "string"
+                },
+                "business_context_id": {
+                    "type": "string"
+                },
+                "business_context_title": {
+                    "type": "string"
+                },
+                "business_context_type": {
                     "type": "string"
                 },
                 "deadline": {
@@ -5919,6 +10953,15 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "beschrijving": {
+                    "type": "string"
+                },
+                "business_context_id": {
+                    "type": "string"
+                },
+                "business_context_title": {
+                    "type": "string"
+                },
+                "business_context_type": {
                     "type": "string"
                 },
                 "conflict_met_dienst": {

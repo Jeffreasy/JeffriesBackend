@@ -202,6 +202,14 @@ func (h *ContactHandler) Update(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
+	if body.DisplayName != nil {
+		name := strings.TrimSpace(*body.DisplayName)
+		if name == "" {
+			Error(w, http.StatusBadRequest, "Naam is verplicht.")
+			return
+		}
+		body.DisplayName = &name
+	}
 
 	u := store.ContactUpdate{
 		DisplayName:  body.DisplayName,
@@ -235,6 +243,10 @@ func (h *ContactHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.store.Update(r.Context(), userID, id, u)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidContactName) {
+			Error(w, http.StatusBadRequest, "Naam is verplicht.")
+			return
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Contact niet gevonden.")
 			return

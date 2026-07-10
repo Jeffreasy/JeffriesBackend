@@ -1,5 +1,146 @@
 basePath: /api/v1
 definitions:
+  handler.FocusAttention:
+    properties:
+      detail:
+        type: string
+      domain:
+        type: string
+      href:
+        type: string
+      id:
+        type: string
+      severity:
+        type: string
+      title:
+        type: string
+    type: object
+  handler.FocusBusinessStatus:
+    properties:
+      activeLeads:
+        type: integer
+      activeProjects:
+        type: integer
+      activeWorkstreams:
+        type: integer
+      openActions:
+        type: integer
+      openInvoices:
+        type: integer
+      openQuotes:
+        type: integer
+      outstandingCents:
+        type: integer
+      overdueActions:
+        type: integer
+    type: object
+  handler.FocusCounts:
+    properties:
+      habitsActive:
+        type: integer
+      habitsCompleted:
+        type: integer
+      habitsTodayDue:
+        type: integer
+      notesActive:
+        type: integer
+      notesDueToday:
+        type: integer
+      notesOverdue:
+        type: integer
+      notesPinned:
+        type: integer
+      notesTriage:
+        type: integer
+      personalPending:
+        type: integer
+      personalUpcoming:
+        type: integer
+      scheduleTotal:
+        type: integer
+      scheduleUpcoming:
+        type: integer
+      unreadEmails:
+        type: integer
+    type: object
+  handler.FocusHealth:
+    properties:
+      bridgeLastSeenAt:
+        type: string
+      bridgeOnline:
+        type: boolean
+      bridgeStatus:
+        type: string
+      commandsFailed:
+        type: integer
+      commandsPending:
+        type: integer
+      commandsProcessing:
+        type: integer
+      devicesOffline:
+        type: integer
+      devicesOn:
+        type: integer
+      devicesOnline:
+        type: integer
+      devicesTotal:
+        type: integer
+    type: object
+  handler.FocusSummary:
+    properties:
+      attention:
+        items:
+          $ref: '#/definitions/handler.FocusAttention'
+        type: array
+      business:
+        $ref: '#/definitions/handler.FocusBusinessStatus'
+      counts:
+        $ref: '#/definitions/handler.FocusCounts'
+      date:
+        type: string
+      errors:
+        items:
+          type: string
+        type: array
+      generatedAt:
+        type: string
+      health:
+        $ref: '#/definitions/handler.FocusHealth'
+      period:
+        type: string
+      sync:
+        $ref: '#/definitions/handler.FocusSyncSummary'
+      time:
+        type: string
+      timezone:
+        type: string
+      userId:
+        type: string
+    type: object
+  handler.FocusSyncSummary:
+    properties:
+      gmail:
+        $ref: '#/definitions/handler.FocusSyncTarget'
+      personal:
+        $ref: '#/definitions/handler.FocusSyncTarget'
+      schedule:
+        $ref: '#/definitions/handler.FocusSyncTarget'
+    type: object
+  handler.FocusSyncTarget:
+    properties:
+      configured:
+        type: boolean
+      enabled:
+        type: boolean
+      lastSuccessAt:
+        type: string
+      pending:
+        type: integer
+      status:
+        type: string
+      total:
+        type: integer
+    type: object
   handler.LoonstrokenImportRequest:
     properties:
       items:
@@ -17,6 +158,8 @@ definitions:
       ok:
         type: boolean
       total:
+        type: integer
+      updated:
         type: integer
     type: object
   handler.TransactionImportResponse:
@@ -43,6 +186,12 @@ definitions:
     type: object
   handler.noteCreateBody:
     properties:
+      businessContextId:
+        type: string
+      businessContextTitle:
+        type: string
+      businessContextType:
+        type: string
       deadline:
         type: string
       inhoud:
@@ -64,7 +213,19 @@ definitions:
     type: object
   handler.noteUpdateBody:
     properties:
+      businessContextId:
+        type: string
+      businessContextTitle:
+        type: string
+      businessContextType:
+        type: string
       deadline:
+        type: string
+      expectedGewijzigd:
+        description: |-
+          ExpectedGewijzigd, when set, enables optimistic-concurrency: the update is
+          rejected (409) if the note was changed since this timestamp. Sent by the
+          content-overwriting surfaces (editor save, card checkbox toggle).
         type: string
       inhoud:
         type: string
@@ -308,15 +469,78 @@ definitions:
       xp_bonus:
         type: integer
     type: object
+  model.LCAccessCredential:
+    properties:
+      company_id:
+        type: string
+      company_name:
+        type: string
+      contact_id:
+        type: string
+      contact_name:
+        type: string
+      created_at:
+        type: string
+      environment:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      last_checked_at:
+        type: string
+      login_url:
+        type: string
+      notes:
+        type: string
+      owner_contact:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      revoked_at:
+        type: string
+      role:
+        type: string
+      secret_configured:
+        type: boolean
+      secret_hint:
+        type: string
+      secret_label:
+        type: string
+      sharing_policy:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      username:
+        type: string
+      workstream_id:
+        type: string
+      workstream_title:
+        type: string
+    type: object
   model.LCActionCreate:
     properties:
       action_type:
         type: string
       due_date:
         type: string
+      due_time:
+        type: string
+      linked_company_id:
+        type: string
       linked_lead_id:
         type: string
       linked_project_id:
+        type: string
+      linked_workstream_id:
         type: string
       priority:
         type: string
@@ -333,19 +557,38 @@ definitions:
     properties:
       action_type:
         type: string
+      company_name:
+        description: Join-only display fields (not persisted on lc_action_items itself).
+        type: string
       created_at:
         type: string
       due_date:
         type: string
+      due_time:
+        type: string
       id:
+        type: string
+      lead_title:
+        type: string
+      linked_company_id:
         type: string
       linked_lead_id:
         type: string
       linked_project_id:
         type: string
+      linked_workstream_id:
+        type: string
       priority:
         type: string
+      project_name:
+        type: string
       source:
+        type: string
+      source_activity_at:
+        type: string
+      source_activity_id:
+        type: string
+      source_activity_title:
         type: string
       source_id:
         type: string
@@ -359,6 +602,130 @@ definitions:
         type: string
       user_id:
         type: string
+      workstream_title:
+        type: string
+    type: object
+  model.LCActivityEvent:
+    properties:
+      action_item_id:
+        type: string
+      body:
+        type: string
+      channel:
+        type: string
+      company_id:
+        type: string
+      company_name:
+        type: string
+      contact_id:
+        type: string
+      contact_name:
+        type: string
+      created_at:
+        type: string
+      event_type:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      linked_action_status:
+        type: string
+      linked_action_title:
+        type: string
+      occurred_at:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      workstream_id:
+        type: string
+      workstream_name:
+        type: string
+    type: object
+  model.LCActivityEventCreate:
+    properties:
+      action_item_id:
+        type: string
+      body:
+        type: string
+      channel:
+        type: string
+      company_id:
+        type: string
+      contact_id:
+        type: string
+      event_type:
+        type: string
+      lead_id:
+        type: string
+      occurred_at:
+        type: string
+      project_id:
+        type: string
+      title:
+        type: string
+      workstream_id:
+        type: string
+    type: object
+  model.LCBilling:
+    properties:
+      invoiceLines:
+        items:
+          $ref: '#/definitions/model.LCInvoiceLine'
+        type: array
+      invoices:
+        items:
+          $ref: '#/definitions/model.LCInvoice'
+        type: array
+      quoteLines:
+        items:
+          $ref: '#/definitions/model.LCQuoteLine'
+        type: array
+      quotes:
+        items:
+          $ref: '#/definitions/model.LCQuote'
+        type: array
+      summary:
+        $ref: '#/definitions/model.LCBillingSummary'
+      timeEntries:
+        items:
+          $ref: '#/definitions/model.LCTimeEntry'
+        type: array
+    type: object
+  model.LCBillingSummary:
+    properties:
+      billableMinutes:
+        type: integer
+      bunqReady:
+        type: boolean
+      defaultProvider:
+        type: string
+      invoices:
+        type: integer
+      nextStepDescription:
+        type: string
+      openInvoices:
+        type: integer
+      openQuotes:
+        type: integer
+      outstandingCents:
+        type: integer
+      paidCents:
+        type: integer
+      quotes:
+        type: integer
+      timeEntries:
+        type: integer
+      uninvoicedMinutes:
+        type: integer
     type: object
   model.LCBusinessSignal:
     properties:
@@ -404,6 +771,10 @@ definitions:
     type: object
   model.LCCockpit:
     properties:
+      accessCredentials:
+        items:
+          $ref: '#/definitions/model.LCAccessCredential'
+        type: array
       actionItems:
         items:
           $ref: '#/definitions/model.LCActionItem'
@@ -416,18 +787,40 @@ definitions:
         items:
           $ref: '#/definitions/model.LCProject'
         type: array
+      activeWorkstreams:
+        items:
+          $ref: '#/definitions/model.LCWorkstream'
+        type: array
+      activityEvents:
+        items:
+          $ref: '#/definitions/model.LCActivityEvent'
+        type: array
       businessSignals:
         items:
           $ref: '#/definitions/model.LCBusinessSignal'
+        type: array
+      companies:
+        items:
+          $ref: '#/definitions/model.LCCompany'
+        type: array
+      contacts:
+        items:
+          $ref: '#/definitions/model.LCContact'
         type: array
       documentCatalog:
         items:
           $ref: '#/definitions/model.LCDocument'
         type: array
+      dossierDocuments:
+        items:
+          $ref: '#/definitions/model.LCDossierDocument'
+        type: array
       followUps:
         items:
           $ref: '#/definitions/model.LCFollowUpSignal'
         type: array
+      mailbox:
+        $ref: '#/definitions/model.LCMailboxSummary'
       openChanges:
         items:
           $ref: '#/definitions/model.LCChangeRequest'
@@ -445,13 +838,23 @@ definitions:
     type: object
   model.LCCockpitSummary:
     properties:
+      accessCredentials:
+        type: integer
       actionItems:
         type: integer
       activeLeads:
         type: integer
       activeProjects:
         type: integer
+      activeWorkstreams:
+        type: integer
+      activityEvents:
+        type: integer
       businessSignals:
+        type: integer
+      companies:
+        type: integer
+      contacts:
         type: integer
       decisions:
         type: integer
@@ -459,9 +862,17 @@ definitions:
         type: integer
       documentsSeeded:
         type: boolean
+      dossierDocuments:
+        type: integer
       followUps:
         type: integer
       leads:
+        type: integer
+      mailConfigured:
+        type: boolean
+      mailOutbox:
+        type: integer
+      mailTemplates:
         type: integer
       openChanges:
         type: integer
@@ -469,6 +880,234 @@ definitions:
         type: integer
       projects:
         type: integer
+      workstreams:
+        type: integer
+    type: object
+  model.LCCompany:
+    properties:
+      actionItems:
+        type: integer
+      billing_address:
+        type: string
+      billing_email:
+        type: string
+      billing_reference:
+        type: string
+      contacts:
+        type: integer
+      contract_status:
+        type: string
+      created_at:
+        type: string
+      data_processing_status:
+        type: string
+      default_login_url:
+        type: string
+      dossierDocuments:
+        type: integer
+      id:
+        type: string
+      kvk_number:
+        type: string
+      laatste_contact:
+        type: string
+      leads:
+        type: integer
+      naam:
+        type: string
+      notities:
+        type: string
+      onboarding_status:
+        type: string
+      payment_terms_days:
+        type: integer
+      portal_url:
+        type: string
+      preferred_channel:
+        type: string
+      projects:
+        type: integer
+      relatie_type:
+        type: string
+      sector:
+        type: string
+      service_level:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      vat_number:
+        type: string
+      volgende_actie:
+        type: string
+      website:
+        type: string
+      workstreams:
+        type: integer
+    type: object
+  model.LCCompanyCreate:
+    properties:
+      billing_address:
+        type: string
+      billing_email:
+        type: string
+      billing_reference:
+        type: string
+      contract_status:
+        type: string
+      data_processing_status:
+        type: string
+      default_login_url:
+        type: string
+      kvk_number:
+        type: string
+      laatste_contact:
+        type: string
+      naam:
+        type: string
+      notities:
+        type: string
+      onboarding_status:
+        type: string
+      payment_terms_days:
+        type: integer
+      portal_url:
+        type: string
+      preferred_channel:
+        type: string
+      relatie_type:
+        type: string
+      sector:
+        type: string
+      service_level:
+        type: string
+      status:
+        type: string
+      vat_number:
+        type: string
+      volgende_actie:
+        type: string
+      website:
+        type: string
+    type: object
+  model.LCCompanyUpdate:
+    properties:
+      billing_address:
+        type: string
+      billing_email:
+        type: string
+      billing_reference:
+        type: string
+      contract_status:
+        type: string
+      data_processing_status:
+        type: string
+      default_login_url:
+        type: string
+      kvk_number:
+        type: string
+      laatste_contact:
+        type: string
+      naam:
+        type: string
+      notities:
+        type: string
+      onboarding_status:
+        type: string
+      payment_terms_days:
+        type: integer
+      portal_url:
+        type: string
+      preferred_channel:
+        type: string
+      relatie_type:
+        type: string
+      sector:
+        type: string
+      service_level:
+        type: string
+      status:
+        type: string
+      vat_number:
+        type: string
+      volgende_actie:
+        type: string
+      website:
+        type: string
+    type: object
+  model.LCContact:
+    properties:
+      company_id:
+        type: string
+      created_at:
+        type: string
+      decision_role:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      is_primary:
+        type: boolean
+      naam:
+        type: string
+      notities:
+        type: string
+      preferred_channel:
+        type: string
+      rol:
+        type: string
+      telefoon:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.LCContactCreate:
+    properties:
+      company_id:
+        type: string
+      decision_role:
+        type: string
+      email:
+        type: string
+      is_primary:
+        type: boolean
+      naam:
+        type: string
+      notities:
+        type: string
+      preferred_channel:
+        type: string
+      rol:
+        type: string
+      telefoon:
+        type: string
+    type: object
+  model.LCContactUpdate:
+    properties:
+      company_id:
+        type: string
+      decision_role:
+        type: string
+      email:
+        type: string
+      is_primary:
+        type: boolean
+      naam:
+        type: string
+      notities:
+        type: string
+      preferred_channel:
+        type: string
+      rol:
+        type: string
+      telefoon:
+        type: string
     type: object
   model.LCConvertLeadToProject:
     properties:
@@ -500,6 +1139,21 @@ definitions:
       title:
         type: string
       urgency:
+        type: string
+    type: object
+  model.LCConvertWorkstreamToProject:
+    properties:
+      fase:
+        type: string
+      naam:
+        type: string
+      project_id:
+        type: string
+      samenvatting:
+        type: string
+      status:
+        type: string
+      workstream_id:
         type: string
     type: object
   model.LCDecision:
@@ -554,6 +1208,170 @@ definitions:
       versie:
         type: string
     type: object
+  model.LCDocumentRecommendation:
+    properties:
+      alreadyInDossier:
+        type: boolean
+      document:
+        $ref: '#/definitions/model.LCDocument'
+      dossierCreatedAt:
+        type: string
+      dossierDocumentId:
+        type: string
+      priority:
+        type: string
+      reasons:
+        items:
+          type: string
+        type: array
+      score:
+        type: integer
+      usage:
+        type: string
+    type: object
+  model.LCDossierAdvice:
+    properties:
+      coverage:
+        type: integer
+      evidence:
+        items:
+          type: string
+        type: array
+      generatedAt:
+        type: string
+      matchedDossierDocuments:
+        type: integer
+      nextActions:
+        items:
+          type: string
+        type: array
+      presentDocuments:
+        items:
+          $ref: '#/definitions/model.LCDossierDocument'
+        type: array
+      recommendations:
+        items:
+          $ref: '#/definitions/model.LCDocumentRecommendation'
+        type: array
+      requirements:
+        items:
+          $ref: '#/definitions/model.LCDossierRequirement'
+        type: array
+      status:
+        type: string
+      target:
+        $ref: '#/definitions/model.LCDossierAdviceTarget'
+      totalDossierDocuments:
+        type: integer
+    type: object
+  model.LCDossierAdviceTarget:
+    properties:
+      company_id:
+        type: string
+      company_name:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      phase:
+        type: string
+      priority:
+        type: string
+      query:
+        type: string
+      status:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+    type: object
+  model.LCDossierDocument:
+    properties:
+      company_id:
+        type: string
+      context_id:
+        type: string
+      context_title:
+        type: string
+      context_type:
+        type: string
+      created_at:
+        type: string
+      delivery:
+        type: string
+      document_key:
+        type: string
+      generated_at:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      notes:
+        type: string
+      pdf_url:
+        type: string
+      project_id:
+        type: string
+      template_label:
+        type: string
+      theme:
+        type: string
+      titel:
+        type: string
+      user_id:
+        type: string
+      workstream_id:
+        type: string
+    type: object
+  model.LCDossierDocumentCreate:
+    properties:
+      company_id:
+        type: string
+      context_id:
+        type: string
+      context_title:
+        type: string
+      context_type:
+        type: string
+      delivery:
+        type: string
+      document_key:
+        type: string
+      lead_id:
+        type: string
+      notes:
+        type: string
+      pdf_url:
+        type: string
+      project_id:
+        type: string
+      template_label:
+        type: string
+      theme:
+        type: string
+      titel:
+        type: string
+      workstream_id:
+        type: string
+    type: object
+  model.LCDossierRequirement:
+    properties:
+      key:
+        type: string
+      label:
+        type: string
+      reason:
+        type: string
+      recommendedDocumentKeys:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+    type: object
   model.LCFollowUpSignal:
     properties:
       action_hint:
@@ -569,6 +1387,211 @@ definitions:
       status:
         type: string
       title:
+        type: string
+    type: object
+  model.LCInvoice:
+    properties:
+      company_id:
+        type: string
+      company_name:
+        type: string
+      created_at:
+        type: string
+      currency:
+        type: string
+      document_generated_at:
+        type: string
+      document_url:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      invoice_number:
+        type: string
+      issue_date:
+        type: string
+      last_reminder_at:
+        type: string
+      merchant_reference:
+        type: string
+      notes:
+        type: string
+      paid_at:
+        type: string
+      paid_cents:
+        type: integer
+      payment_checked_at:
+        type: string
+      payment_last_error:
+        type: string
+      payment_provider:
+        type: string
+      payment_status:
+        type: string
+      payment_url:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      provider_request_id:
+        type: string
+      quote_id:
+        type: string
+      reminder_count:
+        type: integer
+      sent_at:
+        type: string
+      status:
+        type: string
+      subtotal_cents:
+        type: integer
+      total_cents:
+        type: integer
+      ubl_generated_at:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      vat_cents:
+        type: integer
+      vat_rate_bps:
+        type: integer
+      workstream_id:
+        type: string
+      workstream_title:
+        type: string
+    type: object
+  model.LCInvoiceCreate:
+    properties:
+      company_id:
+        type: string
+      currency:
+        type: string
+      due_date:
+        type: string
+      issue_date:
+        type: string
+      lines:
+        items:
+          $ref: '#/definitions/model.LCInvoiceLineCreate'
+        type: array
+      notes:
+        type: string
+      project_id:
+        type: string
+      quote_id:
+        type: string
+      status:
+        type: string
+      time_entry_ids:
+        items:
+          type: string
+        type: array
+      vat_rate_bps:
+        type: integer
+      workstream_id:
+        type: string
+    type: object
+  model.LCInvoiceDocument:
+    properties:
+      company:
+        $ref: '#/definitions/model.LCCompany'
+      download_name:
+        type: string
+      generated_at:
+        type: string
+      html:
+        type: string
+      invoice:
+        $ref: '#/definitions/model.LCInvoice'
+      lines:
+        items:
+          $ref: '#/definitions/model.LCInvoiceLine'
+        type: array
+      text:
+        type: string
+      ubl_xml:
+        type: string
+    type: object
+  model.LCInvoiceLine:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      invoice_id:
+        type: string
+      quantity_minutes:
+        type: integer
+      sort_order:
+        type: integer
+      source_time_entry_id:
+        type: string
+      total_cents:
+        type: integer
+      unit_amount_cents:
+        type: integer
+      user_id:
+        type: string
+      vat_rate_bps:
+        type: integer
+    type: object
+  model.LCInvoiceLineCreate:
+    properties:
+      description:
+        type: string
+      quantity_minutes:
+        type: integer
+      sort_order:
+        type: integer
+      source_time_entry_id:
+        type: string
+      total_cents:
+        type: integer
+      unit_amount_cents:
+        type: integer
+      vat_rate_bps:
+        type: integer
+    type: object
+  model.LCInvoicePaymentRefresh:
+    properties:
+      changed:
+        type: boolean
+      checked_at:
+        type: string
+      invoice:
+        $ref: '#/definitions/model.LCInvoice'
+      message:
+        type: string
+      provider_status:
+        type: string
+    type: object
+  model.LCInvoiceStatusUpdate:
+    properties:
+      merchant_reference:
+        type: string
+      paid_at:
+        type: string
+      paid_cents:
+        type: integer
+      payment_checked_at:
+        type: string
+      payment_last_error:
+        type: string
+      payment_provider:
+        type: string
+      payment_status:
+        type: string
+      payment_url:
+        type: string
+      provider_request_id:
+        type: string
+      sent_at:
+        type: string
+      status:
         type: string
     type: object
   model.LCLead:
@@ -608,7 +1631,11 @@ definitions:
     properties:
       bron:
         type: string
+      company_id:
+        type: string
       company_name:
+        type: string
+      contact_id:
         type: string
       fit_score:
         type: integer
@@ -629,6 +1656,12 @@ definitions:
     type: object
   model.LCLeadUpdate:
     properties:
+      bron:
+        type: string
+      company_id:
+        type: string
+      contact_id:
+        type: string
       fit_score:
         type: integer
       pijnpunt:
@@ -641,6 +1674,322 @@ definitions:
         type: string
       volgende_stap:
         type: string
+    type: object
+  model.LCMailAIContextAttachment:
+    properties:
+      content_type:
+        type: string
+      extracted_text:
+        type: string
+      extraction_status:
+        type: string
+      name:
+        type: string
+      pages:
+        type: integer
+      size:
+        type: integer
+      summary:
+        type: string
+    type: object
+  model.LCMailAISource:
+    properties:
+      date:
+        type: string
+      summary:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  model.LCMailAISuggestion:
+    properties:
+      briefing:
+        type: string
+      confidence:
+        type: string
+      generated_at:
+        type: string
+      sources:
+        items:
+          $ref: '#/definitions/model.LCMailAISource'
+        type: array
+      subject_hint:
+        type: string
+      variables:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
+  model.LCMailAISuggestionRequest:
+    properties:
+      attachments:
+        items:
+          $ref: '#/definitions/model.LCMailAIContextAttachment'
+        type: array
+      company_id:
+        type: string
+      contact_id:
+        type: string
+      intent:
+        type: string
+      invoice_id:
+        type: string
+      project_id:
+        type: string
+      quote_id:
+        type: string
+      template_id:
+        type: string
+      to_email:
+        type: string
+      to_name:
+        type: string
+      tone:
+        type: string
+      variables:
+        additionalProperties:
+          type: string
+        type: object
+      workstream_id:
+        type: string
+    type: object
+  model.LCMailAttachment:
+    properties:
+      content_bytes:
+        type: string
+      content_type:
+        type: string
+      name:
+        type: string
+    type: object
+  model.LCMailInboxItem:
+    properties:
+      body_preview:
+        type: string
+      company_id:
+        type: string
+      company_name:
+        type: string
+      contact_id:
+        type: string
+      conversation_id:
+        type: string
+      created_at:
+        type: string
+      from_email:
+        type: string
+      from_name:
+        type: string
+      has_attachments:
+        type: boolean
+      id:
+        type: string
+      is_read:
+        type: boolean
+      message_id:
+        type: string
+      received_at:
+        type: string
+      subject:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      web_link:
+        type: string
+    type: object
+  model.LCMailOutboxItem:
+    properties:
+      bcc:
+        items:
+          type: string
+        type: array
+      body_html:
+        type: string
+      body_text:
+        type: string
+      cc:
+        items:
+          type: string
+        type: array
+      company_id:
+        type: string
+      company_name:
+        type: string
+      contact_id:
+        type: string
+      contact_name:
+        type: string
+      conversation_id:
+        type: string
+      created_at:
+        type: string
+      error_message:
+        type: string
+      id:
+        type: string
+      invoice_id:
+        type: string
+      project_id:
+        type: string
+      provider:
+        type: string
+      provider_message_id:
+        type: string
+      quote_id:
+        type: string
+      sent_at:
+        type: string
+      status:
+        type: string
+      subject:
+        type: string
+      template_id:
+        type: string
+      template_name:
+        type: string
+      to_email:
+        type: string
+      to_name:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      workstream_id:
+        type: string
+    type: object
+  model.LCMailSendRequest:
+    properties:
+      attachments:
+        items:
+          $ref: '#/definitions/model.LCMailAttachment'
+        type: array
+      bcc:
+        items:
+          type: string
+        type: array
+      cc:
+        items:
+          type: string
+        type: array
+      company_id:
+        type: string
+      contact_id:
+        type: string
+      conversation_id:
+        description: |-
+          ConversationID links this outbound mail to the Graph conversation of the
+          message being replied to, so the UI can thread them together. It is stored
+          for grouping only; the mail is sent as a fresh message, not a true Graph
+          reply. Optional.
+        type: string
+      invoice_id:
+        type: string
+      project_id:
+        type: string
+      quote_id:
+        type: string
+      send:
+        type: boolean
+      subject:
+        description: |-
+          Subject overrides the rendered template subject — used by the reply flow
+          ("Re: <origineel onderwerp>"). Optional.
+        type: string
+      template_id:
+        type: string
+      to_email:
+        type: string
+      to_name:
+        type: string
+      variables:
+        additionalProperties:
+          type: string
+        type: object
+      workstream_id:
+        type: string
+    type: object
+  model.LCMailTemplate:
+    properties:
+      body_html:
+        type: string
+      body_text:
+        type: string
+      category:
+        type: string
+      created_at:
+        type: string
+      default_bcc:
+        items:
+          type: string
+        type: array
+      default_cc:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+      subject_template:
+        type: string
+      template_key:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  model.LCMailbox:
+    properties:
+      inbox:
+        items:
+          $ref: '#/definitions/model.LCMailInboxItem'
+        type: array
+      inboxError:
+        description: |-
+          InboxError carries a Dutch message when the inbox could not be fetched —
+          without it a fetch failure was indistinguishable from an empty inbox.
+        type: string
+      outbox:
+        items:
+          $ref: '#/definitions/model.LCMailOutboxItem'
+        type: array
+      summary:
+        $ref: '#/definitions/model.LCMailboxSummary'
+      templates:
+        items:
+          $ref: '#/definitions/model.LCMailTemplate'
+        type: array
+    type: object
+  model.LCMailboxSummary:
+    properties:
+      activeTemplates:
+        type: integer
+      configured:
+        type: boolean
+      drafts:
+        type: integer
+      failed:
+        type: integer
+      nextStep:
+        type: string
+      outbox:
+        type: integer
+      provider:
+        type: string
+      senderEmail:
+        type: string
+      sent:
+        type: integer
+      templates:
+        type: integer
     type: object
   model.LCProject:
     properties:
@@ -673,6 +2022,10 @@ definitions:
     type: object
   model.LCProjectCreate:
     properties:
+      company_id:
+        type: string
+      company_name:
+        type: string
       deadline:
         type: string
       fase:
@@ -687,9 +2040,13 @@ definitions:
         type: string
       waarde_indicatie:
         type: integer
+      website:
+        type: string
     type: object
   model.LCProjectUpdate:
     properties:
+      company_id:
+        type: string
       deadline:
         type: string
       fase:
@@ -701,6 +2058,112 @@ definitions:
       status:
         type: string
       waarde_indicatie:
+        type: integer
+    type: object
+  model.LCQuote:
+    properties:
+      accepted_at:
+        type: string
+      company_id:
+        type: string
+      company_name:
+        type: string
+      created_at:
+        type: string
+      currency:
+        type: string
+      id:
+        type: string
+      issue_date:
+        type: string
+      notes:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      quote_number:
+        type: string
+      status:
+        type: string
+      subtotal_cents:
+        type: integer
+      titel:
+        type: string
+      total_cents:
+        type: integer
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      valid_until:
+        type: string
+      vat_cents:
+        type: integer
+      vat_rate_bps:
+        type: integer
+      workstream_id:
+        type: string
+      workstream_title:
+        type: string
+    type: object
+  model.LCQuoteCreate:
+    properties:
+      company_id:
+        type: string
+      currency:
+        type: string
+      issue_date:
+        type: string
+      lines:
+        items:
+          $ref: '#/definitions/model.LCQuoteLineCreate'
+        type: array
+      notes:
+        type: string
+      project_id:
+        type: string
+      status:
+        type: string
+      titel:
+        type: string
+      valid_until:
+        type: string
+      vat_rate_bps:
+        type: integer
+      workstream_id:
+        type: string
+    type: object
+  model.LCQuoteLine:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      quantity:
+        type: integer
+      quote_id:
+        type: string
+      sort_order:
+        type: integer
+      total_cents:
+        type: integer
+      unit_amount_cents:
+        type: integer
+      user_id:
+        type: string
+    type: object
+  model.LCQuoteLineCreate:
+    properties:
+      description:
+        type: string
+      quantity:
+        type: integer
+      sort_order:
+        type: integer
+      total_cents:
+        type: integer
+      unit_amount_cents:
         type: integer
     type: object
   model.LCSeedResult:
@@ -738,6 +2201,228 @@ definitions:
         type: string
       user_id:
         type: string
+    type: object
+  model.LCTimeEntry:
+    properties:
+      activity_event_id:
+        type: string
+      billable:
+        type: boolean
+      company_id:
+        type: string
+      company_name:
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      entry_date:
+        type: string
+      hourly_rate_cents:
+        type: integer
+      id:
+        type: string
+      invoice_id:
+        type: string
+      minutes:
+        type: integer
+      project_id:
+        type: string
+      project_name:
+        type: string
+      source_id:
+        type: string
+      source_type:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      workstream_id:
+        type: string
+      workstream_title:
+        type: string
+    type: object
+  model.LCTimeEntryCreate:
+    properties:
+      activity_event_id:
+        type: string
+      billable:
+        type: boolean
+      company_id:
+        type: string
+      description:
+        type: string
+      entry_date:
+        type: string
+      hourly_rate_cents:
+        type: integer
+      minutes:
+        type: integer
+      project_id:
+        type: string
+      source_id:
+        type: string
+      source_type:
+        type: string
+      status:
+        type: string
+      workstream_id:
+        type: string
+    type: object
+  model.LCTimeEntryUpdate:
+    properties:
+      minuten:
+        type: integer
+      omschrijving:
+        type: string
+      status:
+        type: string
+    type: object
+  model.LCWorkstream:
+    properties:
+      bevindingen:
+        type: string
+      bron:
+        type: string
+      company_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      deadline:
+        type: string
+      deliverable:
+        type: string
+      doel:
+        type: string
+      geschatte_minuten:
+        type: integer
+      id:
+        type: string
+      klant_naam:
+        type: string
+      lead_id:
+        type: string
+      prioriteit:
+        type: string
+      project_id:
+        type: string
+      scope:
+        type: string
+      source_id:
+        type: string
+      stack_tags:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+      type:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+      volgende_stap:
+        type: string
+      waarde_indicatie:
+        type: integer
+    type: object
+  model.LCWorkstreamCreate:
+    properties:
+      bevindingen:
+        type: string
+      bron:
+        type: string
+      company_id:
+        type: string
+      deadline:
+        type: string
+      deliverable:
+        type: string
+      doel:
+        type: string
+      geschatte_minuten:
+        type: integer
+      klant_naam:
+        type: string
+      lead_id:
+        type: string
+      prioriteit:
+        type: string
+      project_id:
+        type: string
+      scope:
+        type: string
+      source_id:
+        type: string
+      stack_tags:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      titel:
+        type: string
+      type:
+        type: string
+      volgende_stap:
+        type: string
+      waarde_indicatie:
+        type: integer
+    type: object
+  model.LCWorkstreamUpdate:
+    properties:
+      bevindingen:
+        type: string
+      company_id:
+        type: string
+      deadline:
+        type: string
+      deliverable:
+        type: string
+      doel:
+        type: string
+      geschatte_minuten:
+        type: integer
+      klant_naam:
+        type: string
+      prioriteit:
+        type: string
+      project_id:
+        type: string
+      scope:
+        type: string
+      stack_tags:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      type:
+        type: string
+      volgende_stap:
+        type: string
+      waarde_indicatie:
+        type: integer
     type: object
   model.Loonstrook:
     properties:
@@ -800,6 +2485,12 @@ definitions:
     properties:
       aangemaakt:
         type: string
+      business_context_id:
+        type: string
+      business_context_title:
+        type: string
+      business_context_type:
+        type: string
       completed_at:
         type: string
       deadline:
@@ -820,6 +2511,13 @@ definitions:
         type: string
       linked_event_id:
         type: string
+      preview:
+        description: |-
+          Preview is only populated in summary mode (fields=summary), where inhoud is
+          blanked to keep payloads small. It holds the first ~80 chars of the body so
+          the kiosk can show a meaningful line for untitled notes instead of
+          "Naamloze notitie". Omitted (nil) in full mode.
+        type: string
       prioriteit:
         type: string
       symbol:
@@ -838,6 +2536,12 @@ definitions:
   model.NoteRevision:
     properties:
       aangemaakt:
+        type: string
+      business_context_id:
+        type: string
+      business_context_title:
+        type: string
+      business_context_type:
         type: string
       deadline:
         type: string
@@ -867,6 +2571,12 @@ definitions:
   model.PersonalEvent:
     properties:
       beschrijving:
+        type: string
+      business_context_id:
+        type: string
+      business_context_title:
+        type: string
+      business_context_type:
         type: string
       conflict_met_dienst:
         type: string
@@ -1872,6 +3582,25 @@ paths:
       summary: Get email stats
       tags:
       - Emails
+  /focus/summary:
+    get:
+      description: Returns a compact read-only cross-domain status snapshot for the
+        tablet focus dashboard
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.FocusSummary'
+      summary: Get Focus summary
+      tags:
+      - Focus
   /habits:
     get:
       description: Returns all active habits for the user
@@ -2059,10 +3788,44 @@ paths:
       tags:
       - Habits
   /habits/{id}/incident:
+    delete:
+      description: Removes the incident log for a habit on a date (default today,
+        Amsterdam)
+      parameters:
+      - description: Habit ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Date (YYYY-MM-DD, default today)
+        in: query
+        name: datum
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: invalid id or datum
+          schema:
+            type: string
+        "404":
+          description: no incident logged on that date
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete habit incident
+      tags:
+      - Habits
     post:
       consumes:
       - application/json
-      description: Logs a negative incident for a habit
+      description: Logs a negative incident for a habit, optionally on a past date
+        (max 30 days back)
       parameters:
       - description: Habit ID (UUID)
         in: path
@@ -2074,7 +3837,7 @@ paths:
         name: userId
         required: true
         type: string
-      - description: Incident details (trigger, notitie)
+      - description: Incident details (trigger, notitie, datum YYYY-MM-DD)
         in: body
         name: request
         required: true
@@ -2090,7 +3853,7 @@ paths:
             additionalProperties: true
             type: object
         "400":
-          description: invalid JSON or id
+          description: invalid JSON, id or datum
           schema:
             type: string
         "500":
@@ -2361,6 +4124,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
       produces:
       - application/json
       responses:
@@ -2370,6 +4137,10 @@ paths:
             items:
               $ref: '#/definitions/model.LCActionItem'
             type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
         "500":
           description: Internal Server Error
           schema:
@@ -2453,6 +4224,251 @@ paths:
       summary: Update Action Status
       tags:
       - LaventeCare
+  /laventecare/activity:
+    get:
+      description: Returns recent LaventeCare customer dossier activity events
+      parameters:
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCActivityEvent'
+            type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Activity Events
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Logs a customer contact moment, note, decision or project update
+        in the customer dossier timeline
+      parameters:
+      - description: Activity Event
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCActivityEventCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCActivityEvent'
+        "400":
+          description: Invalid request body or missing required field
+          schema:
+            type: string
+        "404":
+          description: Related customer object not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Activity Event
+      tags:
+      - LaventeCare
+  /laventecare/ai/dossier-advice:
+    get:
+      description: Returns read-only dossier completeness, document recommendations
+        and evidence for a customer, lead, project or workstream.
+      parameters:
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
+      - description: Lead ID (UUID)
+        in: query
+        name: leadId
+        type: string
+      - description: Project ID (UUID)
+        in: query
+        name: projectId
+        type: string
+      - description: Workstream ID (UUID)
+        in: query
+        name: workstreamId
+        type: string
+      - description: Free text context
+        in: query
+        name: query
+        type: string
+      - default: 8
+        description: Recommendation limit
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCDossierAdvice'
+        "400":
+          description: Invalid query parameter
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get LaventeCare Dossier Advice
+      tags:
+      - LaventeCare
+  /laventecare/billing:
+    get:
+      description: 'Returns the commercial LaventeCare workflow: quotes, hours and
+        invoices'
+      parameters:
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
+      - default: 40
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCBilling'
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get LaventeCare Billing
+      tags:
+      - LaventeCare
+  /laventecare/changes:
+    get:
+      description: Returns open change requests
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCChangeRequest'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List LaventeCare Change Requests
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a scope/planning/budget change request
+      parameters:
+      - description: Change request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCChangeRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCChangeRequest'
+        "400":
+          description: Invalid request body or missing fields
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create LaventeCare Change Request
+      tags:
+      - LaventeCare
+  /laventecare/changes/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Change request ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status update
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update LaventeCare Change Request Status
+      tags:
+      - LaventeCare
   /laventecare/cockpit:
     get:
       description: Returns the aggregated CRM dashboard data
@@ -2468,6 +4484,347 @@ paths:
           schema:
             type: string
       summary: Get LaventeCare Cockpit
+      tags:
+      - LaventeCare
+  /laventecare/companies:
+    get:
+      description: Returns LaventeCare customer/company dossiers
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      - description: Search by name or website
+        in: query
+        name: q
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCCompany'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Companies
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a reusable customer/company dossier
+      parameters:
+      - description: Company Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCCompanyCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCCompany'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Company
+      tags:
+      - LaventeCare
+  /laventecare/companies/{id}:
+    delete:
+      description: Deletes a customer, cascading their contacts, access credentials
+        and activity timeline
+      parameters:
+      - description: Company ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Company not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete Company
+      tags:
+      - LaventeCare
+    patch:
+      consumes:
+      - application/json
+      description: Updates a reusable customer/company dossier
+      parameters:
+      - description: Company ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Company Update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCCompanyUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Company not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Company
+      tags:
+      - LaventeCare
+  /laventecare/contacts:
+    get:
+      description: Returns contacts, optionally filtered by company
+      parameters:
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCContact'
+            type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Contacts
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a reusable contact for a customer/company
+      parameters:
+      - description: Contact Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCContactCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCContact'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "404":
+          description: Company not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Contact
+      tags:
+      - LaventeCare
+  /laventecare/contacts/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: Updates a reusable contact
+      parameters:
+      - description: Contact ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Contact Update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCContactUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Contact not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Contact
+      tags:
+      - LaventeCare
+  /laventecare/decisions:
+    get:
+      description: Returns recent decision log records
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCDecision'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List LaventeCare Decisions
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a decision log record for governance/audit trail
+      parameters:
+      - description: Decision
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCDecision'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCDecision'
+        "400":
+          description: Invalid request body or missing fields
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create LaventeCare Decision
+      tags:
+      - LaventeCare
+  /laventecare/decisions/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Decision ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status update
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update LaventeCare Decision Status
       tags:
       - LaventeCare
   /laventecare/documents:
@@ -2523,6 +4880,268 @@ paths:
       summary: Seed Documents
       tags:
       - LaventeCare
+  /laventecare/dossier-documents:
+    get:
+      description: Returns generated PDF dossier document history, optionally filtered
+        by lead or project
+      parameters:
+      - default: 20
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      - description: Lead ID (UUID)
+        in: query
+        name: leadId
+        type: string
+      - description: Project ID (UUID)
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCDossierDocument'
+            type: array
+        "400":
+          description: Invalid query parameter
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Dossier Documents
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Logs a generated PDF URL against a lead or project dossier
+      parameters:
+      - description: Dossier Document Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCDossierDocumentCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCDossierDocument'
+        "400":
+          description: Invalid request body or missing required field
+          schema:
+            type: string
+        "404":
+          description: Lead or project not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Dossier Document
+      tags:
+      - LaventeCare
+  /laventecare/invoices:
+    post:
+      consumes:
+      - application/json
+      description: Creates an invoice from manual lines or selected time entries
+      parameters:
+      - description: Invoice
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCInvoiceCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCInvoice'
+        "400":
+          description: Invalid request body or missing lines
+          schema:
+            type: string
+        "404":
+          description: Related customer object not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Invoice
+      tags:
+      - LaventeCare
+  /laventecare/invoices/{id}/document:
+    get:
+      description: Generates a print-ready invoice document and UBL XML export
+      parameters:
+      - description: Invoice ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: json, html or ubl
+        in: query
+        name: format
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCInvoiceDocument'
+        "400":
+          description: Ongeldig factuur-id.
+          schema:
+            type: string
+        "404":
+          description: Invoice not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get Invoice Document
+      tags:
+      - LaventeCare
+  /laventecare/invoices/{id}/payment-refresh:
+    post:
+      description: Fetches the linked bunq RequestInquiry and updates local invoice
+        payment metadata
+      parameters:
+      - description: Invoice ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCInvoicePaymentRefresh'
+        "400":
+          description: Invalid invoice or bunq configuration
+          schema:
+            type: string
+        "404":
+          description: Invoice not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+        "502":
+          description: bunq error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Refresh Invoice Payment Status
+      tags:
+      - LaventeCare
+  /laventecare/invoices/{id}/payment-request:
+    post:
+      description: Creates a pending confirmation action that creates a bunq RequestInquiry
+        after approval
+      parameters:
+      - description: Invoice ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: pending action
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid invoice
+          schema:
+            type: string
+        "404":
+          description: Invoice not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Queue Invoice Payment Request
+      tags:
+      - LaventeCare
+  /laventecare/invoices/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Updates invoice status and optional bunq/payment metadata
+      parameters:
+      - description: Invoice ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Invoice Status
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCInvoiceStatusUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Invoice not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Invoice Status
+      tags:
+      - LaventeCare
   /laventecare/leads:
     get:
       description: Returns all active CRM leads
@@ -2532,6 +5151,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
       produces:
       - application/json
       responses:
@@ -2541,6 +5164,10 @@ paths:
             items:
               $ref: '#/definitions/model.LCLead'
             type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
         "500":
           description: Internal Server Error
           schema:
@@ -2663,6 +5290,112 @@ paths:
       summary: Convert Lead to Project
       tags:
       - LaventeCare
+  /laventecare/mailbox:
+    get:
+      description: Returns templated mail workspace and outbox history
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCMailbox'
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get LaventeCare Mailbox
+      tags:
+      - LaventeCare
+  /laventecare/mailbox/ai-suggest:
+    post:
+      consumes:
+      - application/json
+      description: Builds a safe draft context from LaventeCare, agenda, rooster and
+        notes. It does not create or send mail.
+      parameters:
+      - description: Mail AI suggestion request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCMailAISuggestionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCMailAISuggestion'
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "404":
+          description: Template or context object not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Suggest LaventeCare mail content
+      tags:
+      - LaventeCare
+  /laventecare/mailbox/inbox-sync:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Sync inbound LaventeCare mail
+      tags:
+      - LaventeCare
+  /laventecare/mailbox/send-template:
+    post:
+      consumes:
+      - application/json
+      description: Renders a LaventeCare mail template with customer context. If send=true,
+        sends through Microsoft Graph.
+      parameters:
+      - description: Mail send request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCMailSendRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCMailOutboxItem'
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "404":
+          description: Template or related customer object not found
+          schema:
+            type: string
+        "503":
+          description: Mail provider not configured
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create or send LaventeCare templated mail
+      tags:
+      - LaventeCare
   /laventecare/projects:
     get:
       description: Returns all CRM projects
@@ -2672,6 +5405,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
       produces:
       - application/json
       responses:
@@ -2681,6 +5418,10 @@ paths:
             items:
               $ref: '#/definitions/model.LCProject'
             type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
         "500":
           description: Internal Server Error
           schema:
@@ -2762,6 +5503,121 @@ paths:
       summary: Update Project
       tags:
       - LaventeCare
+  /laventecare/quotes:
+    post:
+      consumes:
+      - application/json
+      description: Creates a quote draft that can later become an invoice
+      parameters:
+      - description: Quote
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCQuoteCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCQuote'
+        "400":
+          description: Invalid request body or missing fields
+          schema:
+            type: string
+        "404":
+          description: Related customer object not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create LaventeCare Quote
+      tags:
+      - LaventeCare
+  /laventecare/quotes/{id}/invoice:
+    post:
+      description: Converts an accepted quote to one invoice draft and returns an
+        existing active invoice if it was already converted
+      parameters:
+      - description: Quote ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCInvoice'
+        "400":
+          description: Quote is not accepted or has no lines
+          schema:
+            type: string
+        "404":
+          description: Quote not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Invoice From Quote
+      tags:
+      - LaventeCare
+  /laventecare/quotes/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Updates a quote status such as verzonden or geaccepteerd
+      parameters:
+      - description: Quote ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Quote not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Quote Status
+      tags:
+      - LaventeCare
   /laventecare/signals/convert-lead:
     post:
       consumes:
@@ -2793,6 +5649,369 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Convert Signal to Lead
+      tags:
+      - LaventeCare
+  /laventecare/sla-incidents:
+    get:
+      description: Returns open SLA/support incidents
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCSlaIncident'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List LaventeCare SLA Incidents
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates an incident for support/SLA tracking
+      parameters:
+      - description: SLA incident
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCSlaIncident'
+        "400":
+          description: Invalid request body or missing fields
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create LaventeCare SLA Incident
+      tags:
+      - LaventeCare
+  /laventecare/sla-incidents/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Incident ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status update
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update LaventeCare SLA Incident Status
+      tags:
+      - LaventeCare
+  /laventecare/time-entries:
+    post:
+      consumes:
+      - application/json
+      description: Logs billable or non-billable work time for a customer/project/workstream
+      parameters:
+      - description: Time Entry
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCTimeEntryCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCTimeEntry'
+        "400":
+          description: Invalid request body or missing fields
+          schema:
+            type: string
+        "404":
+          description: Related customer object not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Time Entry
+      tags:
+      - LaventeCare
+  /laventecare/time-entries/{id}:
+    delete:
+      description: Deletes an uninvoiced time entry
+      parameters:
+      - description: Time Entry ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid id
+          schema:
+            type: string
+        "404":
+          description: Time entry not found
+          schema:
+            type: string
+        "409":
+          description: Time entry already invoiced
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete Time Entry
+      tags:
+      - LaventeCare
+    patch:
+      consumes:
+      - application/json
+      description: Edits description, minutes or status (open/afgeschreven) of an
+        uninvoiced time entry
+      parameters:
+      - description: Time Entry ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Time Entry Update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCTimeEntryUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LCTimeEntry'
+        "400":
+          description: Invalid request body or values
+          schema:
+            type: string
+        "404":
+          description: Time entry not found
+          schema:
+            type: string
+        "409":
+          description: Time entry already invoiced
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Time Entry
+      tags:
+      - LaventeCare
+  /laventecare/workstreams:
+    get:
+      description: Returns LaventeCare opdrachten for small and medium workstreams
+      parameters:
+      - default: 30
+        description: Limit count
+        in: query
+        name: limit
+        type: integer
+      - description: Include closed/completed workstreams
+        in: query
+        name: includeClosed
+        type: boolean
+      - description: Company ID (UUID)
+        in: query
+        name: companyId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.LCWorkstream'
+            type: array
+        "400":
+          description: Ongeldig klant-id.
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List Workstreams
+      tags:
+      - LaventeCare
+    post:
+      consumes:
+      - application/json
+      description: Creates a LaventeCare opdracht for flexible small/medium engagements
+      parameters:
+      - description: Workstream Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCWorkstreamCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCWorkstream'
+        "400":
+          description: Invalid request body or missing title
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create Workstream
+      tags:
+      - LaventeCare
+  /laventecare/workstreams/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: Modifies a LaventeCare opdracht
+      parameters:
+      - description: Workstream ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated Workstream Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCWorkstreamUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: status ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Workstream not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update Workstream
+      tags:
+      - LaventeCare
+  /laventecare/workstreams/{id}/convert-project:
+    post:
+      consumes:
+      - application/json
+      description: Converts a flexible opdracht into a full delivery project
+      parameters:
+      - description: Workstream ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Conversion Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LCConvertWorkstreamToProject'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.LCProject'
+        "400":
+          description: Invalid request body or ID
+          schema:
+            type: string
+        "404":
+          description: Workstream not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Convert Workstream to Project
       tags:
       - LaventeCare
   /loonstroken:
@@ -2858,12 +6077,33 @@ paths:
       - Loonstroken
   /notes:
     get:
-      description: Returns all notes for the user
+      description: Returns notes for the user; supports optional limit/offset and
+        fields=summary
       parameters:
       - description: User ID
         in: query
         name: userId
         required: true
+        type: string
+      - description: Max number of notes (default unlimited)
+        in: query
+        name: limit
+        type: integer
+      - description: Offset for pagination
+        in: query
+        name: offset
+        type: integer
+      - description: Set to 'summary' to omit inhoud
+        in: query
+        name: fields
+        type: string
+      - description: Business-context type (for example contact)
+        in: query
+        name: contextType
+        type: string
+      - description: Specific owned business-context UUID
+        in: query
+        name: contextId
         type: string
       produces:
       - application/json
@@ -3815,8 +7055,14 @@ paths:
         required: true
         type: string
       responses:
+        "200":
+          description: activated / failed device counts
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
         "204":
-          description: No Content
+          description: No Content (scene has no actions or commands were queued)
         "400":
           description: Invalid scene ID
           schema:
@@ -3829,19 +7075,56 @@ paths:
           description: Internal Server Error
           schema:
             type: string
+        "502":
+          description: No device responded
+          schema:
+            type: string
       security:
       - ApiKeyAuth: []
       summary: Activate a scene
       tags:
       - Scenes
   /schedule:
-    get:
-      description: Returns all schedule events for the user
+    delete:
+      description: Deletes all schedule rows and import metadata for the user
       parameters:
       - description: User ID
         in: query
         name: userId
         required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: userId verplicht
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Clear schedule
+      tags:
+      - Schedule
+    get:
+      description: Returns schedule events for the user, optionally bounded by from/to
+        (YYYY-MM-DD)
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: Start date (YYYY-MM-DD)
+        in: query
+        name: from
+        type: string
+      - description: End date (YYYY-MM-DD)
+        in: query
+        name: to
         type: string
       produces:
       - application/json
@@ -3958,15 +7241,10 @@ paths:
       summary: Get schedule metadata
       tags:
       - Schedule
-  /settings/backup:
+  /settings/ai/diagnostics:
     get:
-      description: Generates a JSON backup of all user data
-      parameters:
-      - description: User ID
-        in: query
-        name: userId
-        required: true
-        type: string
+      description: Returns Grok/Groq connectivity status and HomeBot tool capabilities
+        without exposing secrets.
       produces:
       - application/json
       responses:
@@ -3975,11 +7253,7 @@ paths:
           schema:
             additionalProperties: true
             type: object
-        "400":
-          description: userId required
-          schema:
-            type: string
-      summary: Export user data
+      summary: Get AI diagnostics
       tags:
       - Settings
   /settings/overview:
@@ -4056,13 +7330,20 @@ paths:
         name: userId
         required: true
         type: string
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
       produces:
+      - application/json
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
+            additionalProperties:
+              type: integer
             type: object
         "400":
           description: userId required
@@ -4070,8 +7351,10 @@ paths:
             type: string
       security:
       - ApiKeyAuth: []
-      summary: Sync Gmail
+      - ApiKeyAuth: []
+      summary: Trigger Todoist sync
       tags:
+      - Sync
       - Sync
   /sync/status:
     get:
@@ -4086,6 +7369,41 @@ paths:
             type: object
       summary: Get Sync Status
       tags:
+      - Sync
+  /sync/todoist:
+    post:
+      description: Triggers a manual sync of Gmail messages
+      parameters:
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      - description: User ID
+        in: query
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "400":
+          description: userId required
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      summary: Trigger Todoist sync
+      tags:
+      - Sync
       - Sync
   /transactions:
     get:

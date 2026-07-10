@@ -303,7 +303,7 @@ func (s *ContactStore) Create(ctx context.Context, userID string, c model.Contac
 }
 
 // derefTrim returns the trimmed pointed-to string, or "" for nil (paired with a
-// NULLIF(btrim(...),'') on the SQL side so empty/whitespace becomes NULL).
+// NULLIF(btrim(...),”) on the SQL side so empty/whitespace becomes NULL).
 func derefTrim(s *string) string {
 	if s == nil {
 		return ""
@@ -327,6 +327,8 @@ type ContactUpdate struct {
 	TouchLastContact  bool // set last_contacted_at = now()
 }
 
+var ErrInvalidContactName = errors.New("contact display name is required")
+
 // Update applies a partial update and returns the fresh contact.
 func (s *ContactStore) Update(ctx context.Context, userID string, id uuid.UUID, u ContactUpdate) (model.Contact, error) {
 	set := []string{}
@@ -345,7 +347,11 @@ func (s *ContactStore) Update(ctx context.Context, userID string, id uuid.UUID, 
 	}
 
 	if u.DisplayName != nil {
-		add("display_name", strings.TrimSpace(*u.DisplayName))
+		name := strings.TrimSpace(*u.DisplayName)
+		if name == "" {
+			return model.Contact{}, ErrInvalidContactName
+		}
+		add("display_name", name)
 	}
 	if u.RelationshipTypes != nil {
 		types := *u.RelationshipTypes
@@ -380,7 +386,30 @@ func (s *ContactStore) Update(ctx context.Context, userID string, id uuid.UUID, 
 	args = append(args, userID, id)
 	q := fmt.Sprintf(`UPDATE contacts SET %s WHERE user_id = $%d AND id = $%d RETURNING %s`,
 		strings.Join(set, ", "), len(args)-1, len(args), contactCols)
-	return scanContactRow(s.db.Pool.QueryRow(ctx, q, args...))
+
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return model.Contact{}, err
+	}
+	defer tx.Rollback(ctx)
+	if u.DisplayName != nil {
+		if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+			return model.Contact{}, err
+		}
+	}
+	updated, err := scanContactRow(tx.QueryRow(ctx, q, args...))
+	if err != nil {
+		return model.Contact{}, err
+	}
+	if u.DisplayName != nil {
+		if err := renameContactBusinessContexts(ctx, tx, userID, id, updated.DisplayName); err != nil {
+			return model.Contact{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Contact{}, err
+	}
+	return updated, nil
 }
 
 // getBare returns the contact row without nested dates/facts.
@@ -398,21 +427,36 @@ var ErrManagedContact = errors.New("contact is managed in LaventeCare")
 // LaventeCare-sourced contacts: they'd be re-created by the mirror sync, so a
 // delete would only silently drop the user's local enrichment.
 func (s *ContactStore) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+
 	var source string
-	if err := s.db.Pool.QueryRow(ctx, `SELECT source FROM contacts WHERE user_id = $1 AND id = $2`, userID, id).Scan(&source); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT source FROM contacts WHERE user_id = $1 AND id = $2 FOR UPDATE`, userID, id).Scan(&source); err != nil {
 		return err // pgx.ErrNoRows when not found
 	}
 	if source == "laventecare" {
 		return ErrManagedContact
 	}
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM contacts WHERE user_id = $1 AND id = $2`, userID, id)
+	// Notes are user-authored records and must survive a contact deletion. Clear
+	// their soft context link (including history) in the same transaction so a
+	// restore can never resurrect the deleted contact id.
+	if err := clearContactBusinessContexts(ctx, tx, userID, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM contacts WHERE user_id = $1 AND id = $2`, userID, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ─── Important dates ─────────────────────────────────────────────────────────
@@ -812,6 +856,9 @@ func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (i
 				laventeCareIdentityKey(best.naam, best.email)); err != nil {
 				return 0, err
 			}
+			if err := renameContactBusinessContexts(ctx, tx, userID, target, best.naam); err != nil {
+				return 0, err
+			}
 		}
 
 		for _, r := range group {
@@ -868,8 +915,13 @@ func SyncLaventeCareContactMirror(ctx context.Context, db *DB, userID string) (i
 				UPDATE contacts SET source = 'manual', identity_key = NULL, organization_id = NULL, updated_at = now() WHERE id = $1`, id); err != nil {
 				return 0, err
 			}
-		} else if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id); err != nil {
-			return 0, err
+		} else {
+			if err := clearContactBusinessContexts(ctx, tx, userID, id); err != nil {
+				return 0, err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -967,8 +1019,10 @@ var contactChildTables = []string{
 
 // repointContactChildren moves every child row from fromID onto toID within tx.
 // The caller deletes fromID afterwards. Labels use a composite PK so are merged
-// (copy-missing then drop the source's), preventing a PK collision.
-func repointContactChildren(ctx context.Context, tx pgx.Tx, fromID, toID uuid.UUID) error {
+// (copy-missing then drop the source's), preventing a PK collision. Notes and
+// events use a soft TEXT context reference rather than a FK, so they are moved
+// explicitly and their denormalized title is refreshed from the survivor.
+func repointContactChildren(ctx context.Context, tx pgx.Tx, userID string, fromID, toID uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO contact_label_assignments (contact_id, label_id, user_id)
 		SELECT $2, label_id, user_id FROM contact_label_assignments WHERE contact_id = $1
@@ -983,11 +1037,56 @@ func repointContactChildren(ctx context.Context, tx pgx.Tx, fromID, toID uuid.UU
 			return err
 		}
 	}
+	return repointContactBusinessContexts(ctx, tx, userID, fromID, toID)
+}
+
+func repointContactBusinessContexts(ctx context.Context, tx pgx.Tx, userID string, fromID, toID uuid.UUID) error {
+	var survivorTitle string
+	if err := tx.QueryRow(ctx, `SELECT display_name FROM contacts WHERE user_id = $1 AND id = $2`, userID, toID).Scan(&survivorTitle); err != nil {
+		return err
+	}
+	for _, table := range []string{"notes", "note_revisions", "personal_events"} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			UPDATE %s
+			   SET business_context_id = $3::text, business_context_title = $4
+			 WHERE user_id = $1
+			   AND business_context_type = 'contact'
+			   AND business_context_id = $2::text`, table), userID, fromID, toID, survivorTitle); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clearContactBusinessContexts(ctx context.Context, tx pgx.Tx, userID string, id uuid.UUID) error {
+	for _, table := range []string{"notes", "note_revisions", "personal_events"} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			UPDATE %s
+			   SET business_context_type = NULL, business_context_id = NULL, business_context_title = NULL
+			 WHERE user_id = $1
+			   AND business_context_type = 'contact'
+			   AND business_context_id = $2::text`, table), userID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renameContactBusinessContexts(ctx context.Context, tx pgx.Tx, userID string, id uuid.UUID, title string) error {
+	for _, table := range []string{"notes", "note_revisions", "personal_events"} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			UPDATE %s SET business_context_title = $3
+			 WHERE user_id = $1
+			   AND business_context_type = 'contact'
+			   AND business_context_id = $2::text`, table), userID, id, strings.TrimSpace(title)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // contactHasEnrichment reports whether a contact carries local data worth keeping
-// (labels, dates, facts, channels, interactions, or imported WhatsApp).
+// (labels, dates, facts, channels, interactions, imported WhatsApp, or notes).
 func contactHasEnrichment(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
 	var has bool
 	err := tx.QueryRow(ctx, `
@@ -997,6 +1096,7 @@ func contactHasEnrichment(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, e
 		    OR EXISTS(SELECT 1 FROM contact_channels          WHERE contact_id = $1)
 		    OR EXISTS(SELECT 1 FROM contact_interactions      WHERE contact_id = $1)
 		    OR EXISTS(SELECT 1 FROM whatsapp_conversations    WHERE contact_id = $1)
+		    OR EXISTS(SELECT 1 FROM notes WHERE business_context_type = 'contact' AND business_context_id = $1::text)
 		    OR EXISTS(SELECT 1 FROM contact_organizations     WHERE contact_id = $1 AND source <> 'laventecare')`, id).Scan(&has)
 	return has, err
 }
@@ -1026,7 +1126,7 @@ func collapseDuplicateContacts(ctx context.Context, tx pgx.Tx, userID, identityK
 		return err
 	}
 	for _, dup := range dups {
-		if err := repointContactChildren(ctx, tx, dup, canonicalID); err != nil {
+		if err := repointContactChildren(ctx, tx, userID, dup, canonicalID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, dup); err != nil {
@@ -1072,7 +1172,7 @@ func (s *ContactStore) MergeContacts(ctx context.Context, userID string, fromID,
 		return model.Contact{}, err
 	}
 
-	if err := repointContactChildren(ctx, tx, fromID, toID); err != nil {
+	if err := repointContactChildren(ctx, tx, userID, fromID, toID); err != nil {
 		return model.Contact{}, err
 	}
 

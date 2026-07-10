@@ -1948,7 +1948,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if title == "" {
 			title = "Nieuwe notitie"
 		}
-		businessContextType, businessContextID, businessContextTitle := e.inferLaventeCareBusinessContext(
+		businessContextType, businessContextID, businessContextTitle := e.inferNoteBusinessContext(
 			ctx,
 			args.BusinessContextType,
 			args.BusinessContextID,
@@ -2084,7 +2084,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			if args.Tags != nil {
 				sourceTags = args.Tags
 			}
-			nextType, nextID, nextTitle := e.inferLaventeCareBusinessContext(ctx, requestedType, requestedID, requestedTitle, sourceTitle, sourceContent, strings.Join(sourceTags, " "))
+			nextType, nextID, nextTitle := e.inferNoteBusinessContext(ctx, requestedType, requestedID, requestedTitle, sourceTitle, sourceContent, strings.Join(sourceTags, " "))
 			if nextType != "" || contextTouched {
 				fields["business_context_type"] = optionalStringPtr(nextType)
 				fields["business_context_id"] = optionalStringPtr(nextID)

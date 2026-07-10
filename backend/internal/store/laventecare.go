@@ -264,7 +264,18 @@ func (s *LaventeCareStore) CreateCompany(ctx context.Context, userID string, inp
 func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id uuid.UUID, input model.LCCompanyUpdate) error {
 	now := time.Now().UTC()
 	latestContact := parseDateTimePtr(input.LaatsteContact)
-	tag, err := s.db.Pool.Exec(ctx,
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if input.Naam != nil {
+		if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+			return err
+		}
+	}
+	tag, err := tx.Exec(ctx,
 		`UPDATE lc_companies SET
 			naam = COALESCE($3, naam),
 			website = COALESCE($4, website),
@@ -304,24 +315,33 @@ func (s *LaventeCareStore) UpdateCompany(ctx context.Context, userID string, id 
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	// Keep the denormalized business_context_title on notes/personal-events in
-	// sync when the company is renamed, so reads don't show the old name.
+	// Keep the denormalized business_context_title on notes, their revisions and
+	// personal events in sync in this same transaction. That makes both current
+	// reads and a later revision restore see the canonical company name.
 	if input.Naam != nil {
 		if newName := strings.TrimSpace(*input.Naam); newName != "" {
 			idStr := id.String()
-			if _, err := s.db.Pool.Exec(ctx, `
+			if _, err := tx.Exec(ctx, `
 				UPDATE notes SET business_context_title = $3
-				 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr, newName); err != nil {
+				 WHERE user_id = $1 AND business_context_id = $2
+				   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr, newName); err != nil {
 				return err
 			}
-			if _, err := s.db.Pool.Exec(ctx, `
+			if _, err := tx.Exec(ctx, `
+				UPDATE note_revisions SET business_context_title = $3
+				 WHERE user_id = $1 AND business_context_id = $2
+				   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr, newName); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
 				UPDATE personal_events SET business_context_title = $3
-				 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr, newName); err != nil {
+				 WHERE user_id = $1 AND business_context_id = $2
+				   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr, newName); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // DeleteCompany erases a customer and their personal data (GDPR Art.17). It
@@ -336,6 +356,9 @@ func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id 
 	}
 	defer tx.Rollback(ctx)
 
+	if err := lockBusinessContextGraph(ctx, tx, userID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM lc_contacts WHERE user_id = $1 AND company_id = $2`, userID, id); err != nil {
 		return err
 	}
@@ -345,12 +368,20 @@ func (s *LaventeCareStore) DeleteCompany(ctx context.Context, userID string, id 
 	idStr := id.String()
 	if _, err := tx.Exec(ctx, `
 		UPDATE notes SET business_context_id = NULL, business_context_type = NULL, business_context_title = NULL
-		 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr); err != nil {
+		 WHERE user_id = $1 AND business_context_id = $2
+		   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE note_revisions SET business_context_id = NULL, business_context_type = NULL, business_context_title = NULL
+		 WHERE user_id = $1 AND business_context_id = $2
+		   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE personal_events SET business_context_id = NULL, business_context_type = NULL, business_context_title = NULL
-		 WHERE user_id = $1 AND business_context_id = $2`, userID, idStr); err != nil {
+		 WHERE user_id = $1 AND business_context_id = $2
+		   AND business_context_type IN ('laventecare_company', 'laventecare')`, userID, idStr); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM lc_companies WHERE user_id = $1 AND id = $2`, userID, id)

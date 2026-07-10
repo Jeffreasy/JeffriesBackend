@@ -44,7 +44,8 @@ func normalizeTags(tags []string) []string {
 }
 
 // List returns notes for a user. Optional (backward-compatible) query params:
-// limit/offset for pagination and fields=summary to omit the note body —
+// limit/offset for pagination, fields=summary to omit the note body, and an
+// optional contextType/contextId pair —
 // default behaviour (no params) stays a full, unlimited list.
 // @Summary List notes
 // @Description Returns notes for the user; supports optional limit/offset and fields=summary
@@ -54,6 +55,8 @@ func normalizeTags(tags []string) []string {
 // @Param limit query int false "Max number of notes (default unlimited)"
 // @Param offset query int false "Offset for pagination"
 // @Param fields query string false "Set to 'summary' to omit inhoud"
+// @Param contextType query string false "Business-context type (for example contact)"
+// @Param contextId query string false "Specific owned business-context UUID"
 // @Success 200 {array} model.Note
 // @Failure 400 {string} string "userId required"
 // @Failure 500 {string} string "Internal Server Error"
@@ -77,8 +80,17 @@ func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
-	notes, err := h.store.ListPaged(r.Context(), userID, limit, offset, summary)
+	notes, err := h.store.ListWithOptions(r.Context(), userID, store.NoteListOptions{
+		Limit:       limit,
+		Offset:      offset,
+		Summary:     summary,
+		ContextType: r.URL.Query().Get("contextType"),
+		ContextID:   r.URL.Query().Get("contextId"),
+	})
 	if err != nil {
+		if writeBusinessContextError(w, err) {
+			return
+		}
 		InternalError(w, r, err)
 		return
 	}
@@ -188,6 +200,9 @@ func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.store.Create(r.Context(), userID, n)
 	if err != nil {
+		if writeBusinessContextError(w, err) {
+			return
+		}
 		InternalError(w, r, err)
 		return
 	}
@@ -343,6 +358,9 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, store.ErrNoteNotFound) {
 			Error(w, http.StatusNotFound, "Notitie niet gevonden.")
+			return
+		}
+		if writeBusinessContextError(w, err) {
 			return
 		}
 		InternalError(w, r, err)
@@ -580,4 +598,18 @@ func cleanOptionalString(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func writeBusinessContextError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, store.ErrBusinessContextNotFound):
+		// Deliberately do not reveal whether the UUID exists for another user.
+		Error(w, http.StatusBadRequest, "Gekoppelde context niet gevonden.")
+		return true
+	case errors.Is(err, store.ErrInvalidBusinessContext):
+		Error(w, http.StatusBadRequest, "Ongeldige gekoppelde context.")
+		return true
+	default:
+		return false
+	}
 }
