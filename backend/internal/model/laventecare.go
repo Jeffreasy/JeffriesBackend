@@ -8,6 +8,35 @@ import (
 
 // ─── LaventeCare CRM ────────────────────────────────────────────────────────
 
+// LCPublicIntakeRequest is the server-to-server contract used by the public
+// LaventeCare contact service. RequestID is also sent as Idempotency-Key.
+type LCPublicIntakeRequest struct {
+	RequestID   string `json:"requestId"`
+	Source      string `json:"source,omitempty"`
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	Phone       string `json:"phone,omitempty"`
+	CompanyName string `json:"companyName,omitempty"`
+	Website     string `json:"website,omitempty"`
+	ProjectType string `json:"projectType,omitempty"`
+	Budget      string `json:"budget,omitempty"`
+	Timeline    string `json:"timeline,omitempty"`
+	Goal        string `json:"goal,omitempty"`
+	Message     string `json:"message,omitempty"`
+	PageURL     string `json:"pageUrl,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	SubmittedAt string `json:"submittedAt,omitempty"`
+}
+
+type LCPublicIntakeResult struct {
+	Status    string     `json:"status"`
+	IntakeID  uuid.UUID  `json:"intakeId"`
+	CompanyID *uuid.UUID `json:"companyId,omitempty"`
+	ContactID uuid.UUID  `json:"contactId"`
+	LeadID    uuid.UUID  `json:"leadId"`
+	ActionID  uuid.UUID  `json:"actionId"`
+	Duplicate bool       `json:"duplicate"`
+}
 type LCCompany struct {
 	ID                uuid.UUID  `json:"id" db:"id"`
 	UserID            string     `json:"user_id" db:"user_id"`

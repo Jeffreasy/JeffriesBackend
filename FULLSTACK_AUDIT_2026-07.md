@@ -1,5 +1,7 @@
 # Full-stack audit — 2026-07-01
 
+> **Statusupdate 2026-07-17:** dit document bewaart de oorspronkelijke auditcontext en totalen als historisch bewijs. Bevindingen met `[GEFIXT]` zijn in de huidige gezamenlijke working tree hersteld en opnieuw getest. H1 is uit de actuele broncode verwijderd, maar de oude Todoist-token moet nog extern worden ingetrokken omdat Git-historie niet is herschreven. Lees de actuele README's en architectuur-/readinessdocumenten in de vier repositories als leidend voor de huidige situatie.
+
 _Read-only multi-agent audit van de volledige codebase: backend (JeffriesBackend, ~45k LOC Go) + frontend (JeffriesHomeapp, ~65k LOC TS/React). 8 parallelle audit-agents (finance/bunq, core/auth/infra, engine, store/model, handlers/integraties, frontend core/auth, frontend components/hooks, frontend domein-logica). Alle HIGH-bevindingen zijn daarna handmatig geverifieerd tegen de broncode._
 
 **Totaal:** 🔴 0 kritiek · 🟠 8 hoog · 🟡 24 medium · ⚪ ~30 laag
@@ -27,10 +29,9 @@ Aanbevolen volgorde: (1) token roteren, (2) bunq idempotent maken, (3) runtime-s
 
 ## 🟠 HOOG (8)
 
-### H1 · Live Todoist API-token committed in git (OVERSLAGEN)
+### H1 · Live Todoist API-token committed in git (BRON GESANITIZED — ROTATIE NOG VEREIST)
 
-`GoogleScripts/Code.gs:65`
-`const TOKEN = '4309998c3e3588535556645b55f67769ea65430c'` is een echte 40-hex Todoist personal token, getrackt in HEAD. De comment zegt "vervang na 1x uitvoeren" — dat is nooit gebeurd. Iedereen met repo-toegang (en de historie, permanent) krijgt volledige lees/schrijf-toegang tot het Todoist-account. **Actie:** token intrekken bij Todoist, nieuwe genereren, en de waarde uit de source verwijderen (historie-exposure accepteren of scrubben). Dit was het enige echte secret in een volledige entropy-scan van getrackte files.
+De getrackte tokenwaarden in `GoogleScripts/Code.gs` en dit verslag zijn op 2026-07-17 uit de werkboom verwijderd. De credential blijft echter in de git-historie en moet daarom bij Todoist worden ingetrokken. Genereer daarna een nieuwe token en sla die alleen via de interactieve `setTodoistToken()`-dialoog of een lokale secret store op; commit de waarde nooit opnieuw.
 
 ### H2 · [GEFIXT] bunq-betaalverzoek is niet-atomair en niet-idempotent (dup-payment) — *bevestigd door 2 agents + handmatig*
 `backend/internal/engine/executor.go:2978-3002` · `internal/bunq/client.go:260,352`

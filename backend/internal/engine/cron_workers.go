@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/google"
+	"github.com/Jeffreasy/JeffriesBackend/internal/mail"
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	"github.com/Jeffreasy/JeffriesBackend/internal/todoist"
@@ -35,8 +36,9 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 	})
 
 	s.Register(CronJob{
-		Name:     "purge-deleted-emails",
-		Interval: 24 * time.Hour,
+		Name:       "purge-deleted-emails",
+		Interval:   24 * time.Hour,
+		RunOnStart: true,
 		RunFunc: func(ctx context.Context) error {
 			emailStore := store.NewEmailStore(e.db)
 			purged, err := emailStore.PurgeDeleted(ctx, cfg.UserID, 7*24*time.Hour)
@@ -62,8 +64,9 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 	// Prune terminal device commands so historical done/failed rows don't
 	// accumulate forever (and stop inflating the failed-command alert count).
 	s.Register(CronJob{
-		Name:     "cleanup-device-commands",
-		Interval: 24 * time.Hour,
+		Name:       "cleanup-device-commands",
+		Interval:   24 * time.Hour,
+		RunOnStart: true,
 		RunFunc: func(ctx context.Context) error {
 			deleted, err := e.cmdStore.DeleteOldCompleted(ctx, 7*24*time.Hour)
 			if err != nil {
@@ -78,8 +81,9 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 
 	// Prune sync-run audit history so the table doesn't grow unbounded.
 	s.Register(CronJob{
-		Name:     "cleanup-sync-runs",
-		Interval: 24 * time.Hour,
+		Name:       "cleanup-sync-runs",
+		Interval:   24 * time.Hour,
+		RunOnStart: true,
 		RunFunc: func(ctx context.Context) error {
 			deleted, err := store.NewSyncRunStore(e.db).DeleteOlderThan(ctx, 14*24*time.Hour)
 			if err != nil {
@@ -92,6 +96,17 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 		},
 	})
 
+	// Recover any Graph /send call whose HTTP response or local status write was
+	// interrupted. The persisted immutable draft is resent, never recreated.
+	if e.cfg.LaventeCareMailConfigured() {
+		mailSender := mail.NewSender(e.cfg)
+		s.Register(CronJob{
+			Name:       "reconcile-laventecare-mail",
+			Interval:   2 * time.Minute,
+			RunOnStart: true,
+			RunFunc:    cronReconcileLaventeCareMail(e, mailSender, cfg.UserID),
+		})
+	}
 	// ── Google OAuth client (shared by Gmail + Calendar + HTTP handlers) ──────
 	var oauthClient *google.OAuthClient
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRefreshToken != "" {
@@ -101,9 +116,10 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 	// ── Telegram crons ───────────────────────────────────────────────────────
 	if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
 		s.Register(CronJob{
-			Name:     "telegram-scheduled-briefing",
-			Interval: 15 * time.Minute,
-			RunFunc:  cronTelegramBriefing(e, cfg),
+			Name:       "telegram-scheduled-briefing",
+			Interval:   15 * time.Minute,
+			RunOnStart: true,
+			RunFunc:    cronTelegramBriefing(e, cfg),
 		})
 
 		s.Register(CronJob{
@@ -192,9 +208,10 @@ func RegisterHomeappCrons(s *CronScheduler, e *Engine, cfg CronConfig) {
 	// ── Todoist sync — daily ─────────────────────────────────────────────────
 	if cfg.TodoistEnabled && cfg.TodoistAPIToken != "" {
 		s.Register(CronJob{
-			Name:     "sync-todoist-daily",
-			Interval: 24 * time.Hour,
-			RunFunc:  cronTodoistSync(e.db, cfg),
+			Name:       "sync-todoist-daily",
+			Interval:   24 * time.Hour,
+			RunOnStart: true,
+			RunFunc:    cronTodoistSync(e.db, cfg),
 		})
 	}
 }
@@ -574,6 +591,47 @@ func (e *Engine) alertPendingCalendarFailures(ctx context.Context, count int) {
 	}
 }
 
+func cronReconcileLaventeCareMail(e *Engine, sender *mail.Sender, userID string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		mailStore := store.NewLaventeCareStore(e.db)
+		items, err := mailStore.ListMailOutboxForReconciliation(ctx, userID, 25)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item.ProviderMessageID == nil || strings.TrimSpace(*item.ProviderMessageID) == "" {
+				continue
+			}
+			draft := &mail.SendResult{ProviderMessageID: *item.ProviderMessageID}
+			if item.ConversationID != nil {
+				draft.ConversationID = *item.ConversationID
+			}
+			state, stateErr := sender.MessageState(ctx, draft.ProviderMessageID)
+			if stateErr == nil && state.Sent {
+				if state.ConversationID != "" {
+					draft.ConversationID = state.ConversationID
+				}
+			} else if stateErr == nil && state.Draft {
+				if _, err := sender.SendDraft(ctx, draft); err != nil {
+					if mail.IsDeliveryUnknown(err) {
+						_ = mailStore.MarkMailOutboxUnconfirmed(ctx, userID, item.ID, "Verzendstatus nog onbekend; automatische reconciliatie probeert later opnieuw.")
+						continue
+					}
+					_ = mailStore.MarkMailOutboxFailed(ctx, userID, item.ID, "Microsoft Graph heeft het opgeslagen concept niet afgeleverd.")
+					continue
+				}
+			} else {
+				// A temporary GET failure is not evidence that delivery failed.
+				continue
+			}
+			if err := mailStore.MarkMailOutboxSent(ctx, userID, item.ID, draft.ProviderMessageID, draft.ConversationID); err != nil {
+				slog.Warn("reconciled Graph mail but local sent status failed", "outboxID", item.ID, "error", err)
+			}
+		}
+		return nil
+	}
+}
+
 // ── Todoist sync ─────────────────────────────────────────────────────────────
 
 func cronTodoistSync(db *store.DB, cfg CronConfig) func(ctx context.Context) error {
@@ -601,8 +659,7 @@ func pushScheduleToTodoist(ctx context.Context, db *store.DB, cfg CronConfig) (*
 		})
 	}
 	client := todoist.NewClient(cfg.TodoistAPIToken, cfg.TodoistProjectID)
-	ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
-	return client.SyncDiensten(ctx, diensten)
+	return client.SyncDiensten(ctx, diensten, todoist.AmsterdamDate(time.Now()))
 }
 
 // ── Telegram cron implementations ────────────────────────────────────────────
@@ -734,6 +791,13 @@ func hasAnyRelationship(types []string, needles ...string) bool {
 	return false
 }
 
+func briefingWindowOpen(currentMinutes, targetMinutes, graceMinutes int) bool {
+	if graceMinutes < 1 {
+		return false
+	}
+	return currentMinutes >= targetMinutes && currentMinutes < targetMinutes+graceMinutes
+}
+
 func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		now := time.Now().In(amsterdam)
@@ -764,9 +828,10 @@ func cronTelegramBriefing(e *Engine, cfg CronConfig) func(ctx context.Context) e
 		targetMinutes := targetHour*60 + targetMinute
 		currentMinutes := now.Hour()*60 + now.Minute()
 
-		// Since the cron runs every 15 minutes, we trigger if current time is within [targetMinutes, targetMinutes + 14]
-		// and we haven't sent a briefing yet today.
-		if currentMinutes < targetMinutes || currentMinutes >= targetMinutes+15 {
+		// Allow a two-hour catch-up window. RunOnStart plus the atomic per-day claim
+		// means a deploy during the original slot cannot silently skip today's
+		// briefing, while a late restart does not send a stale morning brief.
+		if !briefingWindowOpen(currentMinutes, targetMinutes, 120) {
 			return nil
 		}
 

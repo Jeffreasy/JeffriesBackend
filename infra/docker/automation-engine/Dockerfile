@@ -4,7 +4,7 @@
 # Controls WiZ bulbs via unicast UDP over the local network.
 # NEVER deploy to Render/cloud — WiZ is only reachable via LAN.
 
-FROM golang:alpine AS builder
+FROM golang:1.25.12-alpine AS builder
 
 WORKDIR /src
 
@@ -17,8 +17,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # ─── Runtime ──────────────────────────────────────────────────────────────────
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -G app app
 
 COPY --from=builder /engine /engine
+
+USER app
 
 CMD ["/engine"]

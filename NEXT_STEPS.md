@@ -2,6 +2,8 @@
 
 _Multi-agent investigation (reliability, security, AI/Telegram, product, tech-debt) → synthesized recommendation._
 
+> **Status 2026-07-17:** dit is een historisch onderzoeksverslag, geen actuele configuratiehandleiding. De codeclaims over APP-secret-fallbacks voor bridge/vault, bunq-idempotency, ontbrekende body limits, een ontbrekende Render-blueprint, verse-database boot en nul handlertests zijn inmiddels achterhaald door de remediation-pass. Externe acties — productiecredentials roteren, backups/PITR activeren en een externe uptime-monitor instellen — blijven operatorwerk en kunnen niet vanuit deze repository worden bevestigd.
+
 ## Recommended next step
 Spend one focused session locking down recovery + the exposed secrets BEFORE adding any AI/Telegram features, because right now the system is unrecoverable from data loss and has live production keys in a chat transcript. Concretely, in this order in a single sitting: (1) Rotate the bunq API key and GOOGLE_CLIENT_SECRET in their consoles, then Microsoft/Telegram/Clerk/Grok-Groq; while in Render env vars, set a dedicated BRIDGE_API_KEY and LAVENTECARE_SECRET_KEY so they stop defaulting to APP_SECRET_KEY (the warning at config.go:199-200 already flags this). (2) Enable Render Postgres daily backups / PITR (dashboard toggle). (3) Add a free UptimeRobot/healthchecks.io monitor on /health. That is ~half a day, almost no code, and it converts the two genuinely unrecoverable risks (permanent loss of bank/care/invoice data; leaked banking + Google-token-minting secrets) into closed items. Only after that, return to the AI/Telegram focus the user actually wants.
 

@@ -8,9 +8,14 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type EmailHandler struct{ store *store.EmailStore }
+type EmailHandler struct {
+	store       *store.EmailStore
+	ownerUserID string
+}
 
-func NewEmailHandler(s *store.EmailStore) *EmailHandler { return &EmailHandler{store: s} }
+func NewEmailHandler(s *store.EmailStore, ownerUserID string) *EmailHandler {
+	return &EmailHandler{store: s, ownerUserID: ownerUserID}
+}
 
 // List returns paginated emails for a user.
 // @Summary List emails
@@ -26,7 +31,7 @@ func NewEmailHandler(s *store.EmailStore) *EmailHandler { return &EmailHandler{s
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /emails [get]
 func (h *EmailHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "user_id is verplicht")
 		return
@@ -65,7 +70,7 @@ func (h *EmailHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /emails/search [get]
 func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
+	userID := h.ownerUserID
 	query := r.URL.Query().Get("q")
 	if userID == "" || query == "" {
 		Error(w, http.StatusBadRequest, "user_id en q zijn verplicht")
@@ -92,7 +97,7 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /emails/stats [get]
 func (h *EmailHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "user_id is verplicht")
 		return
@@ -139,7 +144,7 @@ func (h *EmailHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.MarkRead(r.Context(), body.UserID, body.GmailID, body.Read); err != nil {
+	if err := h.store.MarkRead(r.Context(), h.ownerUserID, body.GmailID, body.Read); err != nil {
 		InternalError(w, r, err)
 		return
 	}
@@ -168,7 +173,7 @@ func (h *EmailHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.MarkDeleted(r.Context(), body.UserID, body.GmailID); err != nil {
+	if err := h.store.MarkDeleted(r.Context(), h.ownerUserID, body.GmailID); err != nil {
 		InternalError(w, r, err)
 		return
 	}

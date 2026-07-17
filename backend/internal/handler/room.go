@@ -173,21 +173,24 @@ func (h *RoomHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// queryInt reads an integer query parameter with a default.
+// queryInt reads a non-negative integer query parameter with a safe default.
+// List limits are capped centrally because several stores interpret limit <= 0
+// as "no LIMIT", which otherwise turns ?limit=0/-1 into an unbounded scan.
 func queryInt(r *http.Request, key string, fallback int) int {
 	v := r.URL.Query().Get(key)
 	if v == "" {
 		return fallback
 	}
 	var n int
-	if _, err := fmt.Sscan(v, &n); err != nil {
+	if _, err := fmt.Sscan(v, &n); err != nil || n < 0 || (key == "limit" && n == 0) {
 		return fallback
 	}
-	// Cap LIMIT/OFFSET-style params so an abusive value (e.g. limit=2000000000)
-	// can't force a huge scan/allocation. 10000 is far above any real list page.
-	const maxQueryInt = 10000
-	if n > maxQueryInt {
-		return maxQueryInt
+	maxValue := 10000 // safe upper bound for offsets such as skip
+	if key == "limit" {
+		maxValue = 200
+	}
+	if n > maxValue {
+		return maxValue
 	}
 	return n
 }

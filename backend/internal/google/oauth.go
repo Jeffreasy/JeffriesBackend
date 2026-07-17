@@ -66,7 +66,6 @@ type OAuthClient struct {
 	expiresAt   time.Time
 }
 
-
 // NewOAuthClient creates a new Google OAuth client.
 func NewOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
 	return &OAuthClient{
@@ -76,7 +75,6 @@ func NewOAuthClient(clientID, clientSecret, refreshToken string) *OAuthClient {
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 	}
 }
-
 
 var (
 	sharedClientOnce sync.Once

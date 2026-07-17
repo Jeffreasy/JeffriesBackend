@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -194,7 +193,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if len(statePatch) > 0 {
-				if err := h.devices.UpdateState(context.Background(), action.DeviceID, statePatch); err != nil {
+				if err := h.devices.UpdateState(ctx, action.DeviceID, statePatch); err != nil {
 					slog.Warn("scene optimistic state update failed", "device", action.DeviceID, "error", err)
 				}
 			}
@@ -232,6 +231,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 			if v, ok := a.TargetState["brightness"]; ok {
 				if b, ok := toIntVal(v); ok {
+					b = clampInt(b, 10, 100)
 					opts.Brightness = &b
 					statePatch["brightness"] = b
 				}
@@ -242,18 +242,21 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 			}
 			if rv, ok := a.TargetState["r"]; ok {
 				if r, ok := toIntVal(rv); ok {
+					r = clampInt(r, 0, 255)
 					opts.R = &r
 					statePatch["r"] = r
 				}
 			}
 			if gv, ok := a.TargetState["g"]; ok {
 				if g, ok := toIntVal(gv); ok {
+					g = clampInt(g, 0, 255)
 					opts.G = &g
 					statePatch["g"] = g
 				}
 			}
 			if bv, ok := a.TargetState["b"]; ok {
 				if b, ok := toIntVal(bv); ok {
+					b = clampInt(b, 0, 255)
 					opts.B = &b
 					statePatch["b"] = b
 				}
@@ -270,7 +273,7 @@ func (h *SceneHandler) Activate(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 
 			if len(statePatch) > 0 {
-				if err := h.devices.UpdateState(context.Background(), a.DeviceID, statePatch); err != nil {
+				if err := h.devices.UpdateState(ctx, a.DeviceID, statePatch); err != nil {
 					slog.Warn("scene state update failed", "device", a.DeviceID, "error", err)
 				}
 			}
@@ -307,11 +310,13 @@ func sceneActionOn(a model.SceneAction) bool {
 func sceneActionColorTemp(a model.SceneAction) (int, bool) {
 	if v, ok := a.TargetState["color_temp_mireds"]; ok {
 		if m, ok := toIntVal(v); ok && m > 0 {
-			return int(math.Round(1_000_000.0 / float64(m))), true
+			return clampInt(int(math.Round(1_000_000.0/float64(m))), 2200, 6500), true
 		}
 	}
 	if v, ok := a.TargetState["color_temp"]; ok {
-		return toIntVal(v)
+		if kelvin, ok := toIntVal(v); ok {
+			return clampInt(kelvin, 2200, 6500), true
+		}
 	}
 	return 0, false
 }
@@ -323,6 +328,7 @@ func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any
 
 	if v, ok := a.TargetState["brightness"]; ok {
 		if b, ok := toIntVal(v); ok {
+			b = clampInt(b, 10, 100)
 			command["brightness"] = b
 			statePatch["brightness"] = b
 		}
@@ -333,18 +339,21 @@ func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any
 	}
 	if rv, ok := a.TargetState["r"]; ok {
 		if r, ok := toIntVal(rv); ok {
+			r = clampInt(r, 0, 255)
 			command["r"] = r
 			statePatch["r"] = r
 		}
 	}
 	if gv, ok := a.TargetState["g"]; ok {
 		if g, ok := toIntVal(gv); ok {
+			g = clampInt(g, 0, 255)
 			command["g"] = g
 			statePatch["g"] = g
 		}
 	}
 	if bv, ok := a.TargetState["b"]; ok {
 		if b, ok := toIntVal(bv); ok {
+			b = clampInt(b, 0, 255)
 			command["b"] = b
 			statePatch["b"] = b
 		}
@@ -357,6 +366,9 @@ func commandFromSceneAction(a model.SceneAction) (map[string]any, map[string]any
 func toIntVal(v any) (int, bool) {
 	switch n := v.(type) {
 	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n {
+			return 0, false
+		}
 		return int(n), true
 	case int:
 		return n, true

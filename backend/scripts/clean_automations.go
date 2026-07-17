@@ -24,6 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %v", err)
 	}
+	defer db.Close()
 
 	autoStore := store.NewAutomationStore(db)
 
@@ -50,7 +51,7 @@ func main() {
 
 		if isCorrupted || isDuplicate {
 			fmt.Printf("Deleting automation: %s (Corrupted: %v, Duplicate: %v)\n", a.Name, isCorrupted, isDuplicate)
-			err := autoStore.Delete(ctx, a.ID)
+			err := autoStore.Delete(ctx, cfg.HomeappUserID, a.ID)
 			if err != nil {
 				log.Printf("Failed to delete %s: %v", a.ID, err)
 			} else {

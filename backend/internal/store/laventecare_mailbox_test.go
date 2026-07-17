@@ -117,3 +117,28 @@ func TestApplyResolvedMailIdentityOverridesAIContactName(t *testing.T) {
 func containsText(value, needle string) bool {
 	return len(needle) == 0 || (len(value) >= len(needle) && strings.Contains(value, needle))
 }
+
+func TestRedactMailSecretsBeforePersistence(t *testing.T) {
+	textBody := "Account 1\n- Wachtwoord: ExamplePass1\n- Rol: Admin"
+	redactedText := redactMailSecretsText(textBody)
+	if strings.Contains(redactedText, "ExamplePass1") {
+		t.Fatalf("plaintext password survived text redaction: %s", redactedText)
+	}
+
+	htmlBody := "<span style=\"font-family:ui-monospace,monospace\">ExamplePass1</span>"
+	redactedHTML := redactMailSecretsHTML(htmlBody)
+	if strings.Contains(redactedHTML, "ExamplePass1") {
+		t.Fatalf("plaintext password survived HTML redaction: %s", redactedHTML)
+	}
+}
+
+func TestValidMailAddressRejectsDisplayNamesAndMalformedValues(t *testing.T) {
+	if !validMailAddress("customer@example.test") {
+		t.Fatal("valid address was rejected")
+	}
+	for _, invalid := range []string{"", "not-an-email", "Customer <customer@example.test>"} {
+		if validMailAddress(invalid) {
+			t.Fatalf("invalid address was accepted: %q", invalid)
+		}
+	}
+}

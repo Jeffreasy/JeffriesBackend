@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -17,12 +16,17 @@ import (
 )
 
 // ContactHandler serves the unified Contacts/Relationships module.
-type ContactHandler struct{ store *store.ContactStore }
+type ContactHandler struct {
+	store       *store.ContactStore
+	ownerUserID string
+}
 
-func NewContactHandler(s *store.ContactStore) *ContactHandler { return &ContactHandler{store: s} }
+func NewContactHandler(s *store.ContactStore, ownerUserID string) *ContactHandler {
+	return &ContactHandler{store: s, ownerUserID: ownerUserID}
+}
 
-func contactUserID(r *http.Request) string {
-	return strings.TrimSpace(r.URL.Query().Get("userId"))
+func (h *ContactHandler) contactUserID(_ *http.Request) string {
+	return h.ownerUserID
 }
 
 // parseOptionalUUID turns an optional string into an optional UUID. A nil or
@@ -55,23 +59,25 @@ func maxDayForMonth(month int) int {
 	}
 }
 
-// List returns contacts for a user; optional ?q=, ?type=, ?includeArchived=, ?limit=.
+func contactListOptions(r *http.Request) store.ListContactsOptions {
+	return store.ListContactsOptions{
+		Query:            r.URL.Query().Get("q"),
+		RelationshipType: r.URL.Query().Get("type"),
+		IncludeArchived:  strings.EqualFold(r.URL.Query().Get("includeArchived"), "true"),
+		Limit:            queryInt(r, "limit", 200),
+		Offset:           queryInt(r, "offset", 0),
+	}
+}
+
+// List returns one JSON-array page of owner-scoped contacts. The list contract
+// uses deterministic name ordering and bounded limit/offset pagination.
 func (h *ContactHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
 	}
-	opts := store.ListContactsOptions{
-		Query:            r.URL.Query().Get("q"),
-		RelationshipType: r.URL.Query().Get("type"),
-		IncludeArchived:  strings.EqualFold(r.URL.Query().Get("includeArchived"), "true"),
-	}
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			opts.Limit = parsed
-		}
-	}
+	opts := contactListOptions(r)
 	contacts, err := h.store.List(r.Context(), userID, opts)
 	if err != nil {
 		InternalError(w, r, err)
@@ -82,7 +88,7 @@ func (h *ContactHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Get returns a single contact with dates and facts.
 func (h *ContactHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -120,7 +126,7 @@ type contactCreateBody struct {
 // email/name returns 409 with the existing contact so the UI can offer
 // "open bestaande" / "toch aanmaken".
 func (h *ContactHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -187,7 +193,7 @@ type contactUpdateBody struct {
 
 // Update applies a partial update.
 func (h *ContactHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -259,7 +265,7 @@ func (h *ContactHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete removes a contact.
 func (h *ContactHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -289,7 +295,7 @@ type mergeContactBody struct {
 
 // Merge folds contact {id} into the `into` contact (survivor).
 func (h *ContactHandler) Merge(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -337,7 +343,7 @@ type importantDateBody struct {
 
 // AddDate adds an important date to a contact.
 func (h *ContactHandler) AddDate(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -383,9 +389,14 @@ func (h *ContactHandler) AddDate(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDate removes an important date.
 func (h *ContactHandler) DeleteDate(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	dateID, err := uuid.Parse(chi.URLParam(r, "dateID"))
@@ -393,7 +404,7 @@ func (h *ContactHandler) DeleteDate(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.DeleteImportantDate(r.Context(), userID, dateID); err != nil {
+	if err := h.store.DeleteImportantDate(r.Context(), userID, contactID, dateID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Datum niet gevonden.")
 			return
@@ -413,7 +424,7 @@ type factBody struct {
 
 // AddFact records a fact about a contact.
 func (h *ContactHandler) AddFact(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -455,9 +466,14 @@ func (h *ContactHandler) AddFact(w http.ResponseWriter, r *http.Request) {
 
 // DeleteFact removes a fact.
 func (h *ContactHandler) DeleteFact(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	factID, err := uuid.Parse(chi.URLParam(r, "factID"))
@@ -465,7 +481,7 @@ func (h *ContactHandler) DeleteFact(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.DeleteFact(r.Context(), userID, factID); err != nil {
+	if err := h.store.DeleteFact(r.Context(), userID, contactID, factID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Feit niet gevonden.")
 			return
@@ -488,7 +504,7 @@ type whatsappImportBody struct {
 // WhatsAppImport parses an exported chat (.txt content in `text`) and stores it
 // for the contact, returning the conversation + its metadata summary.
 func (h *ContactHandler) WhatsAppImport(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -544,7 +560,7 @@ func (h *ContactHandler) WhatsAppImport(w http.ResponseWriter, r *http.Request) 
 
 // WhatsAppList returns a contact's imported conversations + their summaries.
 func (h *ContactHandler) WhatsAppList(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -569,9 +585,14 @@ func (h *ContactHandler) WhatsAppList(w http.ResponseWriter, r *http.Request) {
 
 // WhatsAppMessages returns the (local) messages of a conversation.
 func (h *ContactHandler) WhatsAppMessages(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	convID, err := uuid.Parse(chi.URLParam(r, "convID"))
@@ -579,8 +600,12 @@ func (h *ContactHandler) WhatsAppMessages(w http.ResponseWriter, r *http.Request
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	msgs, err := h.store.ListWhatsAppMessages(r.Context(), userID, convID, 5000)
+	msgs, err := h.store.ListWhatsAppMessages(r.Context(), userID, contactID, convID, 5000)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "WhatsApp-gesprek niet gevonden.")
+			return
+		}
 		InternalError(w, r, err)
 		return
 	}

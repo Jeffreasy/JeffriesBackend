@@ -58,20 +58,24 @@ function setHomeappProperties() {
 // 🔑 EENMALIGE TOKEN SETUP — Sla Todoist token veilig op in UserProperties
 // ============================================================================
 // UserProperties heeft een apart quotum (los van ScriptProperties).
-// Voer dit 1x uit via 🚀 Master Tools → Sla Todoist Token Op.
-// Na uitvoering: verwijder de token-waarde hieronder uit de code.
-
+// De token wordt via een dialoog gevraagd en komt nooit in de broncode terecht.
 function setTodoistToken() {
-  const TOKEN = '4309998c3e3588535556645b55f67769ea65430c'; // ← na 1x uitvoeren: vervang door 'VERVANG_MET_JOUW_TOKEN'
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'Todoist-token instellen',
+    'Plak je nieuw gegenereerde Todoist API-token. De waarde wordt alleen in UserProperties opgeslagen.',
+    ui.ButtonSet.OK_CANCEL
+  );
 
-  if (!TOKEN || TOKEN === 'VERVANG_MET_JOUW_TOKEN') {
-    throw new Error('❌ Token al opgeslagen of TOKEN-variabele is leeg.');
-  }
+  if (response.getSelectedButton() !== ui.Button.OK) return;
 
-  PropertiesService.getUserProperties().setProperty('TODOIST_API_TOKEN', TOKEN);
+  const token = response.getResponseText().trim();
+  if (token.length < 20) throw new Error('❌ Ongeldig Todoist API-token.');
+
+  PropertiesService.getUserProperties().setProperty('TODOIST_API_TOKEN', token);
   Logger.log('✅ Todoist API token opgeslagen in UserProperties');
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    '✅ Token veilig opgeslagen! Vervang nu de tokenwaarde in de code door VERVANG_MET_JOUW_TOKEN.',
+    '✅ Token veilig opgeslagen in UserProperties.',
     '🔑 Token Setup', 10
   );
 }

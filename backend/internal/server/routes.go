@@ -7,7 +7,12 @@ import (
 	_ "github.com/Jeffreasy/JeffriesBackend/docs"
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/handler"
+	appmiddleware "github.com/Jeffreasy/JeffriesBackend/internal/middleware"
 )
+
+func swaggerEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.IsDevelopment()
+}
 
 // registerRoutes mounts all API routes onto the chi router.
 func registerRoutes(
@@ -29,6 +34,7 @@ func registerRoutes(
 	noteH *handler.NoteHandler,
 	habitH *handler.HabitHandler,
 	lcH *handler.LaventeCareHandler,
+	intakeH *handler.PublicIntakeHandler,
 	settingsH *handler.SettingsHandler,
 	syncH *handler.SyncHandler,
 	pendingH *handler.PendingActionHandler,
@@ -36,22 +42,28 @@ func registerRoutes(
 	contactH *handler.ContactHandler,
 ) {
 	authMw := apiKeyMiddleware(cfg.AppSecretKey)
-	// The local LAN bridge authenticates with its own key, but we accept the app
-	// secret too so a key drift between cloud and bridge can't take the lights
-	// down (setting a distinct BRIDGE_API_KEY on both sides still works).
-	bridgeMw := bridgeKeyMiddleware(cfg.BridgeAPIKey, cfg.AppSecretKey)
+	sensitiveMw := appmiddleware.SensitiveRateLimiter(cfg.TrustedProxyCount)
+	// The LAN bridge has a deliberately narrow credential that is never accepted
+	// by the owner API and cannot read finance, mail or CRM data.
+	bridgeMw := bridgeKeyMiddleware(cfg.BridgeAPIKey)
 
 	r.Get("/", health.Check)
 	r.Head("/", health.Check)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Swagger Docs
-		r.Get("/swagger/*", httpSwagger.Handler(
-			httpSwagger.URL("/api/v1/swagger/doc.json"),
-		))
+		// Swagger exposes the full endpoint inventory and is intended only for
+		// local development. Production requests receive the normal 404.
+		if swaggerEnabled(cfg) {
+			r.Get("/swagger/*", httpSwagger.Handler(
+				httpSwagger.URL("/api/v1/swagger/doc.json"),
+			))
+		}
 
 		// Health
 		r.Get("/health", health.Check)
+
+		// Public website -> private CRM, authenticated with a dedicated Bearer secret.
+		r.With(scopedBearerMiddleware(cfg.LaventeCareIntakeSecret)).Post("/laventecare/intake", intakeH.Submit)
 
 		// Local LAN bridge (Render queue -> local WiZ UDP). Authenticated with the
 		// bridge's own key (bridgeMw), NOT the app secret, so the trust-boundary
@@ -59,6 +71,7 @@ func registerRoutes(
 		r.Group(func(r chi.Router) {
 			r.Use(bridgeMw)
 			r.Route("/bridge", func(r chi.Router) {
+				r.Get("/devices", bridgeH.ListDevices)
 				r.Post("/commands/claim", bridgeH.ClaimCommands)
 				r.Post("/commands/{commandID}/complete", bridgeH.CompleteCommand)
 				r.Post("/devices/{deviceID}/status", bridgeH.UpdateDeviceStatus)
@@ -200,9 +213,9 @@ func registerRoutes(
 				r.Get("/mailbox", lcH.Mailbox)
 				r.With(authMw).Post("/mailbox/templates", lcH.CreateMailTemplate)
 				r.With(authMw).Patch("/mailbox/templates/{id}", lcH.UpdateMailTemplate)
-				r.With(authMw).Post("/mailbox/ai-suggest", lcH.SuggestMailContent)
-				r.With(authMw).Post("/mailbox/send-template", lcH.SendTemplatedMail)
-				r.With(authMw).Post("/mailbox/inbox-sync", lcH.SyncInbox)
+				r.With(authMw, sensitiveMw).Post("/mailbox/ai-suggest", lcH.SuggestMailContent)
+				r.With(authMw, sensitiveMw).Post("/mailbox/send-template", lcH.SendTemplatedMail)
+				r.With(authMw, sensitiveMw).Post("/mailbox/inbox-sync", lcH.SyncInbox)
 				r.With(authMw).Patch("/mailbox/inbox/{id}/read", lcH.MarkInboxRead)
 				r.Get("/companies", lcH.ListCompanies)
 				r.With(authMw).Post("/companies", lcH.CreateCompany)
@@ -223,11 +236,11 @@ func registerRoutes(
 				r.With(authMw).Post("/invoices", lcH.CreateInvoice)
 				r.Get("/invoices/{id}/document", lcH.GetInvoiceDocument)
 				r.With(authMw).Patch("/invoices/{id}/status", lcH.UpdateInvoiceStatus)
-				r.With(authMw).Post("/invoices/{id}/payment-request", lcH.CreateInvoicePaymentRequestAction)
-				r.With(authMw).Post("/invoices/{id}/payment-refresh", lcH.RefreshInvoicePaymentStatus)
+				r.With(authMw, sensitiveMw).Post("/invoices/{id}/payment-request", lcH.CreateInvoicePaymentRequestAction)
+				r.With(authMw, sensitiveMw).Post("/invoices/{id}/payment-refresh", lcH.RefreshInvoicePaymentStatus)
 				r.Get("/documents", lcH.ListDocuments)
 				r.Get("/dossier-documents", lcH.ListDossierDocuments)
-				r.Get("/ai/dossier-advice", lcH.DossierAdvice)
+				r.With(sensitiveMw).Get("/ai/dossier-advice", lcH.DossierAdvice)
 				r.With(authMw).Post("/dossier-documents", lcH.CreateDossierDocument)
 				r.Get("/activity", lcH.ListActivityEvents)
 				r.With(authMw).Post("/activity", lcH.CreateActivityEvent)

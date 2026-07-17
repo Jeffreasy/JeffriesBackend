@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -48,7 +49,6 @@ func isLaventeCareValidationError(err error) bool {
 	}
 	return true
 }
-
 
 const (
 	maxLaventeCareMailAttachments     = 6
@@ -367,7 +367,6 @@ Maak een voorstel voor templatevariabelen. Variabelen moeten aansluiten op de pl
 		}
 	}
 
-
 	JSON(w, http.StatusOK, suggestion)
 }
 
@@ -433,29 +432,58 @@ func (h *LaventeCareHandler) SendTemplatedMail(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	result, err := h.mailSender.Send(r.Context(), mail.SendInput{
-		To:          []string{item.ToEmail},
-		CC:          item.CC,
-		BCC:         item.BCC,
-		Subject:     item.Subject,
-		HTML:        item.BodyHTML,
-		Text:        derefModelString(item.BodyText),
-		Attachments: mailAttachmentsFromModel(input.Attachments),
+	draft, err := h.mailSender.CreateDraft(r.Context(), mail.SendInput{
+		To:             []string{item.ToEmail},
+		CC:             item.CC,
+		BCC:            item.BCC,
+		Subject:        item.Subject,
+		HTML:           item.BodyHTML,
+		Text:           derefModelString(item.BodyText),
+		Attachments:    mailAttachmentsFromModel(input.Attachments),
+		IdempotencyKey: item.ID.String(),
 	})
 	if err != nil {
-		// The outbox row's error_message is rendered in the UI — store the short
-		// Dutch summary there and keep the raw Graph error in the server log (M4).
-		slog.Error("laventecare mail send failed", "outboxId", item.ID, "error", err)
-		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, "Verzenden via Microsoft Graph is mislukt. Probeer het later opnieuw.")
+		slog.Error("laventecare mail draft creation failed", "outboxId", item.ID, "error", err)
+		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, "Concept bij Microsoft Graph aanmaken is mislukt. Probeer het later opnieuw.")
 		failed, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
 		if failed != nil {
 			JSON(w, http.StatusBadGateway, failed)
 			return
 		}
-		Error(w, http.StatusBadGateway, "Verzenden via Microsoft Graph is mislukt. Probeer het later opnieuw.")
+		Error(w, http.StatusBadGateway, "Concept bij Microsoft Graph aanmaken is mislukt.")
+		return
+	}
+	// Persist the immutable draft ID before /send. If this DB write fails the
+	// draft is still unsent, so retrying cannot duplicate customer delivery.
+	if err := h.store.MarkMailOutboxDraftCreated(r.Context(), h.userID, item.ID, draft.ProviderMessageID, draft.ConversationID); err != nil {
+		slog.Error("laventecare draft id persistence failed", "outboxId", item.ID, "error", err)
+		InternalError(w, r, err)
 		return
 	}
 
+	result, err := h.mailSender.SendDraft(r.Context(), draft)
+	if err != nil {
+		slog.Error("laventecare mail send failed", "outboxId", item.ID, "error", err)
+		if mail.IsDeliveryUnknown(err) {
+			message := "Microsoft Graph heeft geen eenduidige verzendstatus teruggegeven; automatische reconciliatie loopt. Verstuur niet opnieuw."
+			_ = h.store.MarkMailOutboxUnconfirmed(r.Context(), h.userID, item.ID, message)
+			uncertain, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
+			if uncertain != nil {
+				JSON(w, http.StatusAccepted, uncertain)
+				return
+			}
+			Error(w, http.StatusAccepted, message)
+			return
+		}
+		_ = h.store.MarkMailOutboxFailed(r.Context(), h.userID, item.ID, "Verzenden via Microsoft Graph is mislukt. Het opgeslagen concept is niet afgeleverd.")
+		failed, _ := h.store.GetMailOutboxItem(r.Context(), h.userID, item.ID)
+		if failed != nil {
+			JSON(w, http.StatusBadGateway, failed)
+			return
+		}
+		Error(w, http.StatusBadGateway, "Verzenden via Microsoft Graph is mislukt.")
+		return
+	}
 	if err := h.store.MarkMailOutboxSent(r.Context(), h.userID, item.ID, result.ProviderMessageID, result.ConversationID); err != nil {
 		slog.Error("laventecare outbox status update failed after successful send", "outboxId", item.ID, "error", err)
 		item.Status = "sent_unconfirmed"
@@ -501,7 +529,8 @@ func validateMailAttachments(items []model.LCMailAttachment) error {
 			return errors.New("bijlage mist een bestandsnaam")
 		}
 		contentType := strings.ToLower(strings.TrimSpace(item.ContentType))
-		if contentType != "" && contentType != "application/pdf" && !(contentType == "application/octet-stream" && strings.HasSuffix(strings.ToLower(name), ".pdf")) {
+		if !strings.HasSuffix(strings.ToLower(name), ".pdf") ||
+			(contentType != "application/pdf" && contentType != "application/octet-stream") {
 			return fmt.Errorf("bijlage %q is geen PDF", name)
 		}
 		content := strings.TrimSpace(item.ContentBytes)
@@ -514,6 +543,9 @@ func validateMailAttachments(items []model.LCMailAttachment) error {
 		}
 		if len(decoded) == 0 {
 			return fmt.Errorf("bijlage %q is leeg", name)
+		}
+		if !bytes.HasPrefix(decoded, []byte("%PDF-")) {
+			return fmt.Errorf("bijlage %q bevat geen geldig PDF-bestand", name)
 		}
 		if len(decoded) > maxLaventeCareMailAttachmentBytes {
 			return fmt.Errorf("bijlage %q is te groot; maximaal 3MB", name)
@@ -530,7 +562,7 @@ func mailAttachmentsFromModel(items []model.LCMailAttachment) []mail.Attachment 
 	for _, item := range items {
 		attachments = append(attachments, mail.Attachment{
 			Name:         item.Name,
-			ContentType:  item.ContentType,
+			ContentType:  "application/pdf",
 			ContentBytes: item.ContentBytes,
 		})
 	}
@@ -2290,17 +2322,32 @@ func (h *LaventeCareHandler) ListDocuments(w http.ResponseWriter, r *http.Reques
 
 // ListDossierDocuments returns recently generated dossier documents.
 // @Summary List Dossier Documents
-// @Description Returns generated PDF dossier document history, optionally filtered by lead or project
+// @Description Returns generated PDF dossier document history; documentKey performs an owner-scoped exact lookup and returns at most one item in the array
 // @Tags LaventeCare
 // @Produce json
 // @Param limit query int false "Limit count" default(20)
 // @Param leadId query string false "Lead ID (UUID)"
 // @Param projectId query string false "Project ID (UUID)"
+// @Param documentKey query string false "Exact document key; returns an array with at most the newest match"
 // @Success 200 {array} model.LCDossierDocument
 // @Failure 400 {string} string "Invalid query parameter"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /laventecare/dossier-documents [get]
 func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http.Request) {
+	if documentKey := strings.TrimSpace(r.URL.Query().Get("documentKey")); documentKey != "" {
+		if !validDossierDocumentKey(documentKey) {
+			Error(w, http.StatusBadRequest, "Ongeldige documentKey.")
+			return
+		}
+		docs, err := h.store.ListDossierDocumentsByKey(r.Context(), h.userID, documentKey)
+		if err != nil {
+			InternalError(w, r, err)
+			return
+		}
+		JSON(w, http.StatusOK, docs)
+		return
+	}
+
 	limit := queryInt(r, "limit", 20)
 	var leadID *uuid.UUID
 	var projectID *uuid.UUID
@@ -2349,6 +2396,18 @@ func (h *LaventeCareHandler) ListDossierDocuments(w http.ResponseWriter, r *http
 		return
 	}
 	JSON(w, http.StatusOK, docs)
+}
+
+func validDossierDocumentKey(value string) bool {
+	if value == "" || len(value) > 200 {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // DossierAdvice returns deterministic AI guidance for customer/project dossiers.
@@ -2906,7 +2965,6 @@ func parseMailAISuggestion(raw string, fallback model.LCMailAISuggestion, compan
 	merged.GeneratedAt = parsed.GeneratedAt
 	return merged, nil
 }
-
 
 func extractMailAIJSON(raw string) string {
 	raw = strings.TrimSpace(raw)

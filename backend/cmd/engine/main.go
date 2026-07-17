@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
@@ -31,7 +32,6 @@ func main() {
 	}
 	slog.Info("============================================================")
 
-	// Context with OS signal cancellation
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -42,25 +42,27 @@ func main() {
 		return
 	}
 
-	// Database connection
-	dbCtx := context.Background()
-	db, err := store.New(dbCtx, cfg.DatabaseURL)
+	db, err := store.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("database connection failed", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	if err := store.EnsureRuntimeSchema(dbCtx, db); err != nil {
+	if err := store.EnsureRuntimeSchema(ctx, db); err != nil {
 		slog.Error("runtime schema check failed", "error", err)
 		os.Exit(1)
 	}
 
 	eng := engine.New(cfg, db)
+	var cleanerWG sync.WaitGroup
+	cleanerWG.Add(1)
+	go func() {
+		defer cleanerWG.Done()
+		engine.RunCleaner(ctx, db)
+	}()
 
-	// Start the background cleanup service
-	engine.StartCleaner(ctx, db)
-
-	eng.Run(ctx) // blocks until SIGTERM/SIGINT
+	eng.Run(ctx)
+	cleanerWG.Wait()
 
 	slog.Info("✅ automation engine cleanly stopped")
 }

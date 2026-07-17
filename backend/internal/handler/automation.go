@@ -12,10 +12,13 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type AutomationHandler struct{ store *store.AutomationStore }
+type AutomationHandler struct {
+	store  *store.AutomationStore
+	userID string
+}
 
-func NewAutomationHandler(s *store.AutomationStore) *AutomationHandler {
-	return &AutomationHandler{store: s}
+func NewAutomationHandler(s *store.AutomationStore, userID string) *AutomationHandler {
+	return &AutomationHandler{store: s, userID: userID}
 }
 
 // List returns all automations for a user.
@@ -29,7 +32,7 @@ func NewAutomationHandler(s *store.AutomationStore) *AutomationHandler {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /automations [get]
 func (h *AutomationHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -56,7 +59,7 @@ func (h *AutomationHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /automations [post]
 func (h *AutomationHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -105,7 +108,7 @@ func (h *AutomationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	updated, err := h.store.Update(r.Context(), id, body)
+	updated, err := h.store.Update(r.Context(), h.userID, id, body)
 	if err != nil {
 		InternalError(w, r, err)
 		return
@@ -129,7 +132,7 @@ func (h *AutomationHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.Toggle(r.Context(), id); err != nil {
+	if err := h.store.Toggle(r.Context(), h.userID, id); err != nil {
 		InternalError(w, r, err)
 		return
 	}
@@ -152,7 +155,7 @@ func (h *AutomationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.Delete(r.Context(), id); err != nil {
+	if err := h.store.Delete(r.Context(), h.userID, id); err != nil {
 		InternalError(w, r, err)
 		return
 	}
@@ -171,7 +174,7 @@ func (h *AutomationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /automations/group [delete]
 func (h *AutomationHandler) DeleteByGroup(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	group := r.URL.Query().Get("group")
 	if userID == "" || group == "" {
 		Error(w, http.StatusBadRequest, "userId en group zijn verplicht")

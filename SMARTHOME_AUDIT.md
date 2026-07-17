@@ -2,6 +2,8 @@
 
 _Read-only multi-agent audit (6 domains: devices/WiZ, cloud bridge, scenes, automation engine, frontend control UX, security), each finding adversarially verified. 36 confirmed findings._
 
+> **Implementation status 2026-07-17:** dit document bewaart de oorspronkelijke probleembeschrijving. De bridge-route valideert nu uitsluitend een afzonderlijke `BRIDGE_API_KEY`; queue/bridge-modus vereist minimaal 32 tekens en configuratie weigert hergebruik van `APP_SECRET_KEY`. Command-/scene-input en bridgestatus zijn begrensd/gevalideerd en optimistic-state writes lopen synchroon met de requestcontext. Gebruik `BACKEND_ARCHITECTURE.md` als actuele runtimekaart.
+
 **Totaal:** 🔴 0 · 🟠 6 hoog · 🟡 13 medium · ⚪ 17 laag
 
 ## Executive verdict

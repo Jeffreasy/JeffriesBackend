@@ -17,9 +17,14 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type HabitHandler struct{ store *store.HabitStore }
+type HabitHandler struct {
+	store  *store.HabitStore
+	userID string
+}
 
-func NewHabitHandler(s *store.HabitStore) *HabitHandler { return &HabitHandler{store: s} }
+func NewHabitHandler(s *store.HabitStore, userID string) *HabitHandler {
+	return &HabitHandler{store: s, userID: userID}
+}
 
 var amsterdamLoc = func() *time.Location {
 	loc, err := time.LoadLocation("Europe/Amsterdam")
@@ -47,7 +52,7 @@ func todayAmsterdam() string {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits [get]
 func (h *HabitHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -76,7 +81,7 @@ func (h *HabitHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	habit, err := h.store.Get(r.Context(), id)
+	habit, err := h.store.Get(r.Context(), h.userID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden.")
@@ -92,7 +97,7 @@ func (h *HabitHandler) Get(w http.ResponseWriter, r *http.Request) {
 // guardHabitLoggable answers 404/409/500 (and returns false) when a habit can't
 // accept new logs: missing, archived or paused (L1).
 func (h *HabitHandler) guardHabitLoggable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (model.Habit, bool) {
-	habit, err := h.store.Get(r.Context(), id)
+	habit, err := h.store.Get(r.Context(), h.userID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden — mogelijk al verwijderd.")
@@ -126,7 +131,7 @@ func (h *HabitHandler) guardHabitLoggable(w http.ResponseWriter, r *http.Request
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits [post]
 func (h *HabitHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -172,7 +177,7 @@ func (h *HabitHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Geen velden om bij te werken.")
 		return
 	}
-	updated, err := h.store.Update(r.Context(), id, body)
+	updated, err := h.store.Update(r.Context(), h.userID, id, body)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden — mogelijk al verwijderd.")
@@ -200,7 +205,7 @@ func (h *HabitHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.Archive(r.Context(), id); err != nil {
+	if err := h.store.Archive(r.Context(), h.userID, id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden — mogelijk al verwijderd.")
 			return
@@ -227,7 +232,7 @@ func (h *HabitHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.Delete(r.Context(), id); err != nil {
+	if err := h.store.Delete(r.Context(), h.userID, id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden — mogelijk al verwijderd.")
 			return
@@ -254,7 +259,7 @@ func (h *HabitHandler) TogglePause(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.TogglePause(r.Context(), id); err != nil {
+	if err := h.store.TogglePause(r.Context(), h.userID, id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Habit niet gevonden — mogelijk al verwijderd.")
 			return
@@ -288,7 +293,7 @@ func (h *HabitHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if err := h.store.Reorder(r.Context(), body.Items); err != nil {
+	if err := h.store.Reorder(r.Context(), h.userID, body.Items); err != nil {
 		InternalError(w, r, err)
 		return
 	}
@@ -332,7 +337,7 @@ func (h *HabitHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 		datum = todayAmsterdam()
 	}
 
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -429,7 +434,7 @@ func (h *HabitHandler) Incident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -444,7 +449,7 @@ func (h *HabitHandler) Incident(w http.ResponseWriter, r *http.Request) {
 	}
 	// A second incident on the same day would silently overwrite the first
 	// trigger/notitie — refuse it so the UI can tell the user what's going on.
-	if existing, gerr := h.store.GetLog(r.Context(), habitID, datum); gerr == nil && existing.IsIncident {
+	if existing, gerr := h.store.GetLog(r.Context(), h.userID, habitID, datum); gerr == nil && existing.IsIncident {
 		Error(w, http.StatusConflict, "Er is al een incident gelogd op deze dag.")
 		return
 	} else if gerr != nil && !errors.Is(gerr, pgx.ErrNoRows) {
@@ -499,7 +504,7 @@ func (h *HabitHandler) DeleteIncident(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, derr.Error())
 		return
 	}
-	if err := h.store.DeleteIncidentLog(r.Context(), habitID, datum); err != nil {
+	if err := h.store.DeleteIncidentLog(r.Context(), h.userID, habitID, datum); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Geen incident gevonden op "+datum+".")
 			return
@@ -523,7 +528,7 @@ func (h *HabitHandler) DeleteIncident(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits/stats [get]
 func (h *HabitHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -548,7 +553,7 @@ func (h *HabitHandler) Stats(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits/heatmap [get]
 func (h *HabitHandler) Heatmap(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -578,7 +583,7 @@ func (h *HabitHandler) Heatmap(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits/badges [get]
 func (h *HabitHandler) Badges(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -603,7 +608,7 @@ func (h *HabitHandler) Badges(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /habits/for-date [get]
 func (h *HabitHandler) ForDate(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.userID
 	datum := r.URL.Query().Get("datum")
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")

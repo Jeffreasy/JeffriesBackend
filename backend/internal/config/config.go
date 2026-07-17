@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -20,12 +21,15 @@ type Config struct {
 	// TrustedProxyCount is the number of reverse-proxy hops in front of the app
 	// whose X-Forwarded-For entries may be trusted (e.g. 1 behind Render's edge).
 	// 0 means trust nothing and use the real TCP peer (un-spoofable).
-	TrustedProxyCount int
+	TrustedProxyCount    int
+	APIRateLimitRPS      float64
+	APIRateLimitBurst    int
+	BridgeRateLimitRPS   float64
+	BridgeRateLimitBurst int
 
 	// Database
 	DatabaseURL string
 
-	HomeappGASSecret           string
 	HomeappUserID              string
 	TelegramBridgeSecret       string
 	TelegramBotToken           string
@@ -43,6 +47,8 @@ type Config struct {
 	BridgeAPIURL               string
 	BridgeAPIKey               string
 	BridgeStatusPollEnabled    bool
+	LaventeCareIntakeSecret    string
+	LaventeCareSecretKey       string
 
 	// AI APIs
 	GrokAPIKey          string
@@ -76,7 +82,6 @@ type Config struct {
 	BunqAPIKey            string
 	BunqUserID            string
 	BunqMonetaryAccountID string
-	BunqCallbackSecret    string
 	BunqDeviceDescription string
 
 	// LaventeCare mailbox (Microsoft Graph application permissions)
@@ -99,6 +104,7 @@ type Config struct {
 func Load() *Config {
 	lightCommandMode := envOr("LIGHT_COMMAND_MODE", "direct")
 	queueLightCommands := strings.EqualFold(lightCommandMode, "queue")
+	automationEngineEnabled := envBoolOr("AUTOMATION_ENGINE_ENABLED", false)
 
 	cfg := &Config{
 		AppEnv:       envOr("APP_ENV", "development"),
@@ -107,18 +113,23 @@ func Load() *Config {
 		AppPort:      envIntOr("APP_PORT", envIntOr("PORT", 8000)),
 		AppDebug:     envBoolOr("APP_DEBUG", true),
 
-		TrustedProxyCount: envIntOr("TRUSTED_PROXY_COUNT", 0),
+		TrustedProxyCount:    envIntOr("TRUSTED_PROXY_COUNT", 0),
+		APIRateLimitRPS:      envFloatOr("API_RATE_LIMIT_RPS", 30),
+		APIRateLimitBurst:    envIntOr("API_RATE_LIMIT_BURST", 60),
+		BridgeRateLimitRPS:   envFloatOr("BRIDGE_RATE_LIMIT_RPS", 20),
+		BridgeRateLimitBurst: envIntOr("BRIDGE_RATE_LIMIT_BURST", 80),
 
-		DatabaseURL: envOr("DATABASE_URL", "postgres://homeapp:change-me@localhost:5432/homeapp?sslmode=disable"),
+		// No built-in database credential: local development must opt in too.
+		DatabaseURL: envOr("DATABASE_URL", ""),
 
-		HomeappGASSecret:           envOr("HOMEAPP_GAS_SECRET", "homeapp-gas-sync-2026-secure"),
-		HomeappUserID:              envOr("HOMEAPP_USER_ID", "user_3Ax561ZvuSkGtWpKFooeY65HNtY"),
-		TelegramBridgeSecret:       envOr("TELEGRAM_BRIDGE_SECRET", ""),
-		TelegramBotToken:           envOr("TELEGRAM_BOT_TOKEN", ""),
-		TelegramChatID:             envOr("TELEGRAM_CHAT_ID", ""),
-		TelegramWebAppURL:          envOr("TELEGRAM_WEBAPP_URL", "https://jeffrieshomeapp.com"),
-		AutomationEngineEnabled:    envBoolOr("AUTOMATION_ENGINE_ENABLED", false),
-		StartBackgroundEngine:      envBoolOr("START_BACKGROUND_ENGINE", false),
+		HomeappUserID:           envOr("HOMEAPP_USER_ID", "user_3Ax561ZvuSkGtWpKFooeY65HNtY"),
+		TelegramBridgeSecret:    envOr("TELEGRAM_BRIDGE_SECRET", ""),
+		TelegramBotToken:        envOr("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:          envOr("TELEGRAM_CHAT_ID", ""),
+		TelegramWebAppURL:       envOr("TELEGRAM_WEBAPP_URL", "https://jeffries-homeapp.vercel.app"),
+		AutomationEngineEnabled: automationEngineEnabled,
+		// Backwards-compatible alias; START_BACKGROUND_ENGINE wins when set.
+		StartBackgroundEngine:      envBoolOr("START_BACKGROUND_ENGINE", automationEngineEnabled),
 		TelegramBotEnabled:         envBoolOr("TELEGRAM_BOT_ENABLED", true),
 		LightCommandMode:           lightCommandMode,
 		EngineCronsEnabled:         envBoolOr("ENGINE_CRONS_ENABLED", true),
@@ -126,8 +137,10 @@ func Load() *Config {
 		EngineCommandPollerEnabled: envBoolOr("ENGINE_COMMAND_POLLER_ENABLED", !queueLightCommands),
 		EngineStatusPollEnabled:    envBoolOr("ENGINE_STATUS_POLL_ENABLED", !queueLightCommands),
 		BridgeAPIURL:               strings.TrimRight(envOr("BRIDGE_API_URL", ""), "/"),
-		BridgeAPIKey:               envOr("BRIDGE_API_KEY", envOr("APP_SECRET_KEY", "change-me")),
+		BridgeAPIKey:               envOr("BRIDGE_API_KEY", ""),
 		BridgeStatusPollEnabled:    envBoolOr("BRIDGE_STATUS_POLL_ENABLED", true),
+		LaventeCareIntakeSecret:    envOr("LAVENTECARE_INTAKE_SECRET", ""),
+		LaventeCareSecretKey:       envOr("LAVENTECARE_SECRET_KEY", ""),
 
 		GrokAPIKey:          envOr("GROK_API_KEY", ""),
 		GrokModel:           envOr("GROK_MODEL", "grok-4.3"),
@@ -155,7 +168,7 @@ func Load() *Config {
 		BunqAPIKey:            envOr("BUNQ_API_KEY", ""),
 		BunqUserID:            envOr("BUNQ_USER_ID", ""),
 		BunqMonetaryAccountID: envOr("BUNQ_MONETARY_ACCOUNT_ID", ""),
-		BunqCallbackSecret:    envOr("BUNQ_CALLBACK_SECRET", ""),
+
 		BunqDeviceDescription: envOr("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
 
 		LaventeCareMailEnabled:  envBoolOr("LAVENTECARE_MAIL_ENABLED", false),
@@ -190,16 +203,103 @@ var weakSecrets = map[string]bool{
 // development it refuses an empty or well-known-default APP_SECRET_KEY so the API
 // can never boot fully open.
 func (c *Config) Validate() error {
-	if weakSecrets[c.AppSecretKey] {
+	appSecret := strings.TrimSpace(c.AppSecretKey)
+	if isWeakSecret(appSecret) || len(appSecret) < 32 {
 		if !c.IsDevelopment() {
-			return fmt.Errorf("APP_SECRET_KEY is empty or a known default in env %q; set a strong random secret", c.AppEnv)
+			return fmt.Errorf("APP_SECRET_KEY must contain at least 32 characters and not be a known default in env %q", c.AppEnv)
 		}
-		slog.Warn("APP_SECRET_KEY is empty or a default value — acceptable for development only, never deploy like this")
+		slog.Warn("APP_SECRET_KEY is shorter than 32 characters or a default value — acceptable for development only, never deploy like this")
 	}
-	if c.BridgeAPIKey != "" && c.BridgeAPIKey == c.AppSecretKey {
-		slog.Warn("BRIDGE_API_KEY equals APP_SECRET_KEY — give the bridge its own secret to keep trust boundaries separate")
+
+	if len(strings.TrimSpace(c.HomeappUserID)) < 12 {
+		return fmt.Errorf("HOMEAPP_USER_ID must contain the configured owner id (at least 12 characters)")
+	}
+	if strings.TrimSpace(c.DatabaseURL) == "" {
+		return fmt.Errorf("DATABASE_URL is required; no default database credential is used")
+	}
+	if weak, reason := weakDatabaseURL(c.DatabaseURL); weak {
+		if !c.IsDevelopment() {
+			return fmt.Errorf("DATABASE_URL is unsafe in env %q: %s", c.AppEnv, reason)
+		}
+		slog.Warn("DATABASE_URL uses a weak development credential", "reason", reason)
+	}
+
+	bridgeRequired := c.BridgeAPIURL != "" || c.QueueLightCommands()
+	bridgeSecret := strings.TrimSpace(c.BridgeAPIKey)
+	if bridgeRequired && (isWeakSecret(bridgeSecret) || len(bridgeSecret) < 32) {
+		return fmt.Errorf("BRIDGE_API_KEY must contain at least 32 characters when bridge/queue mode is enabled")
+	}
+	if bridgeSecret != "" && len(bridgeSecret) < 32 {
+		if !c.IsDevelopment() {
+			return fmt.Errorf("BRIDGE_API_KEY must contain at least 32 characters when configured")
+		}
+		slog.Warn("BRIDGE_API_KEY is shorter than 32 characters — do not deploy this value")
+	}
+	if bridgeSecret != "" && bridgeSecret == appSecret {
+		if !c.IsDevelopment() || bridgeRequired {
+			return fmt.Errorf("BRIDGE_API_KEY must differ from APP_SECRET_KEY")
+		}
+		slog.Warn("BRIDGE_API_KEY equals APP_SECRET_KEY — use a separate bridge-only secret")
+	}
+	vaultSecret := strings.TrimSpace(c.LaventeCareSecretKey)
+	if isWeakSecret(vaultSecret) || len(vaultSecret) < 32 {
+		if !c.IsDevelopment() {
+			return fmt.Errorf("LAVENTECARE_SECRET_KEY must contain at least 32 characters and is required outside development")
+		}
+		slog.Warn("LAVENTECARE_SECRET_KEY is missing, shorter than 32 characters or a default — access-secret writes stay disabled")
+	}
+	if vaultSecret != "" {
+		for name, other := range map[string]string{
+			"APP_SECRET_KEY":            appSecret,
+			"BRIDGE_API_KEY":            bridgeSecret,
+			"LAVENTECARE_INTAKE_SECRET": strings.TrimSpace(c.LaventeCareIntakeSecret),
+		} {
+			if other != "" && vaultSecret == other {
+				return fmt.Errorf("LAVENTECARE_SECRET_KEY must differ from %s", name)
+			}
+		}
+	}
+
+	intakeSecret := strings.TrimSpace(c.LaventeCareIntakeSecret)
+	if intakeSecret != "" {
+		if isWeakSecret(intakeSecret) || len(intakeSecret) < 32 {
+			return fmt.Errorf("LAVENTECARE_INTAKE_SECRET must contain at least 32 characters")
+		}
+		if intakeSecret == strings.TrimSpace(c.AppSecretKey) || intakeSecret == strings.TrimSpace(c.BridgeAPIKey) {
+			return fmt.Errorf("LAVENTECARE_INTAKE_SECRET must differ from APP_SECRET_KEY and BRIDGE_API_KEY")
+		}
 	}
 	return nil
+}
+
+func isWeakSecret(raw string) bool {
+	return weakSecrets[strings.ToLower(strings.TrimSpace(raw))]
+}
+
+func weakDatabaseURL(raw string) (bool, string) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" {
+		return true, "invalid connection URL"
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "postgres" && scheme != "postgresql" {
+		return true, "connection URL must use postgres or postgresql scheme"
+	}
+	if strings.TrimSpace(parsed.Hostname()) == "" {
+		return true, "database hostname is missing"
+	}
+	if parsed.User == nil {
+		return true, "database user/password are missing"
+	}
+	password, ok := parsed.User.Password()
+	password = strings.ToLower(strings.TrimSpace(password))
+	if !ok || password == "" {
+		return true, "database password is missing"
+	}
+	if weakSecrets[password] {
+		return true, "database password is empty or a known default"
+	}
+	return false, ""
 }
 
 // SlogLevel converts the string log level to slog.Level.

@@ -962,6 +962,9 @@ func (s *NoteStore) getBacklinks(ctx context.Context, userID string, noteID uuid
 			"titel": t,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	if links == nil {
 		links = []map[string]any{}
 	}

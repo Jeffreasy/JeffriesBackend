@@ -4,7 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"math/rand"
+	"strconv"
 	"sync"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 	"time"
 )
 
@@ -21,14 +24,19 @@ type CronJob struct {
 
 // CronScheduler manages background cron jobs as goroutines.
 type CronScheduler struct {
+	pool    *pgxpool.Pool
 	jobs    []CronJob
 	mu      sync.Mutex
 	running bool
 }
 
 // NewCronScheduler creates a scheduler.
-func NewCronScheduler() *CronScheduler {
-	return &CronScheduler{}
+func NewCronScheduler(pool ...*pgxpool.Pool) *CronScheduler {
+	var dbPool *pgxpool.Pool
+	if len(pool) > 0 {
+		dbPool = pool[0]
+	}
+	return &CronScheduler{pool: dbPool}
 }
 
 // Register adds a cron job. Must be called before Run.
@@ -94,6 +102,11 @@ func (s *CronScheduler) runJob(ctx context.Context, job CronJob) {
 }
 
 func (s *CronScheduler) execJob(ctx context.Context, job CronJob) {
+	if !s.claimJobWindow(ctx, job) {
+		slog.Debug("cron job skipped; another instance owns this window", "name", job.Name)
+		return
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("🔥 cron job panicked!", "name", job.Name, "panic", r)
@@ -111,3 +124,26 @@ func (s *CronScheduler) execJob(ctx context.Context, job CronJob) {
 	}
 }
 
+// claimJobWindow de-duplicates every cron interval across engine instances. It
+// uses a committed unique insert rather than a long-held advisory connection,
+// so the actual job still has the full pool available. On database failure it
+// fails closed: skipping one run is safer than duplicate mail/payments/actions.
+func (s *CronScheduler) claimJobWindow(ctx context.Context, job CronJob) bool {
+	if s.pool == nil {
+		return true
+	}
+	if job.Interval <= 0 {
+		slog.Error("cron job has invalid interval", "name", job.Name, "interval", job.Interval)
+		return false
+	}
+	bucket := time.Now().UTC().UnixNano() / job.Interval.Nanoseconds()
+	windowKey := strconv.FormatInt(bucket, 10)
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO cron_claim (claim_key, window_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		"job:"+job.Name, windowKey)
+	if err != nil {
+		slog.Warn("cron distributed claim failed; run skipped", "name", job.Name, "error", err)
+		return false
+	}
+	return tag.RowsAffected() == 1
+}

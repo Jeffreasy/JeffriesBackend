@@ -185,12 +185,13 @@ func scanContactRow(row pgx.Row) (model.Contact, error) {
 
 // ListContactsOptions filters the contact list.
 type ListContactsOptions struct {
-	Query            string   // ILIKE match on name/email/notes
+	Query            string   // ILIKE match on name/email/notes/assigned-label
 	RelationshipType string   // exact match against relationship_types array
 	LabelNames       []string // filter on assigned label names (case-insensitive)
 	LabelMatchAll    bool     // true = contact must have ALL LabelNames; false = ANY
 	IncludeArchived  bool
 	Limit            int
+	Offset           int
 }
 
 // List returns contacts for a user, filtered and sorted by name.
@@ -207,7 +208,17 @@ func (s *ContactStore) List(ctx context.Context, userID string, opts ListContact
 	if query := strings.TrimSpace(opts.Query); query != "" {
 		args = append(args, "%"+query+"%")
 		n := len(args)
-		q += fmt.Sprintf(` AND (display_name ILIKE $%d OR email ILIKE $%d OR notes ILIKE $%d)`, n, n, n)
+		q += fmt.Sprintf(` AND (
+			display_name ILIKE $%d OR email ILIKE $%d OR notes ILIKE $%d
+			OR EXISTS (
+				SELECT 1
+				FROM contact_label_assignments a
+				JOIN contact_labels l ON l.id = a.label_id
+				WHERE a.user_id = contacts.user_id
+				  AND a.contact_id = contacts.id
+				  AND l.name ILIKE $%d
+			)
+		)`, n, n, n, n)
 	}
 	if names := loweredNonEmpty(opts.LabelNames); len(names) > 0 {
 		args = append(args, names)
@@ -224,10 +235,16 @@ func (s *ContactStore) List(ctx context.Context, userID string, opts ListContact
 				WHERE a.contact_id = contacts.id AND lower(l.name) = ANY($%d))`, namesPh)
 		}
 	}
-	q += ` ORDER BY display_name ASC`
+	// Case-insensitive name ordering with explicit display-name and UUID tie-breakers
+	// keeps offset pagination deterministic when names differ only by case or repeat.
+	q += ` ORDER BY lower(display_name) ASC, display_name ASC, id ASC`
 	if opts.Limit > 0 {
 		args = append(args, opts.Limit)
 		q += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	if opts.Offset > 0 {
+		args = append(args, opts.Offset)
+		q += fmt.Sprintf(` OFFSET $%d`, len(args))
 	}
 
 	rows, err := s.db.Pool.Query(ctx, q, args...)
@@ -506,8 +523,10 @@ func (s *ContactStore) AddImportantDate(ctx context.Context, userID string, d mo
 }
 
 // DeleteImportantDate removes a date.
-func (s *ContactStore) DeleteImportantDate(ctx context.Context, userID string, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM contact_important_dates WHERE user_id = $1 AND id = $2`, userID, id)
+func (s *ContactStore) DeleteImportantDate(ctx context.Context, userID string, contactID, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM contact_important_dates WHERE user_id = $1 AND contact_id = $2 AND id = $3`,
+		userID, contactID, id)
 	if err != nil {
 		return err
 	}
@@ -563,8 +582,10 @@ func (s *ContactStore) AddFact(ctx context.Context, userID string, f model.Conta
 }
 
 // DeleteFact removes a fact.
-func (s *ContactStore) DeleteFact(ctx context.Context, userID string, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM contact_facts WHERE user_id = $1 AND id = $2`, userID, id)
+func (s *ContactStore) DeleteFact(ctx context.Context, userID string, contactID, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM contact_facts WHERE user_id = $1 AND contact_id = $2 AND id = $3`,
+		userID, contactID, id)
 	if err != nil {
 		return err
 	}
@@ -1273,7 +1294,7 @@ func (s *ContactStore) AddManualOrganization(ctx context.Context, userID string,
 
 // UpdateManualOrganization edits a manual org link's company/role. LaventeCare
 // links are mirror-managed and return pgx.ErrNoRows here.
-func (s *ContactStore) UpdateManualOrganization(ctx context.Context, userID string, id uuid.UUID, organizationID *uuid.UUID, clearOrg bool, role *string) (model.ContactOrganization, error) {
+func (s *ContactStore) UpdateManualOrganization(ctx context.Context, userID string, contactID, id uuid.UUID, organizationID *uuid.UUID, clearOrg bool, role *string) (model.ContactOrganization, error) {
 	set := []string{}
 	args := []any{}
 	if clearOrg {
@@ -1287,14 +1308,18 @@ func (s *ContactStore) UpdateManualOrganization(ctx context.Context, userID stri
 		set = append(set, fmt.Sprintf("role = NULLIF($%d, '')", len(args)))
 	}
 	if len(set) == 0 {
-		return s.getOrganizationLink(ctx, userID, id)
+		link, err := s.getOrganizationLink(ctx, userID, id)
+		if err != nil || link.ContactID != contactID {
+			return model.ContactOrganization{}, pgx.ErrNoRows
+		}
+		return link, nil
 	}
 	set = append(set, "updated_at = now()")
-	args = append(args, userID, id)
+	args = append(args, userID, contactID, id)
 	tag, err := s.db.Pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE contact_organizations SET %s
-		WHERE user_id = $%d AND id = $%d AND source = 'manual'`,
-		strings.Join(set, ", "), len(args)-1, len(args)), args...)
+		WHERE user_id = $%d AND contact_id = $%d AND id = $%d AND source = 'manual'`,
+		strings.Join(set, ", "), len(args)-2, len(args)-1, len(args)), args...)
 	if err != nil {
 		return model.ContactOrganization{}, err
 	}
@@ -1306,9 +1331,10 @@ func (s *ContactStore) UpdateManualOrganization(ctx context.Context, userID stri
 
 // RemoveManualOrganization deletes a manual org link. Refuses LaventeCare links
 // (they'd be re-created by the sync) via the source='manual' guard.
-func (s *ContactStore) RemoveManualOrganization(ctx context.Context, userID string, id uuid.UUID) error {
+func (s *ContactStore) RemoveManualOrganization(ctx context.Context, userID string, contactID, id uuid.UUID) error {
 	tag, err := s.db.Pool.Exec(ctx,
-		`DELETE FROM contact_organizations WHERE user_id = $1 AND id = $2 AND source = 'manual'`, userID, id)
+		`DELETE FROM contact_organizations WHERE user_id = $1 AND contact_id = $2 AND id = $3 AND source = 'manual'`,
+		userID, contactID, id)
 	if err != nil {
 		return err
 	}

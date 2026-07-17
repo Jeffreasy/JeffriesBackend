@@ -2,40 +2,51 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 	tg "github.com/Jeffreasy/JeffriesBackend/internal/telegram"
 )
 
-// loopTelegram polls for Telegram updates and processes them natively in Go.
+const telegramPollStream = "owner-bot"
+
+// loopTelegram durably queues updates before acknowledging Telegram's offset.
+// Processing is deliberately ordered: this owner bot values no lost commands
+// over burst throughput, and AI concurrency is bounded elsewhere too.
 func (e *Engine) loopTelegram(ctx context.Context) {
 	token := e.cfg.TelegramBotToken
 	if token == "" {
 		slog.Warn("TELEGRAM_BOT_TOKEN not set, telegram poller disabled")
 		return
 	}
-
-	slog.Info("🤖 telegram poller started (native Go)")
-
 	client := tg.NewClient(token)
 	_ = client.DeleteWebhook(false)
-
-	// Register the native "/" command menu so commands are discoverable.
 	if err := client.SetMyCommands(telegramMenuCommands()); err != nil {
 		slog.Warn("telegram setMyCommands failed", "error", err)
 	}
 
-	var offset int64
+	offset, err := e.db.LoadTelegramOffset(ctx, telegramPollStream)
+	if err != nil {
+		slog.Error("telegram durable offset load failed", "error", err)
+		return
+	}
+	slog.Info("🤖 telegram poller started (durable queue)", "offset", offset)
 	backoff := 3 * time.Second
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	for ctx.Err() == nil {
+		if _, err := e.drainTelegramQueue(ctx, client); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn("telegram durable queue processing paused", "error", err, "backoff", backoff)
+			sleepCtx(ctx, backoff)
+			continue
 		}
 
 		updates, err := client.GetUpdatesContext(ctx, offset, 10)
@@ -51,49 +62,84 @@ func (e *Engine) loopTelegram(ctx context.Context) {
 			}
 			continue
 		}
-
-		// Reset backoff on success
 		backoff = 3 * time.Second
 
 		if len(updates) > 0 {
-			slog.Info("📩 telegram updates received", "count", len(updates))
-			if e.databasePoolClosed(ctx) {
-				return
-			}
-		}
-
-		for _, update := range updates {
-			if update.UpdateID >= offset {
-				offset = update.UpdateID + 1
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			go func(u tg.Update) {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("telegram processUpdate panic", "recover", r)
-					}
-				}()
-				// Bound concurrent processing so an update burst cannot spawn
-				// many simultaneous AI/tool sessions.
-				select {
-				case e.aiSem <- struct{}{}:
-					defer func() { <-e.aiSem }()
-				case <-ctx.Done():
-					return
+			records := make([]store.TelegramUpdateRecord, 0, len(updates))
+			for _, update := range updates {
+				payload, marshalErr := json.Marshal(update)
+				if marshalErr != nil {
+					slog.Error("telegram update marshal failed; offset not advanced", "updateID", update.UpdateID, "error", marshalErr)
+					records = nil
+					break
 				}
-				if ctx.Err() != nil {
-					return
-				}
-				e.processUpdate(ctx, client, u)
-			}(update)
+				records = append(records, store.TelegramUpdateRecord{UpdateID: update.UpdateID, Payload: payload})
+			}
+			if records == nil {
+				sleepCtx(ctx, backoff)
+				continue
+			}
+			nextOffset, persistErr := e.db.PersistTelegramUpdates(ctx, telegramPollStream, records)
+			if persistErr != nil {
+				slog.Error("telegram updates not durably queued; offset unchanged", "error", persistErr)
+				sleepCtx(ctx, backoff)
+				continue
+			}
+			offset = nextOffset
+			slog.Info("📩 telegram updates durably queued", "count", len(records), "nextOffset", offset)
 		}
-
 		sleepCtx(ctx, 100*time.Millisecond)
 	}
 }
 
+func (e *Engine) drainTelegramQueue(ctx context.Context, client *tg.Client) (processed int, err error) {
+	for ctx.Err() == nil {
+		record, err := e.db.ClaimTelegramUpdate(ctx)
+		if err != nil {
+			return processed, err
+		}
+		if record == nil {
+			return processed, nil
+		}
+		processErr := e.processQueuedTelegramUpdate(ctx, client, record.Payload)
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if processErr != nil {
+			retryErr := e.db.RetryTelegramUpdate(persistCtx, record.UpdateID, record.Attempts, processErr)
+			cancel()
+			if retryErr != nil {
+				return processed, errors.Join(processErr, retryErr)
+			}
+			return processed, processErr
+		}
+		completeErr := e.db.CompleteTelegramUpdate(persistCtx, record.UpdateID)
+		cancel()
+		if completeErr != nil {
+			return processed, completeErr
+		}
+		processed++
+	}
+	return processed, ctx.Err()
+}
+
+func (e *Engine) processQueuedTelegramUpdate(ctx context.Context, client *tg.Client, payload []byte) (err error) {
+	var update tg.Update
+	if err := json.Unmarshal(payload, &update); err != nil {
+		return fmt.Errorf("telegram update payload decode: %w", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("telegram processUpdate panic: %v", recovered)
+		}
+	}()
+	select {
+	case e.aiSem <- struct{}{}:
+		defer func() { <-e.aiSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	e.processUpdate(ctx, client, update)
+	return nil
+}
 func (e *Engine) processUpdate(ctx context.Context, client *tg.Client, update tg.Update) {
 	if ctx.Err() != nil {
 		return

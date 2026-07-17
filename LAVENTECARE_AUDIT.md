@@ -2,6 +2,8 @@
 
 _Read-only multi-agent audit (7 domains, backend + frontend ~24k LOC), each finding adversarially verified. 37 confirmed findings._
 
+> **Implementation status 2026-07-17:** dit document bewaart de oorspronkelijke bevindingen en regelverwijzingen. De access-vault gebruikt inmiddels uitsluitend een verplichte, afzonderlijke `LAVENTECARE_SECRET_KEY`; HTML-templatewaarden worden contextueel ontsmet, Graph-verzending heeft begrensde transient retries, gevoelige mail/billing/adviesroutes hebben een aparte rate limit en plaintext mailgeheimen worden vóór opslag geredigeerd. Gebruik `BACKEND_ARCHITECTURE.md` en de actuele tests als runtimewaarheid.
+
 **Totaal:** 🔴 1 kritiek · 🟠 8 hoog · 🟡 17 medium · ⚪ 11 laag
 
 ## Executive verdict

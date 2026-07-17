@@ -48,15 +48,19 @@ services:
       # ── Secrets — set in the dashboard; never commit (sync: false) ──────────
       - key: APP_SECRET_KEY
         sync: false
-      # SECURITY: give these their own values so a leaked APP_SECRET_KEY does not
-      # span three trust boundaries (they default to APP_SECRET_KEY when unset).
-      # BRIDGE_API_KEY: if you set a distinct value here, set the SAME value on the
-      # LOCAL bridge machine's env too — the /bridge/* routes validate this key, so
-      # a cloud/bridge mismatch 403s every command. (Equal values = no separation
-      # but always works; distinct-on-both = separated.)
+      # SECURITY: generate every trust-boundary secret independently (>=32 random
+      # characters). The service refuses production startup if the app/vault
+      # contract is weak, or bridge/queue mode reuses APP_SECRET_KEY.
+      # BRIDGE_API_KEY must have the SAME bridge-only value on Render and the local
+      # bridge machine. It must NEVER equal APP_SECRET_KEY.
       - key: BRIDGE_API_KEY
         sync: false
+      # Required in production; never reuse app, bridge or intake credentials.
       - key: LAVENTECARE_SECRET_KEY
+        sync: false
+      # Optional: leave empty to keep public intake closed; otherwise use a fourth
+      # independent >=32-character Bearer secret.
+      - key: LAVENTECARE_INTAKE_SECRET
         sync: false
       - key: TELEGRAM_BRIDGE_SECRET
         sync: false
@@ -71,8 +75,6 @@ services:
         sync: false
       # bunq (production banking — rotate if ever exposed)
       - key: BUNQ_API_KEY
-        sync: false
-      - key: BUNQ_CALLBACK_SECRET
         sync: false
       # AI
       - key: GROK_API_KEY

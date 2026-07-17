@@ -168,7 +168,7 @@ func (b *CloudBridge) loopStatus(ctx context.Context) {
 
 func (b *CloudBridge) pollCloudDeviceStatus(ctx context.Context) {
 	var devices []cloudDevice
-	if err := b.doJSON(ctx, http.MethodGet, "/devices", nil, &devices); err != nil {
+	if err := b.doJSON(ctx, http.MethodGet, "/bridge/devices", nil, &devices); err != nil {
 		slog.Warn("cloud device list failed", "error", err)
 		return
 	}
@@ -182,7 +182,7 @@ func (b *CloudBridge) pollCloudDeviceStatus(ctx context.Context) {
 		wg.Add(1)
 		go func(dev cloudDevice) {
 			defer wg.Done()
-			
+
 			state, err := b.wiz.GetState(dev.IPAddress)
 			status := "online"
 			var currentState map[string]any

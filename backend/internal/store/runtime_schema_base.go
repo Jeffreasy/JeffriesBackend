@@ -396,7 +396,11 @@ CREATE TABLE IF NOT EXISTS ai_pending_actions (
     args_json   TEXT        NOT NULL DEFAULT '{}',
     summary     TEXT        NOT NULL,
     code        TEXT        NOT NULL,
-    status      TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'cancelled', 'failed', 'expired')),
+    status      TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'executing', 'succeeded', 'confirmed', 'cancelled', 'failed', 'expired', 'unknown')),
+    execution_key TEXT,
+    attempt_count INTEGER     NOT NULL DEFAULT 0,
+    started_at    TIMESTAMPTZ,
+    completed_at  TIMESTAMPTZ,
     result      TEXT,
     error       TEXT,
     expires_at  TIMESTAMPTZ NOT NULL,
@@ -415,7 +419,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trx_user_rek_volgnr ON transactions (user_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_user_periode ON salary (user_id, periode);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_loon_user_jr_per ON loonstroken (user_id, jaar, periode);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_user_source ON sync_status (user_id, source);
+ALTER TABLE ai_pending_actions
+    ADD COLUMN IF NOT EXISTS execution_key TEXT,
+    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE ai_pending_actions DROP CONSTRAINT IF EXISTS ai_pending_actions_status_check;
+ALTER TABLE ai_pending_actions ADD CONSTRAINT ai_pending_actions_status_check
+    CHECK (status IN ('pending', 'executing', 'succeeded', 'confirmed', 'cancelled', 'failed', 'expired', 'unknown'));
 CREATE INDEX IF NOT EXISTS idx_ai_pending_user_status ON ai_pending_actions (user_id, status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_pending_execution_key
+    ON ai_pending_actions (user_id, execution_key) WHERE execution_key IS NOT NULL;
 
 -- Backfill for idx_ai_pending_user_code_pending below: before this index
 -- existed, nothing stopped two 'pending' rows for the same (user_id, code)

@@ -30,7 +30,7 @@ var (
 		"februari": time.February, "feb": time.February,
 		"maart": time.March, "mrt": time.March,
 		"april": time.April, "apr": time.April,
-		"mei": time.May,
+		"mei":  time.May,
 		"juni": time.June, "jun": time.June,
 		"juli": time.July, "jul": time.July,
 		"augustus": time.August, "aug": time.August,

@@ -723,9 +723,19 @@ func (s *LaventeCareStore) UpdateAccessCredential(ctx context.Context, userID st
 
 	now := time.Now().UTC()
 	status := cleanStringPtr(input.Status)
+	if status != nil {
+		normalized := cleanStatus(*status, "")
+		status = &normalized
+	}
 	revokedAt := parseDateTimePtr(input.RevokedAt)
-	if status != nil && (*status == "ingetrokken" || *status == "verlopen") && revokedAt == nil {
-		revokedAt = &now
+	if status != nil && (*status == "ingetrokken" || *status == "verlopen") {
+		if revokedAt == nil {
+			revokedAt = &now
+		}
+		// Revocation/expiry is also a data-minimisation event: scrub the encrypted
+		// secret even when the caller did not separately send secret_value:"".
+		setSecret = true
+		secret = nil
 	}
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE lc_access_credentials SET
@@ -1628,6 +1638,23 @@ func (s *LaventeCareStore) ListDossierDocuments(ctx context.Context, userID stri
 	}
 
 	rows, err := s.db.Pool.Query(ctx, base+` ORDER BY created_at DESC LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanDossierDocument)
+}
+
+// ListDossierDocumentsByKey returns an array for API compatibility, containing
+// at most the newest exact key match owned by userID.
+func (s *LaventeCareStore) ListDossierDocumentsByKey(ctx context.Context, userID, documentKey string) ([]model.LCDossierDocument, error) {
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT id, user_id, document_key, titel, template_label, context_type,
+		       context_id, context_title, lead_id, project_id, workstream_id, company_id, pdf_url, theme,
+		       delivery, notes, generated_at, created_at
+		FROM lc_dossier_documents
+		WHERE user_id=$1 AND document_key=$2
+		ORDER BY created_at DESC LIMIT 1`, userID, documentKey)
 	if err != nil {
 		return nil, err
 	}
@@ -3455,7 +3482,6 @@ func (s *LaventeCareStore) CreateInvoice(ctx context.Context, userID string, inp
 		}
 	}
 
-
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -3493,14 +3519,7 @@ func (s *LaventeCareStore) CreateInvoiceFromQuote(ctx context.Context, userID st
 		if sortOrder == 0 {
 			sortOrder = idx + 1
 		}
-		lines = append(lines, model.LCInvoiceLineCreate{
-			Description:     line.Description,
-			QuantityMinutes: maxInt(line.Quantity, 1) * 60,
-			UnitAmountCents: line.UnitAmountCents,
-			VatRateBps:      &quote.VatRateBps,
-			TotalCents:      line.TotalCents,
-			SortOrder:       sortOrder,
-		})
+		lines = append(lines, quoteLineToFlatInvoiceLine(line, quote.VatRateBps, sortOrder))
 	}
 
 	notes := fmt.Sprintf("Aangemaakt vanuit offerte %s - %s.", quote.QuoteNumber, quote.Titel)
@@ -5163,6 +5182,21 @@ func cleanQuoteLines(lines []model.LCQuoteLineCreate) []model.LCQuoteLineCreate 
 	return result
 }
 
+// quoteLineToFlatInvoiceLine preserves a quote item's fixed-price nature. A quote
+// quantity is a count of deliverables, not hours; mapping it to minutes would emit
+// a false HUR unit in the PDF/UBL. The existing invoice schema has only minutes or
+// flat-item semantics, so carry the exact line total as one C62 item.
+func quoteLineToFlatInvoiceLine(line model.LCQuoteLine, vatRateBps, sortOrder int) model.LCInvoiceLineCreate {
+	return model.LCInvoiceLineCreate{
+		Description:     line.Description,
+		QuantityMinutes: 0,
+		UnitAmountCents: line.TotalCents,
+		VatRateBps:      &vatRateBps,
+		TotalCents:      line.TotalCents,
+		SortOrder:       sortOrder,
+	}
+}
+
 func cleanInvoiceLines(lines []model.LCInvoiceLineCreate) []model.LCInvoiceLineCreate {
 	result := make([]model.LCInvoiceLineCreate, 0, len(lines))
 	for _, line := range lines {
@@ -5238,11 +5272,9 @@ func encryptLaventeCareSecret(value *string) (*string, error) {
 		return nil, nil
 	}
 	keyMaterial := strings.TrimSpace(os.Getenv("LAVENTECARE_SECRET_KEY"))
-	if keyMaterial == "" {
-		keyMaterial = strings.TrimSpace(os.Getenv("APP_SECRET_KEY"))
-	}
-	if keyMaterial == "" || keyMaterial == "change-me" || keyMaterial == "change-me-to-a-long-random-secret" {
-		return nil, fmt.Errorf("LAVENTECARE_SECRET_KEY of APP_SECRET_KEY is nodig om klanttoegang versleuteld op te slaan")
+	normalizedKey := strings.ToLower(keyMaterial)
+	if len(keyMaterial) < 32 || normalizedKey == "change-me" || normalizedKey == "change-me-to-a-long-random-secret" {
+		return nil, fmt.Errorf("LAVENTECARE_SECRET_KEY van minimaal 32 tekens is nodig om klanttoegang versleuteld op te slaan")
 	}
 
 	sum := sha256.Sum256([]byte(keyMaterial))

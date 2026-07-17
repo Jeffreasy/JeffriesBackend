@@ -38,7 +38,6 @@ func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	JSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"service": "homeapp-api",

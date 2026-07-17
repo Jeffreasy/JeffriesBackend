@@ -7,10 +7,13 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type LoonstrookHandler struct{ store *store.LoonstrookStore }
+type LoonstrookHandler struct {
+	store       *store.LoonstrookStore
+	ownerUserID string
+}
 
-func NewLoonstrookHandler(s *store.LoonstrookStore) *LoonstrookHandler {
-	return &LoonstrookHandler{store: s}
+func NewLoonstrookHandler(s *store.LoonstrookStore, ownerUserID string) *LoonstrookHandler {
+	return &LoonstrookHandler{store: s, ownerUserID: ownerUserID}
 }
 
 // List returns all loonstroken.
@@ -24,7 +27,7 @@ func NewLoonstrookHandler(s *store.LoonstrookStore) *LoonstrookHandler {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /loonstroken [get]
 func (h *LoonstrookHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -74,11 +77,11 @@ func (h *LoonstrookHandler) Import(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if body.UserID == "" || len(body.Items) == 0 {
-		Error(w, http.StatusBadRequest, "userId en items verplicht")
+	if len(body.Items) == 0 {
+		Error(w, http.StatusBadRequest, "items verplicht")
 		return
 	}
-	res, err := h.store.ImportBatch(r.Context(), body.UserID, body.Items)
+	res, err := h.store.ImportBatch(r.Context(), h.ownerUserID, body.Items)
 	if err != nil {
 		InternalError(w, r, err)
 		return

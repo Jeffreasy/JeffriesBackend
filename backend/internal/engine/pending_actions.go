@@ -23,6 +23,8 @@ import (
 // actionable Dutch message instead of a raw "no rows in result set".
 var ErrPendingActionNotFound = errors.New("pending actie niet gevonden, al bevestigd/geannuleerd, of verlopen")
 
+type pendingExecutionKeyContextKey struct{}
+
 // ConfirmingExecutor turns protected mutating tools into pending actions.
 type ConfirmingExecutor struct {
 	pool     *pgxpool.Pool
@@ -144,7 +146,8 @@ func CancelPendingAction(ctx context.Context, pool *pgxpool.Pool, userID, id str
 
 func executeClaimedPendingAction(ctx context.Context, pool *pgxpool.Pool, pending *store.PendingStore, userID string, action *store.PendingAction, googleClient *google.OAuthClient) (map[string]any, error) {
 	executor := NewHomeBotExecutorWithGoogle(pool, userID, googleClient)
-	result := executor.Execute(ctx, action.ToolName, action.ArgsJSON)
+	executionCtx := context.WithValue(ctx, pendingExecutionKeyContextKey{}, action.ID)
+	result := executor.Execute(executionCtx, action.ToolName, action.ArgsJSON)
 	if message := toolResultError(result); message != "" {
 		// The tool failure (message) is the actionable error for the user —
 		// keep returning that even if persisting it also fails, rather than
@@ -157,7 +160,7 @@ func executeClaimedPendingAction(ctx context.Context, pool *pgxpool.Pool, pendin
 		}
 		return pendingActionResult(action, &result, &message), fmt.Errorf("%s", message)
 	}
-	if err := pending.MarkStatus(ctx, action.ID, userID, "confirmed", &result, nil); err != nil {
+	if err := pending.MarkStatus(ctx, action.ID, userID, "succeeded", &result, nil); err != nil {
 		return nil, err
 	}
 	return pendingActionResult(action, &result, nil), nil
@@ -168,7 +171,7 @@ func pendingActionResult(action *store.PendingAction, result, errMsg *string) ma
 	if errMsg != nil {
 		status = "failed"
 	} else if result != nil {
-		status = "confirmed"
+		status = "succeeded"
 	}
 	return map[string]any{
 		"ok":        errMsg == nil,

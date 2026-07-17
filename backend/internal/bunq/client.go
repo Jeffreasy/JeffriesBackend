@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,36 @@ type PaymentRequestInput struct {
 	Description       string
 	MerchantReference string
 	RedirectURL       string
+	IdempotencyKey    string
+}
+
+// HTTPError means bunq returned an explicit non-2xx response.
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("bunq returned %d: %s", e.StatusCode, e.Message)
+}
+
+func (e *HTTPError) AmbiguousWrite() bool {
+	return e.StatusCode == http.StatusRequestTimeout ||
+		e.StatusCode == http.StatusConflict ||
+		e.StatusCode == http.StatusLocked ||
+		e.StatusCode == http.StatusTooManyRequests ||
+		e.StatusCode >= 500
+}
+
+// AmbiguousWriteError means the request may have reached bunq but no reliable
+// success response was received. Callers must reconcile, never blindly retry.
+type AmbiguousWriteError struct{ Err error }
+
+func (e *AmbiguousWriteError) Error() string { return "bunq write result is unknown: " + e.Err.Error() }
+func (e *AmbiguousWriteError) Unwrap() error { return e.Err }
+func IsAmbiguousWrite(err error) bool {
+	var target *AmbiguousWriteError
+	return errors.As(err, &target)
 }
 
 type PaymentRequest struct {
@@ -66,7 +97,7 @@ var bunqSessionCache = struct {
 	items: make(map[string]sessionCacheEntry),
 }
 
-const bunqSessionCacheTTL = 15 * time.Minute
+const bunqSessionCacheTTL = 50 * time.Minute
 
 type Introspection struct {
 	Environment      string    `json:"environment"`
@@ -101,11 +132,11 @@ func Discover(ctx context.Context, cfg Config) (*Introspection, error) {
 		return nil, err
 	}
 
-	accountsEnvelope, err := session.client.do(ctx, http.MethodGet, fmt.Sprintf("/user/%d/monetary-account-bank", session.userID), session.token, nil, false)
+	accounts, err := listAccountsWithSession(ctx, session,
+		fmt.Sprintf("/user/%d/monetary-account-bank?count=200", session.userID))
 	if err != nil {
 		return nil, fmt.Errorf("monetary-account-bank ophalen: %w", err)
 	}
-	accounts := findAccounts(accountsEnvelope)
 
 	var primary *int
 	for _, account := range accounts {
@@ -165,20 +196,21 @@ func CreatePaymentRequest(ctx context.Context, cfg Config, input PaymentRequestI
 		body["redirect_url"] = redirectURL
 	}
 
-	env, err := session.client.do(
+	env, err := session.client.doWithRequestID(
 		ctx,
 		http.MethodPost,
 		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry", userID, input.MonetaryAccountID),
 		session.token,
 		body,
 		true,
+		stableClientRequestID(input.IdempotencyKey),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("request-inquiry: %w", err)
+		return nil, classifyPaymentRequestWriteError(err)
 	}
-	request, ok := findPaymentRequest(env)
-	if !ok {
-		return nil, errors.New("request-inquiry ontbreekt in bunq response")
+	request, err := paymentRequestFromCreateEnvelope(env)
+	if err != nil {
+		return nil, err
 	}
 	if request.ID > 0 && (request.BunqMeShareURL == nil || request.AmountValue == "" || request.Status == "") {
 		detailEnv, detailErr := session.client.do(
@@ -194,6 +226,23 @@ func CreatePaymentRequest(ctx context.Context, cfg Config, input PaymentRequestI
 				request = mergePaymentRequest(request, detail)
 			}
 		}
+	}
+	return request, nil
+}
+
+func classifyPaymentRequestWriteError(err error) error {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) && !httpErr.AmbiguousWrite() &&
+		httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 {
+		return fmt.Errorf("request-inquiry: %w", err)
+	}
+	return &AmbiguousWriteError{Err: fmt.Errorf("request-inquiry: %w", err)}
+}
+
+func paymentRequestFromCreateEnvelope(env *envelope) (*PaymentRequest, error) {
+	request, ok := findPaymentRequest(env)
+	if !ok || request.ID <= 0 {
+		return nil, &AmbiguousWriteError{Err: errors.New("request-inquiry write succeeded but bunq response contains no provider id")}
 	}
 	return request, nil
 }
@@ -247,20 +296,73 @@ func ListPaymentRequests(ctx context.Context, cfg Config, userID, monetaryAccoun
 	if userID <= 0 {
 		return nil, errors.New("BUNQ_USER_ID ontbreekt")
 	}
-	env, err := session.client.do(
-		ctx,
-		http.MethodGet,
-		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry", userID, monetaryAccountID),
-		session.token,
-		nil,
-		false,
-	)
+	requests, err := listPaymentRequestsWithSession(ctx, session,
+		fmt.Sprintf("/user/%d/monetary-account/%d/request-inquiry?count=200", userID, monetaryAccountID))
 	if err != nil {
 		return nil, fmt.Errorf("list request-inquiry: %w", err)
 	}
-	return findPaymentRequests(env), nil
+	return requests, nil
 }
 
+const maxBunqListPages = 100
+
+func listPaymentRequestsWithSession(ctx context.Context, session *sessionContext, firstPath string) ([]PaymentRequest, error) {
+	var out []PaymentRequest
+	seenIDs := make(map[int]struct{})
+	err := walkBunqPages(ctx, session, firstPath, func(env *envelope) {
+		for _, request := range findPaymentRequests(env) {
+			if _, duplicate := seenIDs[request.ID]; duplicate {
+				continue
+			}
+			seenIDs[request.ID] = struct{}{}
+			out = append(out, request)
+		}
+	})
+	return out, err
+}
+
+func listAccountsWithSession(ctx context.Context, session *sessionContext, firstPath string) ([]Account, error) {
+	var out []Account
+	seenIDs := make(map[int]struct{})
+	err := walkBunqPages(ctx, session, firstPath, func(env *envelope) {
+		for _, account := range findAccounts(env) {
+			if _, duplicate := seenIDs[account.ID]; duplicate {
+				continue
+			}
+			seenIDs[account.ID] = struct{}{}
+			out = append(out, account)
+		}
+	})
+	return out, err
+}
+
+func walkBunqPages(ctx context.Context, session *sessionContext, firstPath string, consume func(*envelope)) error {
+	if session == nil || session.client == nil {
+		return errors.New("bunq session ontbreekt")
+	}
+	next := strings.TrimSpace(firstPath)
+	seenPages := make(map[string]struct{})
+	for page := 0; next != ""; page++ {
+		if page >= maxBunqListPages {
+			return fmt.Errorf("bunq pagination overschrijdt veilige limiet van %d pagina's", maxBunqListPages)
+		}
+		resolved, err := session.client.resolveRequestURL(next)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seenPages[resolved]; duplicate {
+			return errors.New("bunq pagination bevat een herhaalde pagina-URL")
+		}
+		seenPages[resolved] = struct{}{}
+		env, err := session.client.do(ctx, http.MethodGet, next, session.token, nil, false)
+		if err != nil {
+			return err
+		}
+		consume(env)
+		next = strings.TrimSpace(env.Pagination.OlderURL)
+	}
+	return nil
+}
 
 func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
@@ -276,7 +378,10 @@ func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 		bunqSessionCache.Unlock()
 		return session, nil
 	}
-	bunqSessionCache.Unlock()
+	// Keep the lock for cache-miss onboarding. Session creation is rare and this
+	// prevents concurrent requests from registering duplicate bunq devices and
+	// sessions for the same configuration.
+	defer bunqSessionCache.Unlock()
 
 	privateKey, err := rsa.GenerateKey(crand.Reader, 2048)
 	if err != nil {
@@ -341,12 +446,10 @@ func authenticate(ctx context.Context, cfg Config) (*sessionContext, error) {
 	}
 
 	sessionContext := &sessionContext{client: client, token: sessionToken, userID: userID, userTyp: userType}
-	bunqSessionCache.Lock()
 	bunqSessionCache.items[cacheKey] = sessionCacheEntry{
 		session:   sessionContext,
 		expiresAt: time.Now().Add(bunqSessionCacheTTL),
 	}
-	bunqSessionCache.Unlock()
 	return sessionContext, nil
 }
 
@@ -360,6 +463,10 @@ func bunqCacheKey(env, apiKey, deviceDescription string) string {
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, body any, signed bool) (*envelope, error) {
+	return c.doWithRequestID(ctx, method, path, token, body, signed, "")
+}
+
+func (c *Client) doWithRequestID(ctx context.Context, method, path, token string, body any, signed bool, clientRequestID string) (*envelope, error) {
 	var payload []byte
 	var err error
 	if body != nil {
@@ -369,7 +476,11 @@ func (c *Client) do(ctx context.Context, method, path, token string, body any, s
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(payload))
+	requestURL, err := c.resolveRequestURL(path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +489,10 @@ func (c *Client) do(ctx context.Context, method, path, token string, body any, s
 	req.Header.Set("X-Bunq-Language", "nl_NL")
 	req.Header.Set("X-Bunq-Region", "nl_NL")
 	req.Header.Set("X-Bunq-Geolocation", "0 0 0 0 NL")
-	req.Header.Set("X-Bunq-Client-Request-Id", requestID())
+	if clientRequestID == "" {
+		clientRequestID = requestID()
+	}
+	req.Header.Set("X-Bunq-Client-Request-Id", clientRequestID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -404,7 +518,7 @@ func (c *Client) do(ctx context.Context, method, path, token string, body any, s
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s %s: %s", method, path, bunqError(raw, resp.StatusCode))
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Message: bunqError(raw, resp.StatusCode)}
 	}
 
 	var out envelope
@@ -412,6 +526,36 @@ func (c *Client) do(ctx context.Context, method, path, token string, body any, s
 		return nil, fmt.Errorf("bunq response lezen mislukt: %w", err)
 	}
 	return &out, nil
+}
+
+func (c *Client) resolveRequestURL(path string) (string, error) {
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", err
+	}
+	raw := strings.TrimSpace(path)
+	next, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("ongeldige bunq pagina-URL: %w", err)
+	}
+	basePath := strings.TrimRight(base.Path, "/")
+	if next.IsAbs() {
+		if !strings.EqualFold(next.Scheme, base.Scheme) || !strings.EqualFold(next.Host, base.Host) {
+			return "", errors.New("bunq pagination wees naar een andere origin")
+		}
+		if basePath != "" && next.Path != basePath && !strings.HasPrefix(next.Path, basePath+"/") {
+			return "", errors.New("bunq pagination wees buiten het API-basispad")
+		}
+		return next.String(), nil
+	}
+	if strings.HasPrefix(next.Path, basePath+"/") && basePath != "" {
+		base.Path, base.RawQuery, base.Fragment = "", "", ""
+		return base.ResolveReference(next).String(), nil
+	}
+	if !strings.HasPrefix(raw, "/") {
+		raw = "/" + raw
+	}
+	return strings.TrimRight(c.baseURL, "/") + raw, nil
 }
 
 func (c *Client) sign(payload []byte) (string, error) {
@@ -424,8 +568,15 @@ func (c *Client) sign(payload []byte) (string, error) {
 }
 
 type envelope struct {
-	Response []map[string]json.RawMessage `json:"Response"`
-	Error    []bunqErrorObject            `json:"Error"`
+	Response   []map[string]json.RawMessage `json:"Response"`
+	Error      []bunqErrorObject            `json:"Error"`
+	Pagination bunqPagination               `json:"Pagination"`
+}
+
+type bunqPagination struct {
+	OlderURL  string `json:"older_url"`
+	NewerURL  string `json:"newer_url"`
+	FutureURL string `json:"future_url"`
 }
 
 type bunqErrorObject struct {
@@ -563,7 +714,6 @@ func findPaymentRequests(env *envelope) []PaymentRequest {
 	return requests
 }
 
-
 func findPaymentRequest(env *envelope) (*PaymentRequest, bool) {
 	for _, item := range env.Response {
 		raw, ok := item["RequestInquiry"]
@@ -695,6 +845,14 @@ func baseURL(environment string) string {
 	return "https://public-api.sandbox.bunq.com/v1"
 }
 
+func stableClientRequestID(idempotencyKey string) string {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return requestID()
+	}
+	sum := sha256.Sum256([]byte(idempotencyKey))
+	return "homeapp-idem-" + hex.EncodeToString(sum[:16])
+}
 func requestID() string {
 	var random [8]byte
 	if _, err := crand.Read(random[:]); err != nil {

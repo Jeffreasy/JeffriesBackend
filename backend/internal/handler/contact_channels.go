@@ -26,7 +26,7 @@ type channelBody struct {
 
 // AddChannel adds an extra email/phone to a contact.
 func (h *ContactHandler) AddChannel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -72,9 +72,14 @@ type channelUpdateBody struct {
 
 // UpdateChannel edits a channel / promotes it to primary.
 func (h *ContactHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	channelID, err := uuid.Parse(chi.URLParam(r, "channelID"))
@@ -87,7 +92,7 @@ func (h *ContactHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	updated, err := h.store.UpdateChannel(r.Context(), userID, channelID, body.Kind, body.Value, body.Label, body.IsPrimary)
+	updated, err := h.store.UpdateChannel(r.Context(), userID, contactID, channelID, body.Kind, body.Value, body.Label, body.IsPrimary)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Kanaal niet gevonden.")
@@ -108,7 +113,7 @@ type orgBody struct {
 
 // AddOrganization links a contact to a company (manual affiliation).
 func (h *ContactHandler) AddOrganization(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -147,9 +152,14 @@ type orgUpdateBody struct {
 
 // UpdateOrganization edits a manual org link.
 func (h *ContactHandler) UpdateOrganization(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	orgID, err := uuid.Parse(chi.URLParam(r, "orgID"))
@@ -172,7 +182,7 @@ func (h *ContactHandler) UpdateOrganization(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	updated, err := h.store.UpdateManualOrganization(r.Context(), userID, orgID, organizationID, clearOrg, body.Role)
+	updated, err := h.store.UpdateManualOrganization(r.Context(), userID, contactID, orgID, organizationID, clearOrg, body.Role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Koppeling niet gevonden (of wordt beheerd in LaventeCare).")
@@ -186,9 +196,14 @@ func (h *ContactHandler) UpdateOrganization(w http.ResponseWriter, r *http.Reque
 
 // RemoveOrganization deletes a manual org link.
 func (h *ContactHandler) RemoveOrganization(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	orgID, err := uuid.Parse(chi.URLParam(r, "orgID"))
@@ -196,7 +211,7 @@ func (h *ContactHandler) RemoveOrganization(w http.ResponseWriter, r *http.Reque
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.RemoveManualOrganization(r.Context(), userID, orgID); err != nil {
+	if err := h.store.RemoveManualOrganization(r.Context(), userID, contactID, orgID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Koppeling niet gevonden (of wordt beheerd in LaventeCare).")
 			return
@@ -209,9 +224,14 @@ func (h *ContactHandler) RemoveOrganization(w http.ResponseWriter, r *http.Reque
 
 // DeleteChannel removes a channel.
 func (h *ContactHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	channelID, err := uuid.Parse(chi.URLParam(r, "channelID"))
@@ -219,7 +239,7 @@ func (h *ContactHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.DeleteChannel(r.Context(), userID, channelID); err != nil {
+	if err := h.store.DeleteChannel(r.Context(), userID, contactID, channelID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Kanaal niet gevonden.")
 			return
@@ -234,7 +254,7 @@ func (h *ContactHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 
 // ListInteractions returns a contact's touchpoint timeline (?limit=).
 func (h *ContactHandler) ListInteractions(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -266,7 +286,7 @@ type interactionBody struct {
 
 // AddInteraction logs a touchpoint (advances last_contacted_at).
 func (h *ContactHandler) AddInteraction(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -308,9 +328,14 @@ func (h *ContactHandler) AddInteraction(w http.ResponseWriter, r *http.Request) 
 
 // DeleteInteraction removes a touchpoint (recomputes last_contacted_at).
 func (h *ContactHandler) DeleteInteraction(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
+		return
+	}
+	contactID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "Ongeldig contact-id.")
 		return
 	}
 	interactionID, err := uuid.Parse(chi.URLParam(r, "interactionID"))
@@ -318,7 +343,7 @@ func (h *ContactHandler) DeleteInteraction(w http.ResponseWriter, r *http.Reques
 		Error(w, http.StatusBadRequest, "Ongeldig id.")
 		return
 	}
-	if err := h.store.DeleteInteraction(r.Context(), userID, interactionID); err != nil {
+	if err := h.store.DeleteInteraction(r.Context(), userID, contactID, interactionID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			Error(w, http.StatusNotFound, "Interactie niet gevonden.")
 			return

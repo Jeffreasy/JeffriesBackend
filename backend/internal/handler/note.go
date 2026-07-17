@@ -16,9 +16,14 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type NoteHandler struct{ store *store.NoteStore }
+type NoteHandler struct {
+	store       *store.NoteStore
+	ownerUserID string
+}
 
-func NewNoteHandler(s *store.NoteStore) *NoteHandler { return &NoteHandler{store: s} }
+func NewNoteHandler(s *store.NoteStore, ownerUserID string) *NoteHandler {
+	return &NoteHandler{store: s, ownerUserID: ownerUserID}
+}
 
 // normalizeTags trims, drops blanks, and de-duplicates tags (case-insensitive,
 // first spelling wins) so a note never stores duplicate or empty tags.
@@ -62,7 +67,7 @@ func normalizeTags(tags []string) []string {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes [get]
 func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -108,7 +113,7 @@ func (h *NoteHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {string} string "note not found"
 // @Router /notes/{id} [get]
 func (h *NoteHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -159,7 +164,7 @@ type noteCreateBody struct {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes [post]
 func (h *NoteHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -244,7 +249,7 @@ type noteUpdateBody struct {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id} [patch]
 func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -380,7 +385,7 @@ func (h *NoteHandler) Update(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id} [delete]
 func (h *NoteHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -414,7 +419,7 @@ func (h *NoteHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/search [get]
 func (h *NoteHandler) Search(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	query := r.URL.Query().Get("q")
 	if userID == "" || query == "" {
 		Error(w, http.StatusBadRequest, "userId en q zijn verplicht")
@@ -445,7 +450,7 @@ func (h *NoteHandler) Search(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/tags [get]
 func (h *NoteHandler) Tags(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -469,7 +474,7 @@ func (h *NoteHandler) Tags(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id}/backlinks [get]
 func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -500,7 +505,7 @@ func (h *NoteHandler) Backlinks(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id}/revisions [get]
 func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -539,7 +544,7 @@ func (h *NoteHandler) Revisions(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /notes/{id}/revisions/{revisionID}/restore [post]
 func (h *NoteHandler) RestoreRevision(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return

@@ -19,6 +19,9 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureDeviceCommandSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure device command schema: %w", err)
 	}
+	if err := ensureTelegramQueueSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure telegram queue schema: %w", err)
+	}
 	if err := ensureSymbolSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure symbol schema: %w", err)
 	}
@@ -31,6 +34,9 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	if err := ensureLaventeCareCustomerSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure laventecare customer schema: %w", err)
 	}
+	if err := ensureLaventeCareIntakeSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure laventecare intake schema: %w", err)
+	}
 	if err := ensureLaventeCareDossierDocumentSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure laventecare dossier document schema: %w", err)
 	}
@@ -42,6 +48,9 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 	}
 	if err := ensureLaventeCareBillingSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure laventecare billing schema: %w", err)
+	}
+	if err := ensureBunqPaymentAttemptSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure bunq payment attempt schema: %w", err)
 	}
 	if err := ensureLaventeCareMailboxSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure laventecare mailbox schema: %w", err)
@@ -71,6 +80,80 @@ func EnsureRuntimeSchema(ctx context.Context, db *DB) error {
 		return fmt.Errorf("ensure whatsapp schema: %w", err)
 	}
 	return nil
+}
+
+func ensureTelegramQueueSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS telegram_poll_state (
+    stream_key TEXT PRIMARY KEY,
+    next_offset BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS telegram_update_queue (
+    update_id BIGINT PRIMARY KEY,
+    payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','processing','done','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_queue_pending
+    ON telegram_update_queue (status, available_at, update_id);
+`)
+	return err
+}
+
+// ensureBunqPaymentAttemptSchema records the local side of each non-idempotent
+// bunq create call. Unknown writes are reconciled instead of repeated.
+func ensureBunqPaymentAttemptSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS lc_payment_request_attempts (
+    user_id             TEXT        NOT NULL,
+    invoice_id          UUID        NOT NULL REFERENCES lc_invoices(id) ON DELETE CASCADE,
+    execution_key       TEXT        NOT NULL,
+    status              TEXT        NOT NULL CHECK (status IN ('creating','succeeded','unknown','failed')),
+    attempt_count       INTEGER     NOT NULL DEFAULT 1,
+    provider_request_id TEXT,
+    last_error          TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, invoice_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lc_payment_attempts_status
+    ON lc_payment_request_attempts (user_id, status, updated_at);
+`)
+	return err
+}
+
+// ensureLaventeCareIntakeSchema stores idempotency reservations and the exact
+// CRM objects produced for each public website request.
+func ensureLaventeCareIntakeSchema(ctx context.Context, db *DB) error {
+	_, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS lc_public_intakes (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         TEXT        NOT NULL,
+    idempotency_key TEXT        NOT NULL,
+    request_id      TEXT        NOT NULL,
+    payload_hash    TEXT        NOT NULL,
+    status          TEXT        NOT NULL DEFAULT 'processing'
+                                CHECK (status IN ('processing', 'accepted')),
+    company_id      UUID        REFERENCES lc_companies(id) ON DELETE SET NULL,
+    contact_id      UUID        REFERENCES lc_contacts(id) ON DELETE SET NULL,
+    lead_id         UUID        REFERENCES lc_leads(id) ON DELETE SET NULL,
+    action_id       UUID        REFERENCES lc_action_items(id) ON DELETE SET NULL,
+    submitted_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_lc_public_intakes_created
+    ON lc_public_intakes (user_id, created_at DESC);
+`)
+	return err
 }
 
 // ensureSyncRunsSchema creates the sync_runs audit table: one row per background
@@ -553,7 +636,6 @@ CREATE INDEX IF NOT EXISTS idx_lc_sla_user_status ON lc_sla_incidents (user_id, 
 `)
 	return err
 }
-
 
 func ensureLaventeCareActivitySchema(ctx context.Context, db *DB) error {
 	_, err := db.Pool.Exec(ctx, `

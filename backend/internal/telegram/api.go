@@ -230,7 +230,7 @@ func (c *Client) DownloadFile(filePath string) ([]byte, error) {
 	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", c.token, filePath)
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeTelegramError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -271,13 +271,13 @@ func (c *Client) GetUpdatesContext(ctx context.Context, offset int64, timeout in
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL("getUpdates"), bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, sanitizeTelegramError(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeTelegramError(err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)

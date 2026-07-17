@@ -31,14 +31,14 @@ func (s *LoonstrookStore) List(ctx context.Context, userID string) ([]map[string
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]any, error) {
 		var (
-			id, userID                                                      string
-			jaar, periode                                                   int
-			periodeLabel, typ, schaalnummer, trede                          string
-			netto, brutoBetaling, brutoInhouding, salarisBasis, ortTotaal   float64
-			parttimeFactor                                                  float64
-			ortDetail, componenten, cumulatieven                            json.RawMessage
+			id, userID                                                     string
+			jaar, periode                                                  int
+			periodeLabel, typ, schaalnummer, trede                         string
+			netto, brutoBetaling, brutoInhouding, salarisBasis, ortTotaal  float64
+			parttimeFactor                                                 float64
+			ortDetail, componenten, cumulatieven                           json.RawMessage
 			amtZeer, pensioen, lhf, reis, vak, eju, balans, extra, uurloon *float64
-			geimporteerdOp                                                  *time.Time
+			geimporteerdOp                                                 *time.Time
 		)
 		err := row.Scan(&id, &userID, &jaar, &periode, &periodeLabel, &typ,
 			&netto, &brutoBetaling, &brutoInhouding, &salarisBasis,

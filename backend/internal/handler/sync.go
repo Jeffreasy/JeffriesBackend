@@ -37,7 +37,7 @@ func NewSyncHandler(db *store.DB, cfg *config.Config) *SyncHandler {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /sync/calendar [post]
 func (h *SyncHandler) SyncCalendar(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -325,7 +325,7 @@ func resolvedPersonalEventStatus(event model.PersonalEvent) string {
 // @Success 200 {object} map[string]int
 // @Router /sync/todoist [post]
 func (h *SyncHandler) SyncTodoist(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -373,12 +373,11 @@ func (h *SyncHandler) pushTodoist(ctx context.Context, userID string) (*todoist.
 		})
 	}
 	client := todoist.NewClient(h.cfg.TodoistAPIToken, h.cfg.TodoistProjectID)
-	ctx = context.WithValue(ctx, "today", time.Now().Format("2006-01-02"))
-	return client.SyncDiensten(ctx, diensten)
+	return client.SyncDiensten(ctx, diensten, todoist.AmsterdamDate(time.Now()))
 }
 
 func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -472,7 +471,7 @@ func (h *SyncHandler) SyncGmail(w http.ResponseWriter, r *http.Request) {
 // @Router /sync/status [get]
 func (h *SyncHandler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		userID = h.cfg.HomeappUserID
 	}

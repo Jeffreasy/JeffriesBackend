@@ -91,17 +91,18 @@ func (s *ContactStore) AddChannel(ctx context.Context, userID string, c model.Co
 
 // UpdateChannel edits a channel's value/label/kind and/or promotes it to primary
 // (demoting same-kind siblings). Nil pointers leave a field unchanged.
-func (s *ContactStore) UpdateChannel(ctx context.Context, userID string, id uuid.UUID, kind, value, label *string, isPrimary *bool) (model.ContactChannel, error) {
+func (s *ContactStore) UpdateChannel(ctx context.Context, userID string, contactID, id uuid.UUID, kind, value, label *string, isPrimary *bool) (model.ContactChannel, error) {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
 		return model.ContactChannel{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	var contactID uuid.UUID
+	var storedContactID uuid.UUID
 	var curKind string
 	if err := tx.QueryRow(ctx,
-		`SELECT contact_id, kind FROM contact_channels WHERE user_id = $1 AND id = $2`, userID, id).Scan(&contactID, &curKind); err != nil {
+		`SELECT contact_id, kind FROM contact_channels WHERE user_id = $1 AND contact_id = $2 AND id = $3`,
+		userID, contactID, id).Scan(&storedContactID, &curKind); err != nil {
 		return model.ContactChannel{}, err // pgx.ErrNoRows when not found
 	}
 	newKind := curKind
@@ -127,7 +128,7 @@ func (s *ContactStore) UpdateChannel(ctx context.Context, userID string, id uuid
 		if *isPrimary {
 			if _, err := tx.Exec(ctx, `
 				UPDATE contact_channels SET is_primary = false
-				WHERE user_id = $1 AND contact_id = $2 AND kind = $3 AND id <> $4`, userID, contactID, newKind, id); err != nil {
+				WHERE user_id = $1 AND contact_id = $2 AND kind = $3 AND id <> $4`, userID, storedContactID, newKind, id); err != nil {
 				return model.ContactChannel{}, err
 			}
 		}
@@ -147,8 +148,10 @@ func (s *ContactStore) UpdateChannel(ctx context.Context, userID string, id uuid
 }
 
 // DeleteChannel removes a channel.
-func (s *ContactStore) DeleteChannel(ctx context.Context, userID string, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM contact_channels WHERE user_id = $1 AND id = $2`, userID, id)
+func (s *ContactStore) DeleteChannel(ctx context.Context, userID string, contactID, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM contact_channels WHERE user_id = $1 AND contact_id = $2 AND id = $3`,
+		userID, contactID, id)
 	if err != nil {
 		return err
 	}
@@ -253,18 +256,27 @@ func (s *ContactStore) AddInteraction(ctx context.Context, userID string, in mod
 // when the deleted interaction was the one driving it (its occurred_at equals the
 // stored value) — so deleting an older touchpoint, or one superseded by a manual
 // "just contacted" touch or a WhatsApp import, leaves last_contacted_at untouched.
-func (s *ContactStore) DeleteInteraction(ctx context.Context, userID string, id uuid.UUID) error {
-	var contactID uuid.UUID
-	var occurred time.Time
-	err := s.db.Pool.QueryRow(ctx,
-		`DELETE FROM contact_interactions WHERE user_id = $1 AND id = $2 RETURNING contact_id, occurred_at`, userID, id).Scan(&contactID, &occurred)
+func (s *ContactStore) DeleteInteraction(ctx context.Context, userID string, contactID, id uuid.UUID) error {
+	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
-		return err // pgx.ErrNoRows when not found
+		return err
 	}
-	_, err = s.db.Pool.Exec(ctx, `
+	defer tx.Rollback(ctx)
+
+	var occurred time.Time
+	err = tx.QueryRow(ctx, `
+		DELETE FROM contact_interactions
+		WHERE user_id = $1 AND contact_id = $2 AND id = $3
+		RETURNING occurred_at`, userID, contactID, id).Scan(&occurred)
+	if err != nil {
+		return err // pgx.ErrNoRows when not found or nested under the wrong contact
+	}
+	if _, err = tx.Exec(ctx, `
 		UPDATE contacts SET last_contacted_at = (
 			SELECT MAX(occurred_at) FROM contact_interactions WHERE user_id = $1 AND contact_id = $2
 		), updated_at = now()
-		WHERE user_id = $1 AND id = $2 AND last_contacted_at = $3`, userID, contactID, occurred)
-	return err
+		WHERE user_id = $1 AND id = $2 AND last_contacted_at = $3`, userID, contactID, occurred); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

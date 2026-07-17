@@ -1,6 +1,9 @@
 package todoist
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestTaskArgsSyncFormat locks in the exact Todoist Sync API arg shapes (due as
 // {datetime,timezone}, duration as {amount,unit}) so the batch path can't drift
@@ -52,5 +55,26 @@ func TestTaskArgsSyncFormat(t *testing.T) {
 	}
 	if _, has := ad["duration"]; has {
 		t.Fatal("all-day should have no duration")
+	}
+}
+func TestAmsterdamDateAcrossUTCDateBoundary(t *testing.T) {
+	winterUTC := time.Date(2026, 1, 1, 23, 30, 0, 0, time.UTC)
+	if got := AmsterdamDate(winterUTC).Format("2006-01-02"); got != "2026-01-02" {
+		t.Fatalf("winter Amsterdam date = %s", got)
+	}
+	summerUTC := time.Date(2026, 7, 17, 22, 30, 0, 0, time.UTC)
+	if got := AmsterdamDate(summerUTC).Format("2006-01-02"); got != "2026-07-18" {
+		t.Fatalf("summer Amsterdam date = %s", got)
+	}
+}
+
+func TestTodoistDueDateIsBoundsSafe(t *testing.T) {
+	for _, invalid := range []string{"", "2026", "not-a-date", "2026-99-99T12:00:00"} {
+		if got := todoistDueDate(invalid); got != "" {
+			t.Fatalf("todoistDueDate(%q) = %q", invalid, got)
+		}
+	}
+	if got := todoistDueDate("2026-07-17T09:00:00"); got != "2026-07-17" {
+		t.Fatalf("valid datetime date = %q", got)
 	}
 }
