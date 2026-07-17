@@ -8,9 +8,14 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type PrivacyHandler struct{ store *store.PrivacyStore }
+type PrivacyHandler struct {
+	store       *store.PrivacyStore
+	ownerUserID string
+}
 
-func NewPrivacyHandler(s *store.PrivacyStore) *PrivacyHandler { return &PrivacyHandler{store: s} }
+func NewPrivacyHandler(s *store.PrivacyStore, ownerUserID string) *PrivacyHandler {
+	return &PrivacyHandler{store: s, ownerUserID: ownerUserID}
+}
 
 // Get returns the privacy settings for a user.
 // @Summary Get privacy settings
@@ -23,7 +28,7 @@ func NewPrivacyHandler(s *store.PrivacyStore) *PrivacyHandler { return &PrivacyH
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /privacy [get]
 func (h *PrivacyHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -50,7 +55,7 @@ func (h *PrivacyHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /privacy [put]
 func (h *PrivacyHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return

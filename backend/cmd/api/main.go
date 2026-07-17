@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 	"github.com/Jeffreasy/JeffriesBackend/internal/engine"
@@ -20,44 +24,60 @@ import (
 // @in header
 // @name X-API-Key
 func main() {
-	cfg := config.Load()
+	if err := run(); err != nil {
+		slog.Error("homeapp API stopped with an error", "error", err)
+		os.Exit(1)
+	}
+}
 
-	// Configure structured logging
+// run owns all resources so every error path executes defers and returns a
+// non-nil error to main. Only normal/signal-driven shutdown returns nil.
+func run() error {
+	cfg := config.Load()
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: cfg.SlogLevel(),
 	})))
-
 	if err := cfg.Validate(); err != nil {
-		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	slog.Info("starting homeapp API", "env", cfg.AppEnv, "port", cfg.AppPort)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// Connect to database
-	ctx := context.Background()
 	db, err := store.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		slog.Error("database connection failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("database connection failed: %w", err)
 	}
+	defer db.Close()
 	if err := store.EnsureRuntimeSchema(ctx, db); err != nil {
-		slog.Error("runtime schema check failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("runtime schema check failed: %w", err)
 	}
 
-	// Start background automation engine if enabled (e.g. on Render)
+	backgroundCtx, cancelBackground := context.WithCancel(ctx)
+	var backgroundWG sync.WaitGroup
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		engine.RunCleaner(backgroundCtx, db)
+	}()
 	if cfg.StartBackgroundEngine {
 		slog.Info("starting background automation engine (Telegram bot + Crons)")
 		eng := engine.New(cfg, db)
-
-		engineCtx, cancelEngine := context.WithCancel(context.Background())
-		defer cancelEngine()
-
-		go eng.Run(engineCtx)
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			eng.Run(backgroundCtx)
+		}()
 	}
 
-	// Start HTTP server (blocks until shutdown)
 	srv := server.New(cfg, db)
-	srv.ListenAndServe()
+	serveErr := srv.ListenAndServe(ctx)
+	cancelBackground()
+	backgroundWG.Wait()
+	if serveErr != nil {
+		return serveErr
+	}
+	slog.Info("homeapp API stopped cleanly")
+	return nil
 }

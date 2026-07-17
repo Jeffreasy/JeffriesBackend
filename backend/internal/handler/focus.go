@@ -111,10 +111,7 @@ type FocusAttention struct {
 // @Router /focus/summary [get]
 func (h *FocusHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
-	if userID == "" {
-		userID = h.cfg.HomeappUserID
-	}
+	userID := h.cfg.HomeappUserID
 
 	loc, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {

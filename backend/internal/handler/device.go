@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -368,6 +367,14 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
+	if cmd.SceneID != nil && (*cmd.SceneID < 1 || *cmd.SceneID > 32) {
+		Error(w, http.StatusBadRequest, "Scene-id moet tussen 1 en 32 liggen.")
+		return
+	}
+	if cmd.ColorTempMireds != nil && *cmd.ColorTempMireds <= 0 {
+		Error(w, http.StatusBadRequest, "Kleurtemperatuur moet groter dan nul zijn.")
+		return
+	}
 
 	d, err := h.devices.GetByID(r.Context(), id)
 	if err != nil || d == nil {
@@ -409,7 +416,7 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cmd.Hue != nil && cmd.Saturation != nil {
-		rv, gv, bv := hsvToRGB(float64(*cmd.Hue)/254.0, float64(*cmd.Saturation)/254.0, 1.0)
+		rv, gv, bv := hsvToRGB(float64(clampInt(*cmd.Hue, 0, 254))/254.0, float64(clampInt(*cmd.Saturation, 0, 254))/254.0, 1.0)
 		opts.R = &rv
 		opts.G = &gv
 		opts.B = &bv
@@ -447,11 +454,9 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(statePatch) > 0 {
-			go func() {
-				if err := h.devices.UpdateState(context.Background(), id, statePatch); err != nil {
-					slog.Warn("optimistic state update failed", "device", id, "error", err)
-				}
-			}()
+			if err := h.devices.UpdateState(r.Context(), id, statePatch); err != nil {
+				slog.Warn("optimistic state update failed", "device", id, "error", err)
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -471,13 +476,14 @@ func (h *DeviceHandler) Command(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update state in PostgreSQL
+	// Keep PostgreSQL in sync before returning so the next read cannot briefly
+	// snap back to the previous state. A persistence failure is logged because
+	// retrying the HTTP request could duplicate a command that already reached
+	// the physical lamp.
 	if len(statePatch) > 0 {
-		go func() {
-			if err := h.devices.UpdateState(context.Background(), id, statePatch); err != nil {
-				slog.Warn("state update failed", "device", id, "error", err)
-			}
-		}()
+		if err := h.devices.UpdateState(r.Context(), id, statePatch); err != nil {
+			slog.Warn("state update failed", "device", id, "error", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -535,6 +541,9 @@ func derefOr(p *int, fallback int) int {
 }
 
 func hsvToRGB(h, s, v float64) (int, int, int) {
+	h = math.Max(0, math.Min(1, h))
+	s = math.Max(0, math.Min(1, s))
+	v = math.Max(0, math.Min(1, v))
 	if s == 0 {
 		c := int(v * 255)
 		return c, c, c

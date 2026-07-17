@@ -128,19 +128,19 @@ func (s *HabitStore) ListDueForDate(ctx context.Context, userID, datum string) (
 }
 
 // Get returns a single habit.
-func (s *HabitStore) Get(ctx context.Context, id uuid.UUID) (model.Habit, error) {
-	return getHabitQ(ctx, s.db.Pool, id, false)
+func (s *HabitStore) Get(ctx context.Context, userID string, id uuid.UUID) (model.Habit, error) {
+	return getHabitQ(ctx, s.db.Pool, userID, id, false)
 }
 
 // getHabitQ fetches a habit through the given querier. With forUpdate it locks
 // the habits row (SELECT ... FOR UPDATE) so concurrent toggle/incident/undo
 // requests on the same habit serialize instead of racing the progress refresh.
-func getHabitQ(ctx context.Context, q pgQuerier, id uuid.UUID, forUpdate bool) (model.Habit, error) {
-	query := `SELECT ` + habitCols + ` FROM habits WHERE id = $1`
+func getHabitQ(ctx context.Context, q pgQuerier, userID string, id uuid.UUID, forUpdate bool) (model.Habit, error) {
+	query := `SELECT ` + habitCols + ` FROM habits WHERE id = $1 AND user_id = $2`
 	if forUpdate {
 		query += ` FOR UPDATE`
 	}
-	return scanHabit(q.QueryRow(ctx, query, id))
+	return scanHabit(q.QueryRow(ctx, query, id, userID))
 }
 
 // Create inserts a new habit.
@@ -167,7 +167,7 @@ func (s *HabitStore) Create(ctx context.Context, userID string, h model.Habit) (
 }
 
 // Update patches a habit with the given fields.
-func (s *HabitStore) Update(ctx context.Context, id uuid.UUID, fields map[string]any) (model.Habit, error) {
+func (s *HabitStore) Update(ctx context.Context, userID string, id uuid.UUID, fields map[string]any) (model.Habit, error) {
 	sets := []string{}
 	args := []any{}
 	i := 1
@@ -186,14 +186,18 @@ func (s *HabitStore) Update(ctx context.Context, id uuid.UUID, fields map[string
 	args = append(args, time.Now())
 	i++
 	args = append(args, id)
-	q := `UPDATE habits SET ` + strings.Join(sets, ", ") + ` WHERE id = $` + strconv.Itoa(i) + ` RETURNING ` + habitCols
+	idArg := i
+	i++
+	args = append(args, userID)
+	q := `UPDATE habits SET ` + strings.Join(sets, ", ") + ` WHERE id = $` + strconv.Itoa(idArg) +
+		` AND user_id = $` + strconv.Itoa(i) + ` RETURNING ` + habitCols
 	return scanHabit(s.db.Pool.QueryRow(ctx, q, args...))
 }
 
 // Archive soft-deletes a habit. Returns pgx.ErrNoRows when the habit no longer
 // exists so the handler can answer 404 instead of a silent success.
-func (s *HabitStore) Archive(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `UPDATE habits SET is_actief = false, gewijzigd = $1 WHERE id = $2`, time.Now(), id)
+func (s *HabitStore) Archive(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx, `UPDATE habits SET is_actief = false, gewijzigd = $1 WHERE id = $2 AND user_id = $3`, time.Now(), id, userID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
@@ -201,8 +205,8 @@ func (s *HabitStore) Archive(ctx context.Context, id uuid.UUID) error {
 }
 
 // Delete permanently removes a habit. Returns pgx.ErrNoRows when nothing matched.
-func (s *HabitStore) Delete(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM habits WHERE id = $1`, id)
+func (s *HabitStore) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM habits WHERE id = $1 AND user_id = $2`, id, userID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
@@ -210,27 +214,37 @@ func (s *HabitStore) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 // Reorder updates the volgorde for multiple habits.
-func (s *HabitStore) Reorder(ctx context.Context, items []struct {
+func (s *HabitStore) Reorder(ctx context.Context, userID string, items []struct {
 	ID       uuid.UUID `json:"id"`
 	Volgorde int       `json:"volgorde"`
 }) error {
-	batch := &pgx.Batch{}
-	for _, it := range items {
-		batch.Queue(`UPDATE habits SET volgorde = $1, gewijzigd = $2 WHERE id = $3`, it.Volgorde, time.Now(), it.ID)
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return s.db.Pool.SendBatch(ctx, batch).Close()
+	defer tx.Rollback(ctx)
+	for _, it := range items {
+		tag, err := tx.Exec(ctx, `UPDATE habits SET volgorde=$1,gewijzigd=$2 WHERE id=$3 AND user_id=$4`, it.Volgorde, time.Now(), it.ID, userID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return pgx.ErrNoRows
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // TogglePause toggles the pause state of a habit. Returns pgx.ErrNoRows when
 // the habit no longer exists.
-func (s *HabitStore) TogglePause(ctx context.Context, id uuid.UUID) error {
+func (s *HabitStore) TogglePause(ctx context.Context, userID string, id uuid.UUID) error {
 	tag, err := s.db.Pool.Exec(ctx, `
 		UPDATE habits SET
 			is_pauze = NOT is_pauze,
 			gepauzeer_om = CASE WHEN is_pauze THEN NULL ELSE now() END,
 			gewijzigd = now()
-		WHERE id = $1
-	`, id)
+		WHERE id = $1 AND user_id = $2
+	`, id, userID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
@@ -374,13 +388,13 @@ func habitMatchesRoosterFilter(filter *string, schedule habitScheduleContext) bo
 // ─── Habit Logs ──────────────────────────────────────────────────────────────
 
 // GetLog returns the log entry for a habit on a specific date.
-func (s *HabitStore) GetLog(ctx context.Context, habitID uuid.UUID, datum string) (model.HabitLog, error) {
+func (s *HabitStore) GetLog(ctx context.Context, userID string, habitID uuid.UUID, datum string) (model.HabitLog, error) {
 	var l model.HabitLog
 	err := s.db.Pool.QueryRow(ctx, `
 		SELECT id, user_id, habit_id, datum::text, voltooid, waarde, is_incident,
 			trigger_cat, notitie, bron, xp_verdiend, aangemaakt
-		FROM habit_logs WHERE habit_id = $1 AND datum = $2
-	`, habitID, datum).Scan(
+		FROM habit_logs WHERE habit_id = $1 AND datum = $2 AND user_id = $3
+	`, habitID, datum, userID).Scan(
 		&l.ID, &l.UserID, &l.HabitID, &l.Datum, &l.Voltooid, &l.Waarde,
 		&l.IsIncident, &l.TriggerCat, &l.Notitie, &l.Bron, &l.XPVerdiend, &l.Aangemaakt,
 	)
@@ -414,7 +428,7 @@ func (s *HabitStore) UpsertLog(ctx context.Context, l model.HabitLog) (model.Hab
 	}
 	defer tx.Rollback(ctx)
 
-	habit, err := getHabitQ(ctx, tx, l.HabitID, true)
+	habit, err := getHabitQ(ctx, tx, l.UserID, l.HabitID, true)
 	if err != nil {
 		return model.HabitLog{}, err
 	}
@@ -457,7 +471,7 @@ func (s *HabitStore) UpsertIncident(ctx context.Context, l model.HabitLog) (mode
 	}
 	defer tx.Rollback(ctx)
 
-	habit, err := getHabitQ(ctx, tx, l.HabitID, true)
+	habit, err := getHabitQ(ctx, tx, l.UserID, l.HabitID, true)
 	if err != nil {
 		return model.HabitLog{}, err
 	}
@@ -524,7 +538,7 @@ func normalizeHabitLogForHabit(habit model.Habit, log model.HabitLog) model.Habi
 // The notitie column is shared between completions and incidents; since the
 // incident path is the one that writes it in this flow, the undo clears it —
 // documented trade-off, provenance is not tracked per field.
-func (s *HabitStore) DeleteIncidentLog(ctx context.Context, habitID uuid.UUID, datum string) error {
+func (s *HabitStore) DeleteIncidentLog(ctx context.Context, userID string, habitID uuid.UUID, datum string) error {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -533,15 +547,15 @@ func (s *HabitStore) DeleteIncidentLog(ctx context.Context, habitID uuid.UUID, d
 
 	// Lock the habit row so a concurrent toggle/incident on the same habit
 	// serializes with this undo (M9).
-	if _, err := getHabitQ(ctx, tx, habitID, true); err != nil {
+	if _, err := getHabitQ(ctx, tx, userID, habitID, true); err != nil {
 		return err
 	}
 
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM habit_logs
-		WHERE habit_id = $1 AND datum = $2 AND is_incident = true
+		WHERE habit_id = $1 AND datum = $2 AND user_id = $3 AND is_incident = true
 		  AND voltooid = false AND COALESCE(waarde, 0) = 0
-	`, habitID, datum)
+	`, habitID, datum, userID)
 	if err != nil {
 		return err
 	}
@@ -550,8 +564,8 @@ func (s *HabitStore) DeleteIncidentLog(ctx context.Context, habitID uuid.UUID, d
 		tag, err = tx.Exec(ctx, `
 			UPDATE habit_logs
 			SET is_incident = false, trigger_cat = NULL, notitie = NULL
-			WHERE habit_id = $1 AND datum = $2 AND is_incident = true
-		`, habitID, datum)
+			WHERE habit_id = $1 AND datum = $2 AND user_id = $3 AND is_incident = true
+		`, habitID, datum, userID)
 		if err != nil {
 			return err
 		}
@@ -565,7 +579,7 @@ func (s *HabitStore) DeleteIncidentLog(ctx context.Context, habitID uuid.UUID, d
 	// Refresh AFTER the commit: a failing recalculation must never resurrect the
 	// incident (the undo already happened). The caller treats this as success;
 	// the next log mutation recomputes progress anyway (M9).
-	if err := s.RefreshHabitProgress(ctx, habitID); err != nil {
+	if err := s.RefreshHabitProgress(ctx, userID, habitID); err != nil {
 		slog.Warn("habit progress refresh failed after incident undo (undo committed)",
 			"habitId", habitID, "datum", datum, "error", err)
 	}
@@ -618,8 +632,8 @@ type habitProgressLog struct {
 }
 
 // RefreshHabitProgress recalculates streak, totals and badges after a log change.
-func (s *HabitStore) RefreshHabitProgress(ctx context.Context, habitID uuid.UUID) error {
-	habit, err := s.Get(ctx, habitID)
+func (s *HabitStore) RefreshHabitProgress(ctx context.Context, userID string, habitID uuid.UUID) error {
+	habit, err := s.Get(ctx, userID, habitID)
 	if err != nil {
 		return err
 	}
@@ -1139,8 +1153,8 @@ func (s *HabitStore) HeatmapData(ctx context.Context, userID string, days int) (
 // habit had already met its period target using only completing logs dated
 // strictly BEFORE that date (same period). This mirrors the frontend N5 exclusion.
 type habitPeriodIndex struct {
-	weekly  map[uuid.UUID]bool // habit is x_per_week
-	goal    map[uuid.UUID]int
+	weekly map[uuid.UUID]bool // habit is x_per_week
+	goal   map[uuid.UUID]int
 	// completions[habitID][periodKey] = sorted-ascending list of completion dates
 	completions map[uuid.UUID]map[string][]string
 }
@@ -1230,27 +1244,32 @@ func (s *HabitStore) Stats(ctx context.Context, userID string) (HabitStats, erro
 	// N5: build a period index over the current week+month so TodayDue applies
 	// the same period-satisfied exclusion the heatmap/frontend do. Fetch the
 	// widest bound (month usually) covering today's period.
-	periodLogs, perr := s.currentPeriodLogs(ctx, userID, today, habits)
-	if perr != nil {
-		periodLogs = nil
+	periodLogs, err := s.currentPeriodLogs(ctx, userID, today, habits)
+	if err != nil {
+		return stats, err
 	}
 	periodIdx := newHabitPeriodIndex(habits, periodLogs)
 	stats.TodayCompleted, stats.TodayDue = completionForDate(habits, habitLogByID(logs), today, today, schedule, periodIdx.satisfiedBefore(today))
 
-	_ = s.db.Pool.QueryRow(ctx, `
+	if err := s.db.Pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT datum)
 		FROM habit_logs
-		WHERE user_id = $1 AND is_incident = true AND datum >= CURRENT_DATE - INTERVAL '30 days'
-	`, userID).Scan(&stats.Incidents30d)
+		WHERE user_id=$1 AND is_incident=true
+		  AND datum >= $2::date - INTERVAL '29 days' AND datum <= $2::date
+	`, userID, today).Scan(&stats.Incidents30d); err != nil {
+		return stats, err
+	}
 
 	// PerfectDays is computed from the SAME per-day due/completed logic the heatmap
 	// and frontend day% use (creation-date + frequency/schedule + pause-only-today
 	// + N5 period exclusion), so the three no longer disagree. The old SQL
 	// heuristic (done >= active-habit-count) over-counted low-due days and mis-
 	// counted weekly habits. Bounded to the heatmap's 365-day window.
-	if perfect, perr := s.perfectDaysCount(ctx, userID, 365); perr == nil {
-		stats.PerfectDays = perfect
+	perfect, err := s.perfectDaysCount(ctx, userID, 365)
+	if err != nil {
+		return stats, err
 	}
+	stats.PerfectDays = perfect
 	return stats, nil
 }
 

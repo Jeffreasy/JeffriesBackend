@@ -16,7 +16,8 @@ import (
 )
 
 type ScheduleHandler struct {
-	store *store.ScheduleStore
+	store       *store.ScheduleStore
+	ownerUserID string
 	// todoistCleanup, if set, reconciles Todoist after a full schedule wipe by
 	// pushing an empty shift set — closing/deleting every [EID:…] shift task so
 	// they don't linger as reminders for shifts that no longer exist. Optional
@@ -24,8 +25,8 @@ type ScheduleHandler struct {
 	todoistCleanup func(ctx context.Context, userID string) error
 }
 
-func NewScheduleHandler(s *store.ScheduleStore) *ScheduleHandler {
-	return &ScheduleHandler{store: s}
+func NewScheduleHandler(s *store.ScheduleStore, ownerUserID string) *ScheduleHandler {
+	return &ScheduleHandler{store: s, ownerUserID: ownerUserID}
 }
 
 // SetTodoistCleanup wires the post-wipe Todoist reconcile hook (see field docs).
@@ -76,7 +77,7 @@ func parseOptionalDateRange(r *http.Request) (from, to string, ranged bool, err 
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /schedule [get]
 func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -112,7 +113,7 @@ func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /schedule/date/{date} [get]
 func (h *ScheduleHandler) ListByDate(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	date := chi.URLParam(r, "date")
 	if userID == "" || date == "" {
 		Error(w, http.StatusBadRequest, "userId en date verplicht")
@@ -148,18 +149,18 @@ func (h *ScheduleHandler) Import(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if body.UserID == "" || len(body.Rows) == 0 {
-		Error(w, http.StatusBadRequest, "userId en rows verplicht")
+	if len(body.Rows) == 0 {
+		Error(w, http.StatusBadRequest, "rows verplicht")
 		return
 	}
 
-	count, err := h.store.BulkUpsert(r.Context(), body.UserID, body.Rows)
+	count, err := h.store.BulkUpsert(r.Context(), h.ownerUserID, body.Rows)
 	if err != nil {
 		InternalError(w, r, err)
 		return
 	}
 
-	_ = h.store.UpsertMeta(r.Context(), body.UserID, body.FileName, len(body.Rows))
+	_ = h.store.UpsertMeta(r.Context(), h.ownerUserID, body.FileName, len(body.Rows))
 
 	JSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
@@ -181,7 +182,7 @@ func (h *ScheduleHandler) Import(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /schedule [delete]
 func (h *ScheduleHandler) Clear(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -192,10 +193,10 @@ func (h *ScheduleHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// After the wipe commits, reconcile Todoist so the shift tasks that were
-	// pushed for now-deleted diensten don't orphan as stale reminders. Done
-	// best-effort in the background: the schedule delete already succeeded, so a
-	// Todoist hiccup must not turn a 204 into a 500. Uses a detached context so
-	// it survives the request returning.
+	// pushed for now-deleted diensten don't orphan as stale reminders. Keep this
+	// bounded and joined to the request lifecycle: a detached goroutine could keep
+	// using the DB/API after graceful shutdown had already closed dependencies.
+	// The delete itself remains successful if Todoist is unavailable.
 	//
 	// Google Calendar note: the backend does NOT create Google "shadow" events
 	// for shifts (shifts live only in the `schedule` table; personal_events holds
@@ -203,13 +204,11 @@ func (h *ScheduleHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	// dedup concern (dedup keyed on the live dienstenlijst) — nothing to null out
 	// server-side here.
 	if h.todoistCleanup != nil {
-		go func(uid string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			if err := h.todoistCleanup(ctx, uid); err != nil {
-				slog.Warn("todoist cleanup after schedule wipe failed", "user", uid, "err", err)
-			}
-		}(userID)
+		cleanupCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		if err := h.todoistCleanup(cleanupCtx, userID); err != nil {
+			slog.Warn("todoist cleanup after schedule wipe failed", "user", userID, "err", err)
+		}
+		cancel()
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -226,7 +225,7 @@ func (h *ScheduleHandler) Clear(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /schedule/meta [get]
 func (h *ScheduleHandler) GetMeta(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return

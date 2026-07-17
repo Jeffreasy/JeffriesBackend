@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,10 +21,10 @@ type TransactionStats struct {
 	GemiddeldUit float64 `json:"gemiddeldUit" binding:"required"`
 
 	// Echte bankbalans
-	HuidigSaldo            float64            `json:"huidigSaldo" binding:"required"`
-	HuidigSaldoPerIban     map[string]float64 `json:"huidigSaldoPerIban" binding:"required"`
-	SaldoPeildatumPerIban  map[string]string  `json:"saldoPeildatumPerIban" binding:"required"`
-	LaatsteSaldoPeildatum  *string            `json:"laatsteSaldoPeildatum"`
+	HuidigSaldo           float64            `json:"huidigSaldo" binding:"required"`
+	HuidigSaldoPerIban    map[string]float64 `json:"huidigSaldoPerIban" binding:"required"`
+	SaldoPeildatumPerIban map[string]string  `json:"saldoPeildatumPerIban" binding:"required"`
+	LaatsteSaldoPeildatum *string            `json:"laatsteSaldoPeildatum"`
 
 	// Categorieën
 	UitPerCategorie   []CategorieBreakdown `json:"uitPerCategorie" binding:"required"`
@@ -318,7 +319,7 @@ func (s *TransactionStore) statsLatestSaldoPerIban(ctx context.Context, userID s
 		`SELECT rekening_iban, datum::text, saldo_na_trn FROM (
 		     SELECT rekening_iban, datum, saldo_na_trn,
 		            ROW_NUMBER() OVER (PARTITION BY rekening_iban
-		                               ORDER BY datum DESC, LPAD(volgnr, 20, '0') DESC) AS rn
+		                               ORDER BY datum DESC, LPAD(LTRIM(volgnr, '0'), 50, '0') DESC) AS rn
 		       FROM transactions WHERE user_id = $1
 		 ) t WHERE rn = 1`, userID)
 	if err != nil {
@@ -361,7 +362,7 @@ func (s *TransactionStore) statsAggregationRows(ctx context.Context, userID stri
 		args = append(args, *tot)
 		query += ` AND datum <= $` + pgArgNum(len(args))
 	}
-	query += ` ORDER BY datum DESC, volgnr DESC`
+	query += ` ORDER BY datum DESC, LPAD(LTRIM(volgnr, '0'), 50, '0') DESC`
 
 	rows, err := s.db.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -478,11 +479,16 @@ func topNMerchants(m map[string]*TopMerchant, n int) []TopMerchant {
 // (left-pad to equal width, then lexical), so "9" < "10" instead of the raw
 // string comparison that would put "9" after "10".
 func volgnrLess(a, b string) bool {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	if a == "" {
+		a = "0"
+	}
+	if b == "" {
+		b = "0"
+	}
 	if len(a) != len(b) {
-		if len(a) < len(b) {
-			return true
-		}
-		return false
+		return len(a) < len(b)
 	}
 	return a < b
 }

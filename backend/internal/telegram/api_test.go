@@ -62,9 +62,9 @@ func TestSplitForTelegramMultiByteRunesStayUnderByteBudget(t *testing.T) {
 // is what would have caught that.
 func TestSplitForTelegramChunksSurviveEscapeAndCap(t *testing.T) {
 	inputs := []string{
-		strings.Repeat("€", 20000),                                   // dense multi-byte, no boundaries
+		strings.Repeat("€", 20000),                                     // dense multi-byte, no boundaries
 		strings.Repeat("Saldo: €1.234,56 op rekening NL00INGB\n", 800), // realistic dense finance-report shape
-		strings.Repeat("&", 10000),                                   // heaviest HTML-escape expansion (5 bytes each)
+		strings.Repeat("&", 10000),                                     // heaviest HTML-escape expansion (5 bytes each)
 	}
 	for _, text := range inputs {
 		for i, chunk := range splitForTelegram(text) {

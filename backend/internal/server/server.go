@@ -3,12 +3,11 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,8 +40,12 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	r.Use(middleware.RequestID)
 	r.Use(slogMiddleware)
 	r.Use(middleware.Recoverer)
+	r.Use(securityHeadersMiddleware(cfg.IsDevelopment()))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
-	r.Use(customMiddleware.RateLimiter(cfg.TrustedProxyCount))
+	r.Use(customMiddleware.RateLimiterWithLimits(cfg.TrustedProxyCount, customMiddleware.RateLimits{
+		APIRequestsPerSecond: cfg.APIRateLimitRPS, APIBurst: cfg.APIRateLimitBurst,
+		BridgeRequestsPerSecond: cfg.BridgeRateLimitRPS, BridgeBurst: cfg.BridgeRateLimitBurst,
+	}))
 	r.Use(customMiddleware.MaxBytes(customMiddleware.DefaultMaxRequestBytes))
 
 	// Handlers
@@ -55,20 +58,22 @@ func New(cfg *config.Config, db *store.DB) *Server {
 	deviceH := handler.NewDeviceHandler(deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
 	bridgeH := handler.NewBridgeHandler(deviceStore, commandStore)
 	sceneH := handler.NewSceneHandler(store.NewSceneStore(db), deviceStore, commandStore, wizClient, cfg.HomeappUserID, cfg.LightCommandMode)
-	autoH := handler.NewAutomationHandler(store.NewAutomationStore(db))
-	scheduleH := handler.NewScheduleHandler(store.NewScheduleStore(db))
+	autoH := handler.NewAutomationHandler(store.NewAutomationStore(db), cfg.HomeappUserID)
+	scheduleH := handler.NewScheduleHandler(store.NewScheduleStore(db), cfg.HomeappUserID)
 	transactionH := handler.NewTransactionHandler(store.NewTransactionStore(db), cfg.HomeappUserID)
-	salaryH := handler.NewSalaryHandler(store.NewSalaryStore(db))
-	loonstrookH := handler.NewLoonstrookHandler(store.NewLoonstrookStore(db))
+	salaryH := handler.NewSalaryHandler(store.NewSalaryStore(db), cfg.HomeappUserID)
+	loonstrookH := handler.NewLoonstrookHandler(store.NewLoonstrookStore(db), cfg.HomeappUserID)
 	personalEventH := handler.NewPersonalEventHandler(store.NewPersonalEventStore(db), cfg)
-	emailH := handler.NewEmailHandler(store.NewEmailStore(db))
-	privacyH := handler.NewPrivacyHandler(store.NewPrivacyStore(db))
-	noteH := handler.NewNoteHandler(store.NewNoteStore(db))
-	habitH := handler.NewHabitHandler(store.NewHabitStore(db))
+	emailH := handler.NewEmailHandler(store.NewEmailStore(db), cfg.HomeappUserID)
+	privacyH := handler.NewPrivacyHandler(store.NewPrivacyStore(db), cfg.HomeappUserID)
+	noteH := handler.NewNoteHandler(store.NewNoteStore(db), cfg.HomeappUserID)
+	habitH := handler.NewHabitHandler(store.NewHabitStore(db), cfg.HomeappUserID)
 	pendingH := handler.NewPendingActionHandler(db, cfg)
-	lcH := handler.NewLaventeCareHandler(store.NewLaventeCareStore(db), store.NewPendingStore(db.Pool), cfg.HomeappUserID, cfg)
+	laventeCareStore := store.NewLaventeCareStore(db)
+	lcH := handler.NewLaventeCareHandler(laventeCareStore, store.NewPendingStore(db.Pool), cfg.HomeappUserID, cfg)
+	intakeH := handler.NewPublicIntakeHandler(laventeCareStore, cfg.HomeappUserID)
 	focusH := handler.NewFocusHandler(db, cfg)
-	contactH := handler.NewContactHandler(store.NewContactStore(db))
+	contactH := handler.NewContactHandler(store.NewContactStore(db), cfg.HomeappUserID)
 
 	var telegramClient *telegram.Client
 	if cfg.TelegramBotToken != "" {
@@ -82,50 +87,55 @@ func New(cfg *config.Config, db *store.DB) *Server {
 
 	registerRoutes(r, cfg, healthH, roomH, deviceH, bridgeH, sceneH, autoH,
 		scheduleH, transactionH, salaryH, loonstrookH, personalEventH, emailH,
-		privacyH, noteH, habitH, lcH, settingsH, syncH, pendingH, focusH, contactH)
+		privacyH, noteH, habitH, lcH, intakeH, settingsH, syncH, pendingH, focusH, contactH)
 
 	return &Server{cfg: cfg, router: r, db: db}
 }
 
-// ListenAndServe starts the HTTP server with graceful shutdown.
-func (s *Server) ListenAndServe() {
+// ListenAndServe starts the HTTP server and shuts it down when ctx is cancelled.
+// Database/background-worker ownership stays with main so workers always stop
+// before the pool is closed.
+func (s *Server) ListenAndServe(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:        s.cfg.Addr(),
 		Handler:     s.router,
 		ReadTimeout: 15 * time.Second,
 		// Must exceed the longest handler budget (gmail sync 90s, calendar/todoist
-		// 60s) — at 30s the server killed the connection while the sync kept
-		// running and succeeded server-side, so the user saw a network error,
-		// retried, and did the work twice.
+		// 60s), otherwise clients may retry work that succeeded server-side.
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start server in goroutine
+	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server starting", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
+		serveErr <- srv.ListenAndServe()
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	slog.Info("shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("server shutdown error", "error", err)
+	select {
+	case err := <-serveErr:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
 	}
 
-	s.db.Close()
+	slog.Info("shutting down server...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		_ = srv.Close()
+	}
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("http server: %w", err)
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("http server shutdown: %w", shutdownErr)
+	}
 	slog.Info("server stopped cleanly")
+	return nil
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -145,6 +155,33 @@ func slogMiddleware(next http.Handler) http.Handler {
 			"duration", time.Since(start).String(),
 		)
 	})
+}
+
+// securityHeadersMiddleware applies browser hardening to every response. The
+// development-only Swagger UI needs a narrow exception for its own assets; the
+// production API never serves Swagger and therefore uses a deny-by-default CSP.
+func securityHeadersMiddleware(development bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "no-referrer")
+			h.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+			h.Set("Cache-Control", "no-store")
+			h.Set("X-XSS-Protection", "0")
+			if development && strings.HasPrefix(r.URL.Path, "/api/v1/swagger/") {
+				h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net")
+			} else {
+				h.Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+			}
+			if !development {
+				h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // corsMiddleware adds CORS headers.
@@ -176,21 +213,34 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// bridgeKeyMiddleware accepts the X-API-Key if it matches EITHER the bridge key
-// or the app secret. This keeps the bridge trust-boundary separation available
-// (you can set a distinct BRIDGE_API_KEY on both sides) while never stranding a
-// bridge that is still sending the app secret — so wiring /bridge/* to validate
-// BRIDGE_API_KEY can't take the lights down when the two sides drift.
-func bridgeKeyMiddleware(bridgeKey, appKey string) func(http.Handler) http.Handler {
-	bridge := []byte(bridgeKey)
-	app := []byte(appKey)
+// bridgeKeyMiddleware accepts only the bridge-scoped key. An empty expected key
+// always rejects, so a missing env var can never accidentally open the route.
+func bridgeKeyMiddleware(bridgeKey string) func(http.Handler) http.Handler {
+	expected := []byte(bridgeKey)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := []byte(r.Header.Get("X-API-Key"))
-			// Compare against both (constant-time, no short-circuit); 1 if either matches.
-			if subtle.ConstantTimeCompare(key, bridge)|subtle.ConstantTimeCompare(key, app) != 1 {
+			if len(expected) == 0 || subtle.ConstantTimeCompare(key, expected) != 1 {
 				handler.Error(w, http.StatusForbidden,
-					"Ongeldige of ontbrekende API key. Stuur X-API-Key header.")
+					"Ongeldige of ontbrekende bridge API key. Stuur X-API-Key header.")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// scopedBearerMiddleware protects a narrow server-to-server endpoint without
+// granting the caller the owner API key. Empty secrets always reject.
+func scopedBearerMiddleware(secret string) func(http.Handler) http.Handler {
+	expected := []byte(strings.TrimSpace(secret))
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			parts := strings.Fields(r.Header.Get("Authorization"))
+			valid := len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") &&
+				len(expected) > 0 && subtle.ConstantTimeCompare([]byte(parts[1]), expected) == 1
+			if !valid {
+				handler.Error(w, http.StatusUnauthorized, "Ongeldige of ontbrekende intake-authorisatie.")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -204,8 +254,9 @@ func apiKeyMiddleware(secretKey string) func(http.Handler) http.Handler {
 		expected := []byte(secretKey)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := r.Header.Get("X-API-Key")
-			// Constant-time compare to avoid leaking the secret via timing.
-			if subtle.ConstantTimeCompare([]byte(key), expected) != 1 {
+			// Constant-time compare to avoid leaking the secret via timing. An empty
+			// expected value is always disabled/fail-closed, even in development.
+			if len(expected) == 0 || subtle.ConstantTimeCompare([]byte(key), expected) != 1 {
 				handler.Error(w, http.StatusForbidden,
 					"Ongeldige of ontbrekende API key. Stuur X-API-Key header.")
 				return

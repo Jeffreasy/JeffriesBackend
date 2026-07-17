@@ -173,7 +173,7 @@ func (e *Engine) grok() *ai.GrokClient {
 // New creates a new automation engine.
 func New(cfg *config.Config, db *store.DB) *Engine {
 	wizClient := wiz.NewClient()
-	scheduler := NewCronScheduler()
+	scheduler := NewCronScheduler(db.Pool)
 
 	return &Engine{
 		wiz:        wizClient,
@@ -223,10 +223,14 @@ func (e *Engine) logAICall(ctx context.Context, agentID, kind string, result ai.
 
 // Run starts all engine goroutines and blocks until context is cancelled.
 func (e *Engine) Run(ctx context.Context) {
+	userLabel := strings.TrimSpace(e.cfg.HomeappUserID)
+	if len(userLabel) > 12 {
+		userLabel = userLabel[:12] + "..."
+	}
 	slog.Info("🤖 automation engine starting",
 		"interval", EngineInterval.String(),
 		"backend", "PostgreSQL (native)",
-		"user", e.cfg.HomeappUserID[:12]+"...",
+		"user", userLabel,
 	)
 
 	var wg sync.WaitGroup
@@ -391,7 +395,7 @@ func (e *Engine) tick(ctx context.Context) (err error) {
 		e.firedAt[autoID] = now
 		e.firedMu.Unlock()
 
-		if err := e.autoStore.MarkFired(ctx, auto.ID); err != nil {
+		if err := e.autoStore.MarkFired(ctx, e.cfg.HomeappUserID, auto.ID); err != nil {
 			slog.Warn("markFired failed", "id", autoID, "error", err)
 		}
 	}

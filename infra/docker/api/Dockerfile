@@ -1,7 +1,7 @@
 # ─── Homeapp API — Multi-stage Go build ───────────────────────────────────────
 # Produces a ~15MB Alpine image with a single static binary.
 
-FROM golang:alpine AS builder
+FROM golang:1.25.12-alpine AS builder
 
 WORKDIR /src
 
@@ -16,11 +16,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # ─── Runtime ──────────────────────────────────────────────────────────────────
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -G app app
 
 COPY --from=builder /api /api
-COPY migrations/ /migrations/
 
 EXPOSE 8000
+
+USER app
 
 CMD ["/api"]

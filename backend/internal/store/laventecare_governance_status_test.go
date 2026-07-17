@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 // TestGovernanceStatusVocabularies locks the small, distinct status vocabularies
 // for decisions, change requests and SLA incidents — each narrower than the
 // shared lead/project/workstream vocabulary, confirmed against the actual

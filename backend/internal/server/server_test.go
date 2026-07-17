@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Jeffreasy/JeffriesBackend/internal/config"
 )
 
 func TestAPIKeyMiddleware(t *testing.T) {
@@ -35,6 +37,16 @@ func TestAPIKeyMiddleware(t *testing.T) {
 				t.Fatalf("key=%q got %d, want %d", tc.key, w.Code, tc.wantCode)
 			}
 		})
+	}
+}
+
+func TestAPIKeyMiddlewareEmptyExpectedFailsClosed(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/rooms", nil)
+	w := httptest.NewRecorder()
+	apiKeyMiddleware("")(next).ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("empty expected key returned %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -73,4 +85,48 @@ func TestCORSMiddleware(t *testing.T) {
 			t.Fatalf("ACAO = %q, want empty when allow-list is empty (deny)", got)
 		}
 	})
+}
+
+func TestSecurityHeadersMiddleware(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	t.Run("production hardens and enables HSTS", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		w := httptest.NewRecorder()
+		securityHeadersMiddleware(false)(next).ServeHTTP(w, r)
+		for header, want := range map[string]string{
+			"Cache-Control":             "no-store",
+			"Content-Security-Policy":   "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+			"Permissions-Policy":        "camera=(), geolocation=(), microphone=()",
+			"Referrer-Policy":           "no-referrer",
+			"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+			"X-Content-Type-Options":    "nosniff",
+			"X-Frame-Options":           "DENY",
+		} {
+			if got := w.Header().Get(header); got != want {
+				t.Errorf("%s = %q, want %q", header, got, want)
+			}
+		}
+	})
+
+	t.Run("development omits HSTS and permits Swagger assets", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/swagger/index.html", nil)
+		w := httptest.NewRecorder()
+		securityHeadersMiddleware(true)(next).ServeHTTP(w, r)
+		if got := w.Header().Get("Strict-Transport-Security"); got != "" {
+			t.Fatalf("development HSTS = %q, want empty", got)
+		}
+		if got := w.Header().Get("Content-Security-Policy"); got == "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" {
+			t.Fatalf("Swagger unexpectedly received the deny-all CSP")
+		}
+	})
+}
+
+func TestSwaggerEnabledOnlyInDevelopment(t *testing.T) {
+	if !swaggerEnabled(&config.Config{AppEnv: "development"}) {
+		t.Fatal("development must expose Swagger")
+	}
+	if swaggerEnabled(&config.Config{AppEnv: "production"}) || swaggerEnabled(nil) {
+		t.Fatal("production and nil config must not expose Swagger")
+	}
 }

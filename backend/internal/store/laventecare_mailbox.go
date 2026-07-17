@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	netmail "net/mail"
 	"os"
 	"regexp"
 	"strings"
@@ -14,6 +15,11 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/model"
+)
+
+var (
+	mailPasswordLinePattern = regexp.MustCompile(`(?im)(Wachtwoord\s*:\s*)[^\r\n]*`)
+	mailSecretSpanPattern   = regexp.MustCompile(`(?is)(<span[^>]*font-family:ui-monospace[^>]*>)[^<]*(</span>)`)
 )
 
 // GetMailbox returns the LaventeCare outbound mailbox workspace.
@@ -709,6 +715,22 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 
 	id := uuid.New()
 	now := time.Now().UTC()
+	cc := mergeEmails(template.DefaultCC, input.CC)
+	bcc := mergeEmails(template.DefaultBCC, input.BCC)
+	if !allValidMailAddresses(append(append([]string{toEmail}, cc...), bcc...)) {
+		return nil, errors.New("CC/BCC bevat een ongeldig e-mailadres.")
+	}
+
+	// Never persist a pilot password in the outbox. The full rendered body stays
+	// in this request's memory long enough for the immediate Graph draft/send;
+	// the durable concept/history stores a redacted copy from the first INSERT.
+	storedBodyHTML := redactMailSecretsHTML(bodyHTML)
+	var storedBodyText *string
+	if bodyText != nil {
+		redacted := redactMailSecretsText(*bodyText)
+		storedBodyText = &redacted
+	}
+
 	// conversation_id is stored for UI threading/grouping with the inbound
 	// message being replied to; sending still creates a fresh Graph message
 	// (a true Graph reply is not plumbed through). On actual send, Graph's own
@@ -719,13 +741,21 @@ func (s *LaventeCareStore) CreateMailFromTemplate(ctx context.Context, userID st
 		        subject, body_html, body_text, conversation_id, status, provider, created_at, updated_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'concept','microsoft_graph',$18,$18)`,
 		id, userID, template.ID, companyID, contactID, input.ProjectID, input.WorkstreamID,
-		input.QuoteID, input.InvoiceID, toEmail, toName, mergeEmails(template.DefaultCC, input.CC),
-		mergeEmails(template.DefaultBCC, input.BCC), subject, bodyHTML, bodyText,
+		input.QuoteID, input.InvoiceID, toEmail, toName, cc,
+		bcc, subject, storedBodyHTML, storedBodyText,
 		cleanStringPtr(input.ConversationID), now)
 	if err != nil {
 		return nil, err
 	}
-	return s.GetMailOutboxItem(ctx, userID, id)
+	item, err := s.GetMailOutboxItem(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	// The immediate caller may send/preview the full request-local body, while
+	// every subsequent read of the durable outbox sees only the redacted copy.
+	item.BodyHTML = bodyHTML
+	item.BodyText = bodyText
+	return item, nil
 }
 
 func (s *LaventeCareStore) GetMailOutboxItem(ctx context.Context, userID string, id uuid.UUID) (*model.LCMailOutboxItem, error) {
@@ -760,6 +790,50 @@ func (s *LaventeCareStore) MarkMailOutboxSending(ctx context.Context, userID str
 	return nil
 }
 
+// MarkMailOutboxDraftCreated durably records the immutable Graph ID before the
+// non-idempotent /send call is attempted.
+func (s *LaventeCareStore) MarkMailOutboxDraftCreated(ctx context.Context, userID string, id uuid.UUID, providerMessageID, conversationID string) error {
+	tag, err := s.db.Pool.Exec(ctx, `
+		UPDATE lc_mail_outbox SET status='sending',provider_message_id=$3,
+			conversation_id=COALESCE(conversation_id,NULLIF($4,'')),error_message=NULL,updated_at=now()
+		WHERE user_id=$1 AND id=$2`, userID, id, strings.TrimSpace(providerMessageID), strings.TrimSpace(conversationID))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) MarkMailOutboxUnconfirmed(ctx context.Context, userID string, id uuid.UUID, message string) error {
+	tag, err := s.db.Pool.Exec(ctx, `
+		UPDATE lc_mail_outbox SET status='sent_unconfirmed',error_message=$3,updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND provider_message_id IS NOT NULL`,
+		userID, id, strings.TrimSpace(message))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *LaventeCareStore) ListMailOutboxForReconciliation(ctx context.Context, userID string, limit int) ([]model.LCMailOutboxItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	rows, err := s.db.Pool.Query(ctx, mailOutboxSelectSQL()+`
+		WHERE m.user_id=$1 AND m.status IN ('sending','sent_unconfirmed')
+		  AND m.provider_message_id IS NOT NULL AND m.updated_at < now() - interval '30 seconds'
+		ORDER BY m.updated_at ASC LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, scanMailOutboxItem)
+}
 func (s *LaventeCareStore) MarkMailOutboxSent(ctx context.Context, userID string, id uuid.UUID, providerMessageID, conversationID string) error {
 	now := time.Now().UTC()
 	msgID := cleanStringPtr(&providerMessageID)
@@ -1101,20 +1175,29 @@ func (s *LaventeCareStore) buildMailRenderContext(ctx context.Context, userID st
 	if toEmail == "" {
 		return nil, nil, nil, "", nil, errors.New("Ontvanger-e-mailadres is verplicht.")
 	}
-	if emailContact, err := s.mailContactByEmail(ctx, userID, toEmail, companyID); err != nil {
-		return nil, nil, nil, "", nil, err
-	} else if emailContact != nil {
-		contact = emailContact
-		contactID = &emailContact.ID
-		if companyID == nil && emailContact.CompanyID != nil {
-			companyID = emailContact.CompanyID
-		}
-		if company == nil && companyID != nil {
-			c, err := s.GetCompany(ctx, userID, *companyID)
-			if err != nil {
-				return nil, nil, nil, "", nil, err
+	toEmail = strings.ToLower(toEmail)
+	if !validMailAddress(toEmail) {
+		return nil, nil, nil, "", nil, errors.New("Ontvanger-e-mailadres is ongeldig.")
+	}
+	// An explicit contact/company selection is authoritative. Email lookup is only
+	// a convenience for a hand-addressed mail without contact_id; it must never
+	// silently replace the selected recipient identity or dossier context.
+	if input.ContactID == nil {
+		if emailContact, err := s.mailContactByEmail(ctx, userID, toEmail, companyID); err != nil {
+			return nil, nil, nil, "", nil, err
+		} else if emailContact != nil {
+			contact = emailContact
+			contactID = &emailContact.ID
+			if companyID == nil && emailContact.CompanyID != nil {
+				companyID = emailContact.CompanyID
 			}
-			company = c
+			if company == nil && companyID != nil {
+				c, err := s.GetCompany(ctx, userID, *companyID)
+				if err != nil {
+					return nil, nil, nil, "", nil, err
+				}
+				company = c
+			}
 		}
 	}
 	toName := cleanStringPtr(input.ToName)
@@ -2621,6 +2704,29 @@ func joinMailParts(values []string, separator string) string {
 		parts = append(parts, value)
 	}
 	return strings.Join(parts, separator)
+}
+
+func validMailAddress(value string) bool {
+	value = strings.TrimSpace(value)
+	parsed, err := netmail.ParseAddress(value)
+	return err == nil && strings.EqualFold(strings.TrimSpace(parsed.Address), value)
+}
+
+func allValidMailAddresses(values []string) bool {
+	for _, value := range values {
+		if !validMailAddress(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func redactMailSecretsText(value string) string {
+	return mailPasswordLinePattern.ReplaceAllString(value, "1••• (niet opgeslagen; deel via veilig kanaal)")
+}
+
+func redactMailSecretsHTML(value string) string {
+	return mailSecretSpanPattern.ReplaceAllString(value, "1••• (niet opgeslagen; deel via veilig kanaal)2")
 }
 
 func cleanEmails(values []string) []string {

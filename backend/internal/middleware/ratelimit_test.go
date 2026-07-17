@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -32,5 +33,44 @@ func TestClientIP(t *testing.T) {
 				t.Fatalf("clientIP(hops=%d) = %q, want %q", tc.hops, got, tc.want)
 			}
 		})
+	}
+}
+func TestRateLimiterWithLimitsUsesConfiguredBurst(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mw := RateLimiterWithLimits(0, RateLimits{
+		APIRequestsPerSecond: 0.000001, APIBurst: 1,
+		BridgeRequestsPerSecond: 0.000001, BridgeBurst: 1,
+	})(next)
+	request := func() int {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/rooms", nil)
+		r.RemoteAddr = "198.51.100.77:4567"
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, r)
+		return w.Code
+	}
+	if got := request(); got != http.StatusOK {
+		t.Fatalf("first request status = %d", got)
+	}
+	if got := request(); got != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429 from configured burst", got)
+	}
+}
+
+func TestSensitiveRateLimiterHasIndependentSmallBurst(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := SensitiveRateLimiter(0)(next)
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/laventecare/mailbox/ai-suggest", nil)
+		req.RemoteAddr = "198.51.100.249:443"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if i < 3 && rec.Code != http.StatusNoContent {
+			t.Fatalf("request %d got %d, want 204", i+1, rec.Code)
+		}
+		if i == 3 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("fourth request got %d, want 429", rec.Code)
+		}
 	}
 }

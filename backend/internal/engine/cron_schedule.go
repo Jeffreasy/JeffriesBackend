@@ -15,7 +15,7 @@ import (
 func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		now := time.Now().In(amsterdam)
-		
+
 		// Run only on Sunday evening between 19:00 and 22:00
 		if now.Weekday() != time.Sunday || now.Hour() < 19 || now.Hour() > 22 {
 			return nil
@@ -56,7 +56,7 @@ func cronScheduleWeeklyCheck(db *store.DB, cfg CronConfig) func(ctx context.Cont
 		if daysUntilMonday == 0 {
 			daysUntilMonday = 7 // next Monday
 		}
-		
+
 		// Use an explicit local-midnight construction. time.Truncate(24h) snaps to
 		// a UTC boundary, which in Europe/Amsterdam lands at 01:00/02:00 local and
 		// pushes the week window a day too far.

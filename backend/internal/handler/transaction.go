@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,6 +21,31 @@ type TransactionHandler struct {
 
 func NewTransactionHandler(s *store.TransactionStore, ownerUserID string) *TransactionHandler {
 	return &TransactionHandler{store: s, ownerUserID: ownerUserID}
+}
+
+func validateTransactionDateRange(year, from, to string) string {
+	if year != "" {
+		if len(year) != 4 {
+			return "Ongeldig jaarFilter (verwacht YYYY)."
+		}
+		for _, r := range year {
+			if r < '0' || r > '9' {
+				return "Ongeldig jaarFilter (verwacht YYYY)."
+			}
+		}
+	}
+	for name, value := range map[string]string{"datumVan": from, "datumTot": to} {
+		if value == "" {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", value); err != nil {
+			return "Ongeldige " + name + " (verwacht YYYY-MM-DD)."
+		}
+	}
+	if from != "" && to != "" && from > to {
+		return "datumVan mag niet na datumTot liggen."
+	}
+	return ""
 }
 
 // TransactionListResponse represents the paginated response for transactions
@@ -54,13 +80,14 @@ type TransactionListResponse struct {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /transactions [get]
 func (h *TransactionHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
-	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId verplicht")
+	// This is a single-owner service. Never let a caller select a tenant through
+	// the query string, even though userId remains accepted for old clients.
+	userID := h.ownerUserID
+	q := r.URL.Query()
+	if message := validateTransactionDateRange(q.Get("jaarFilter"), q.Get("datumVan"), q.Get("datumTot")); message != "" {
+		Error(w, http.StatusBadRequest, message)
 		return
 	}
-
-	q := r.URL.Query()
 	f := store.TransactionFilter{
 		ExcludeIntern:    q.Get("excludeIntern") == "true",
 		OnlyStorneringen: q.Get("onlyStorneringen") == "true",
@@ -145,13 +172,18 @@ func (h *TransactionHandler) Import(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if body.UserID == "" || len(body.Transactions) == 0 {
-		Error(w, http.StatusBadRequest, "userId en transactions verplicht")
+	if len(body.Transactions) == 0 {
+		Error(w, http.StatusBadRequest, "transactions verplicht")
 		return
 	}
 
-	inserted, err := h.store.ImportBatch(r.Context(), body.UserID, body.Transactions)
+	// Ignore the legacy body.userId and always import into the configured owner.
+	inserted, err := h.store.ImportBatch(r.Context(), h.ownerUserID, body.Transactions)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidTransactionImport) {
+			Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		InternalError(w, r, err)
 		return
 	}
@@ -182,12 +214,8 @@ func (h *TransactionHandler) UpdateCategorie(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusBadRequest, "Ongeldig transaction ID")
 		return
 	}
-	// Scope the mutation to the owner. The proxy injects the session userId;
-	// fall back to the configured owner id so the update can never be unscoped.
-	userID := r.URL.Query().Get("userId")
-	if userID == "" {
-		userID = h.ownerUserID
-	}
+	// Scope the mutation to the configured owner; query parameters are untrusted.
+	userID := h.ownerUserID
 	var body struct {
 		Categorie string `json:"categorie"`
 	}
@@ -220,9 +248,9 @@ func (h *TransactionHandler) UpdateCategorie(w http.ResponseWriter, r *http.Requ
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /transactions/stats [get]
 func (h *TransactionHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
-	if userID == "" {
-		Error(w, http.StatusBadRequest, "userId verplicht")
+	userID := h.ownerUserID
+	if message := validateTransactionDateRange(r.URL.Query().Get("jaarFilter"), r.URL.Query().Get("datumVan"), r.URL.Query().Get("datumTot")); message != "" {
+		Error(w, http.StatusBadRequest, message)
 		return
 	}
 

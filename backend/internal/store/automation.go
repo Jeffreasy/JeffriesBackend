@@ -58,28 +58,34 @@ func (s *AutomationStore) Create(ctx context.Context, a model.AutomationRow) (mo
 }
 
 // Toggle flips the enabled flag.
-func (s *AutomationStore) Toggle(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.Pool.Exec(ctx, `UPDATE automations SET enabled = NOT enabled WHERE id = $1`, id)
+func (s *AutomationStore) Toggle(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx, `UPDATE automations SET enabled=NOT enabled WHERE id=$1 AND user_id=$2`, id, userID)
+	if err == nil && tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
 // Update modifies an existing automation.
-func (s *AutomationStore) Update(ctx context.Context, id uuid.UUID, a model.AutomationRow) (model.AutomationRow, error) {
+func (s *AutomationStore) Update(ctx context.Context, userID string, id uuid.UUID, a model.AutomationRow) (model.AutomationRow, error) {
 	var out model.AutomationRow
 	err := s.db.Pool.QueryRow(ctx, `
 		UPDATE automations
 		SET name = $2, enabled = $3, group_name = $4, trigger_config = $5, action_config = $6
-		WHERE id = $1
+		WHERE id = $1 AND user_id = $7
 		RETURNING `+autoCols,
-		id, a.Name, a.Enabled, a.GroupName, a.TriggerConfig, a.ActionConfig,
+		id, a.Name, a.Enabled, a.GroupName, a.TriggerConfig, a.ActionConfig, userID,
 	).Scan(&out.ID, &out.UserID, &out.Name, &out.Enabled, &out.CreatedAt,
 		&out.LastFiredAt, &out.GroupName, &out.TriggerConfig, &out.ActionConfig)
 	return out, err
 }
 
 // Delete removes an automation.
-func (s *AutomationStore) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.Pool.Exec(ctx, `DELETE FROM automations WHERE id = $1`, id)
+func (s *AutomationStore) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx, `DELETE FROM automations WHERE id=$1 AND user_id=$2`, id, userID)
+	if err == nil && tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
@@ -90,9 +96,12 @@ func (s *AutomationStore) DeleteByGroup(ctx context.Context, userID, group strin
 }
 
 // MarkFired sets last_fired_at to now.
-func (s *AutomationStore) MarkFired(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.Pool.Exec(ctx,
-		`UPDATE automations SET last_fired_at = $2 WHERE id = $1`,
-		id, time.Now().UTC())
+func (s *AutomationStore) MarkFired(ctx context.Context, userID string, id uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE automations SET last_fired_at=$3 WHERE id=$1 AND user_id=$2`,
+		id, userID, time.Now().UTC())
+	if err == nil && tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
 	return err
 }

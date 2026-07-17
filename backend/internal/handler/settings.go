@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jeffreasy/JeffriesBackend/internal/ai"
@@ -23,6 +24,14 @@ type SettingsHandler struct {
 	db       *store.DB
 	telegram *telegram.Client
 	cfg      *config.Config
+
+	diagnosticsMu       sync.Mutex
+	diagnosticsExpires  time.Time
+	diagnosticsGrokChat aiDiagnosticCheck
+	diagnosticsGrokWeb  aiDiagnosticCheck
+	diagnosticsNow      func() time.Time
+	checkGrokChatFn     func(context.Context) aiDiagnosticCheck
+	checkGrokWebFn      func(context.Context) aiDiagnosticCheck
 }
 
 func NewSettingsHandler(db *store.DB, telegram *telegram.Client, cfg *config.Config) *SettingsHandler {
@@ -129,7 +138,7 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 		},
 		"integrations": map[string]any{
 			"backend":                  true,
-			"legacyHttpSecret":         configuredSecret(h.cfg.HomeappGASSecret),
+			"legacyHttpSecret":         false,
 			"localBridge":              h.cfg.QueueLightCommands() && bridgeOnline,
 			"telegramBot":              h.cfg.TelegramBotEnabled && h.telegram != nil,
 			"telegramOwner":            configuredValue(h.cfg.TelegramChatID),
@@ -150,7 +159,7 @@ func (h *SettingsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 			"bunqApiKeyConfigured":     configuredSecret(h.cfg.BunqAPIKey),
 			"bunqUserConfigured":       configuredValue(h.cfg.BunqUserID),
 			"bunqMonetaryAccount":      configuredValue(h.cfg.BunqMonetaryAccountID),
-			"bunqCallbackConfigured":   configuredSecret(h.cfg.BunqCallbackSecret),
+			"bunqCallbackConfigured":   false,
 			"todoist":                  h.cfg.TodoistEnabled && configuredValue(h.cfg.TodoistAPIToken),
 			"queueLightCommands":       h.cfg.QueueLightCommands(),
 			"startBackgroundEngine":    h.cfg.StartBackgroundEngine,
@@ -200,7 +209,7 @@ var exportTables = []string{
 }
 
 func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId required")
 		return
@@ -348,9 +357,10 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
 	defer cancel()
 
+	grokChat, grokWeb := h.cachedGrokDiagnostics(ctx)
 	checks := map[string]aiDiagnosticCheck{
-		"grokChat":      h.checkGrokChat(ctx),
-		"grokWebSearch": h.checkGrokWebSearch(ctx),
+		"grokChat":      grokChat,
+		"grokWebSearch": grokWeb,
 		"groqVoice":     h.checkGroqVoice(ctx),
 		"googleOAuth":   h.checkGoogleOAuth(ctx),
 		"gmailSync":     h.checkGmailSyncFreshness(ctx),
@@ -417,6 +427,34 @@ func (h *SettingsHandler) AIDiagnostics(w http.ResponseWriter, r *http.Request) 
 	}
 
 	JSON(w, http.StatusOK, resp)
+}
+
+const aiDiagnosticsCooldown = 5 * time.Minute
+
+// cachedGrokDiagnostics prevents every settings refresh from issuing two paid
+// provider calls. The mutex also coalesces concurrent requests into one probe.
+func (h *SettingsHandler) cachedGrokDiagnostics(ctx context.Context) (aiDiagnosticCheck, aiDiagnosticCheck) {
+	h.diagnosticsMu.Lock()
+	defer h.diagnosticsMu.Unlock()
+	now := time.Now()
+	if h.diagnosticsNow != nil {
+		now = h.diagnosticsNow()
+	}
+	if now.Before(h.diagnosticsExpires) {
+		return h.diagnosticsGrokChat, h.diagnosticsGrokWeb
+	}
+	chatCheck := h.checkGrokChat
+	if h.checkGrokChatFn != nil {
+		chatCheck = h.checkGrokChatFn
+	}
+	webCheck := h.checkGrokWebSearch
+	if h.checkGrokWebFn != nil {
+		webCheck = h.checkGrokWebFn
+	}
+	h.diagnosticsGrokChat = chatCheck(ctx)
+	h.diagnosticsGrokWeb = webCheck(ctx)
+	h.diagnosticsExpires = now.Add(aiDiagnosticsCooldown)
+	return h.diagnosticsGrokChat, h.diagnosticsGrokWeb
 }
 
 // BunqIntrospect creates a temporary bunq API context from Render env and
@@ -921,7 +959,7 @@ func bunqEnvStatus(cfg *config.Config) map[string]bool {
 		"apiKey":          configuredSecret(cfg.BunqAPIKey),
 		"userId":          configuredValue(cfg.BunqUserID),
 		"monetaryAccount": configuredValue(cfg.BunqMonetaryAccountID),
-		"callbackSecret":  configuredSecret(cfg.BunqCallbackSecret),
+		"callbackSecret":  false,
 	}
 }
 

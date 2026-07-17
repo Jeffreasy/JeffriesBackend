@@ -34,10 +34,13 @@ func ShouldFire(auto map[string]any, now time.Time, todayShiftTypes map[string]b
 		return false
 	}
 
-	// Check time window (±1 minute)
+	// Check time window (±1 minute). On the Europe/Amsterdam spring-forward
+	// day, 02:xx does not exist; run those jobs once at 03:00 instead of silently
+	// skipping the day.
 	nowTotal := now.Hour()*60 + now.Minute()
 	targetTotal := tH*60 + tM
-	if int(math.Abs(float64(nowTotal-targetTotal))) > 1 {
+	inWindow := int(math.Abs(float64(nowTotal-targetTotal))) <= 1
+	if !inWindow && !(tH == 2 && now.Hour() == 3 && now.Minute() <= 1 && isSpringForwardDay(now)) {
 		return false
 	}
 
@@ -66,8 +69,14 @@ func ShouldFire(auto map[string]any, now time.Time, todayShiftTypes map[string]b
 			}
 
 			if parsed {
-				nowUTC := now.UTC()
-				if nowUTC.Sub(lastFired.UTC()).Seconds() < MinFireInterval {
+				// One automation has one wall-clock trigger, so it may fire at most once
+				// per Amsterdam calendar day. This prevents the repeated 02:xx hour on
+				// the autumn DST transition (and ordinary adjacent-window double fires).
+				lastLocal := lastFired.In(now.Location())
+				if lastLocal.Year() == now.Year() && lastLocal.YearDay() == now.YearDay() {
+					return false
+				}
+				if now.UTC().Sub(lastFired.UTC()).Seconds() < MinFireInterval {
 					return false
 				}
 			}
@@ -120,6 +129,15 @@ func ShouldFire(auto map[string]any, now time.Time, todayShiftTypes map[string]b
 	}
 
 	return true
+}
+
+func isSpringForwardDay(now time.Time) bool {
+	loc := now.Location()
+	before := time.Date(now.Year(), now.Month(), now.Day(), 1, 59, 0, 0, loc)
+	after := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, loc)
+	_, beforeOffset := before.Zone()
+	_, afterOffset := after.Zone()
+	return afterOffset > beforeOffset
 }
 
 // getDays extracts the days array from trigger config.

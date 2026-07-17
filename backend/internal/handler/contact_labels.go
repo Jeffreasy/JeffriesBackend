@@ -17,7 +17,7 @@ import (
 
 // ListLabels returns the user's label catalog with usage counts.
 func (h *ContactHandler) ListLabels(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -37,7 +37,7 @@ type labelBody struct {
 
 // CreateLabel adds a label (idempotent on name).
 func (h *ContactHandler) CreateLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -70,7 +70,7 @@ type labelUpdateBody struct {
 
 // UpdateLabel renames/recolours a label.
 func (h *ContactHandler) UpdateLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -102,7 +102,7 @@ func (h *ContactHandler) UpdateLabel(w http.ResponseWriter, r *http.Request) {
 
 // DeleteLabel removes a label (assignments cascade).
 func (h *ContactHandler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -129,7 +129,7 @@ type mergeLabelBody struct {
 
 // MergeLabels folds {labelID} into the label given by `into`.
 func (h *ContactHandler) MergeLabels(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -167,7 +167,7 @@ type bulkLabelBody struct {
 
 // BulkLabel adds/removes one label across many contacts.
 func (h *ContactHandler) BulkLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -210,7 +210,7 @@ type assignLabelBody struct {
 // AssignLabel tags a contact with an existing label (label_id) or a new/looked-up
 // label by name.
 func (h *ContactHandler) AssignLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -266,7 +266,7 @@ func (h *ContactHandler) AssignLabel(w http.ResponseWriter, r *http.Request) {
 
 // RemoveLabel untags a contact.
 func (h *ContactHandler) RemoveLabel(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return
@@ -298,7 +298,7 @@ type setLabelsBody struct {
 
 // SetLabels replaces a contact's entire label set.
 func (h *ContactHandler) SetLabels(w http.ResponseWriter, r *http.Request) {
-	userID := contactUserID(r)
+	userID := h.contactUserID(r)
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId is verplicht")
 		return

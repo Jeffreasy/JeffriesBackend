@@ -121,4 +121,3 @@ func TestEnsureRuntimeSchema_FreshDB(t *testing.T) {
 		}
 	}
 }
-

@@ -41,13 +41,14 @@ type tokenCache struct {
 }
 
 type SendInput struct {
-	To          []string
-	CC          []string
-	BCC         []string
-	Subject     string
-	HTML        string
-	Text        string
-	Attachments []Attachment
+	To             []string
+	CC             []string
+	BCC            []string
+	Subject        string
+	HTML           string
+	Text           string
+	Attachments    []Attachment
+	IdempotencyKey string
 }
 
 type Attachment struct {
@@ -56,6 +57,50 @@ type Attachment struct {
 	ContentBytes string
 }
 
+type GraphHTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *GraphHTTPError) Error() string {
+	return fmt.Sprintf("microsoft graph request failed (%d): %s", e.StatusCode, e.Message)
+}
+
+// Retryable reports statuses where Graph may have accepted or may still be
+// processing a write. These can never prove a send did not happen.
+func (e *GraphHTTPError) Retryable() bool {
+	return e.StatusCode == http.StatusRequestTimeout ||
+		e.StatusCode == http.StatusConflict ||
+		e.StatusCode == http.StatusLocked ||
+		e.StatusCode == http.StatusTooManyRequests ||
+		e.StatusCode >= 500
+}
+
+func isExplicitNonRetryableGraphError(err error) bool {
+	var graphErr *GraphHTTPError
+	return errors.As(err, &graphErr) && graphErr.StatusCode >= 400 &&
+		graphErr.StatusCode < 500 && !graphErr.Retryable()
+}
+
+type DeliveryUnknownError struct {
+	ProviderMessageID string
+	Err               error
+}
+
+func (e *DeliveryUnknownError) Error() string {
+	return "microsoft graph delivery result is unknown: " + e.Err.Error()
+}
+func (e *DeliveryUnknownError) Unwrap() error { return e.Err }
+func IsDeliveryUnknown(err error) bool {
+	var target *DeliveryUnknownError
+	return errors.As(err, &target)
+}
+
+type MessageState struct {
+	Sent           bool
+	Draft          bool
+	ConversationID string
+}
 type SendResult struct {
 	ProviderMessageID string
 	// ConversationID is the Graph conversation id, stable across folders and shared
@@ -83,7 +128,17 @@ func (s *Sender) SenderEmail() string {
 	return s.cfg.MicrosoftSenderEmail
 }
 
+// Send is a convenience wrapper. Durable callers should persist the immutable
+// draft ID returned by CreateDraft before calling SendDraft.
 func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error) {
+	draft, err := s.CreateDraft(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return s.SendDraft(ctx, draft)
+}
+
+func (s *Sender) CreateDraft(ctx context.Context, input SendInput) (*SendResult, error) {
 	if !s.Configured() {
 		return nil, ErrNotConfigured
 	}
@@ -104,16 +159,17 @@ func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error)
 	if content == "" {
 		return nil, errors.New("mail body is required")
 	}
-
 	message := map[string]any{
-		"subject": subject,
-		"body": map[string]string{
-			"contentType": contentType,
-			"content":     content,
-		},
+		"subject":       subject,
+		"body":          map[string]string{"contentType": contentType, "content": content},
 		"toRecipients":  toRecipients(to),
 		"ccRecipients":  toRecipients(normalizeAddresses(input.CC)),
 		"bccRecipients": toRecipients(normalizeAddresses(input.BCC)),
+	}
+	if key := strings.TrimSpace(input.IdempotencyKey); key != "" {
+		message["internetMessageHeaders"] = []map[string]string{{
+			"name": "X-Jeffries-Outbox-ID", "value": key,
+		}}
 	}
 	attachments, err := graphAttachments(input.Attachments)
 	if err != nil {
@@ -123,35 +179,80 @@ func (s *Sender) Send(ctx context.Context, input SendInput) (*SendResult, error)
 		message["attachments"] = attachments
 	}
 
-	// Create the message as a draft first: unlike the fire-and-forget sendMail action
-	// (which returns no body), POST /messages returns the real Graph id and the
-	// conversationId we need to thread the sent mail to any client reply. The draft is
-	// then dispatched with /send, which moves it to Sent Items automatically.
-	//
-	// Failure modes are safe: if create fails, nothing was sent; if /send fails, the
-	// message stays an unsent draft and the caller marks the outbox row failed (the
-	// recipient never received it), so a retry can't double-send to the client.
 	sender := url.PathEscape(s.cfg.MicrosoftSenderEmail)
 	var created struct {
 		ID             string `json:"id"`
 		ConversationID string `json:"conversationId"`
 	}
-	if err := s.graphRequest(ctx, "POST", fmt.Sprintf("/users/%s/messages", sender), message, &created); err != nil {
+	if err := s.graphRequest(ctx, http.MethodPost, fmt.Sprintf("/users/%s/messages", sender), message, &created); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(created.ID) == "" {
 		return nil, errors.New("microsoft graph did not return a message id for the draft")
 	}
-	if err := s.graphRequest(ctx, "POST", fmt.Sprintf("/users/%s/messages/%s/send", sender, url.PathEscape(created.ID)), nil, nil); err != nil {
-		return nil, err
-	}
-
 	return &SendResult{
 		ProviderMessageID: created.ID,
 		ConversationID:    strings.TrimSpace(created.ConversationID),
 	}, nil
 }
 
+// SendDraft sends one already-persisted immutable Graph draft. Any failed send
+// is reconciled through GET before it is classified; an unknowable result gets
+// a typed error so the outbox/cron can recover without creating another draft.
+func (s *Sender) SendDraft(ctx context.Context, draft *SendResult) (*SendResult, error) {
+	if !s.Configured() {
+		return nil, ErrNotConfigured
+	}
+	if draft == nil || strings.TrimSpace(draft.ProviderMessageID) == "" {
+		return nil, errors.New("microsoft graph draft id is required")
+	}
+	sender := url.PathEscape(s.cfg.MicrosoftSenderEmail)
+	id := strings.TrimSpace(draft.ProviderMessageID)
+	err := s.graphRequestWithAttempts(ctx, http.MethodPost,
+		fmt.Sprintf("/users/%s/messages/%s/send", sender, url.PathEscape(id)), nil, nil, 1)
+	if err == nil {
+		return draft, nil
+	}
+	state, stateErr := s.MessageState(ctx, id)
+	if stateErr == nil && state.Sent {
+		if state.ConversationID != "" {
+			draft.ConversationID = state.ConversationID
+		}
+		return draft, nil
+	}
+	// A draft observed immediately after a network timeout, throttle or 5xx is
+	// not proof of non-delivery: Graph can finish the asynchronous move moments
+	// later. Only an explicit, non-retryable 4xx plus a confirmed extant draft is
+	// safe to classify as failed. Every ambiguous write is reconciled later using
+	// this same immutable draft ID; callers must never create a replacement draft.
+	if stateErr == nil && state.Draft && isExplicitNonRetryableGraphError(err) {
+		return nil, err
+	}
+	if stateErr != nil {
+		err = errors.Join(err, stateErr)
+	}
+	return nil, &DeliveryUnknownError{ProviderMessageID: id, Err: err}
+}
+
+func (s *Sender) MessageState(ctx context.Context, providerMessageID string) (*MessageState, error) {
+	sender := url.PathEscape(s.cfg.MicrosoftSenderEmail)
+	q := url.Values{}
+	q.Set("$select", "id,conversationId,isDraft,sentDateTime")
+	var message struct {
+		ConversationID string  `json:"conversationId"`
+		IsDraft        bool    `json:"isDraft"`
+		SentDateTime   *string `json:"sentDateTime"`
+	}
+	path := fmt.Sprintf("/users/%s/messages/%s?%s", sender, url.PathEscape(providerMessageID), q.Encode())
+	if err := s.graphRequestWithAttempts(ctx, http.MethodGet, path, nil, &message, 1); err != nil {
+		return nil, err
+	}
+	return &MessageState{
+		Sent:           message.SentDateTime != nil || !message.IsDraft,
+		Draft:          message.IsDraft,
+		ConversationID: strings.TrimSpace(message.ConversationID),
+	}, nil
+}
 func graphAttachments(input []Attachment) ([]map[string]any, error) {
 	if len(input) == 0 {
 		return nil, nil
@@ -191,6 +292,10 @@ func graphAttachments(input []Attachment) ([]map[string]any, error) {
 }
 
 func (s *Sender) graphRequest(ctx context.Context, method, path string, body any, out any) error {
+	return s.graphRequestWithAttempts(ctx, method, path, body, out, 3)
+}
+
+func (s *Sender) graphRequestWithAttempts(ctx context.Context, method, path string, body any, out any, maxAttempts int) error {
 	token, err := s.accessToken(ctx)
 	if err != nil {
 		return err
@@ -204,7 +309,9 @@ func (s *Sender) graphRequest(ctx context.Context, method, path string, body any
 		}
 	}
 
-	const maxAttempts = 3
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
 	for attempt := 1; ; attempt++ {
 		var bodyReader io.Reader
 		if encoded != nil {
@@ -216,6 +323,9 @@ func (s *Sender) graphRequest(ctx context.Context, method, path string, body any
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/json")
+		// Immutable IDs survive the Drafts -> Sent Items move and make
+		// post-timeout reconciliation possible.
+		req.Header.Set("Prefer", "IdType=`ImmutableId`")
 		if encoded != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -240,7 +350,7 @@ func (s *Sender) graphRequest(ctx context.Context, method, path string, body any
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			text, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			return fmt.Errorf("microsoft graph request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(text)))
+			return &GraphHTTPError{StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(text))}
 		}
 		if out == nil || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusAccepted {
 			resp.Body.Close()

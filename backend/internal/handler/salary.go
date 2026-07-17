@@ -8,9 +8,14 @@ import (
 	"github.com/Jeffreasy/JeffriesBackend/internal/store"
 )
 
-type SalaryHandler struct{ store *store.SalaryStore }
+type SalaryHandler struct {
+	store       *store.SalaryStore
+	ownerUserID string
+}
 
-func NewSalaryHandler(s *store.SalaryStore) *SalaryHandler { return &SalaryHandler{store: s} }
+func NewSalaryHandler(s *store.SalaryStore, ownerUserID string) *SalaryHandler {
+	return &SalaryHandler{store: s, ownerUserID: ownerUserID}
+}
 
 // List returns all salary periods for a user.
 // @Summary List salary periods
@@ -23,7 +28,7 @@ func NewSalaryHandler(s *store.SalaryStore) *SalaryHandler { return &SalaryHandl
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /salary [get]
 func (h *SalaryHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -49,7 +54,7 @@ func (h *SalaryHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /salary/periode [get]
 func (h *SalaryHandler) GetByPeriode(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.ownerUserID
 	periode := r.URL.Query().Get("periode")
 	if userID == "" || periode == "" {
 		Error(w, http.StatusBadRequest, "userId en periode verplicht")
@@ -85,10 +90,11 @@ func (h *SalaryHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if sal.UserID == "" || sal.Periode == "" {
-		Error(w, http.StatusBadRequest, "user_id en periode verplicht")
+	if sal.Periode == "" {
+		Error(w, http.StatusBadRequest, "periode verplicht")
 		return
 	}
+	sal.UserID = h.ownerUserID
 	if err := h.store.Upsert(r.Context(), sal); err != nil {
 		InternalError(w, r, err)
 		return

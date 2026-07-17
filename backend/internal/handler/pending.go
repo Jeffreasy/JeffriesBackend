@@ -97,15 +97,11 @@ func (h *PendingActionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, result)
 }
 
-func (h *PendingActionHandler) resolveUserID(r *http.Request) string {
-	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
-	if userID == "" {
-		userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
+func (h *PendingActionHandler) resolveUserID(_ *http.Request) string {
+	if h.cfg == nil {
+		return ""
 	}
-	if userID == "" && h.cfg != nil {
-		userID = strings.TrimSpace(h.cfg.HomeappUserID)
-	}
-	return userID
+	return strings.TrimSpace(h.cfg.HomeappUserID)
 }
 
 func (h *PendingActionHandler) googleClient() *google.OAuthClient {

@@ -122,7 +122,7 @@ func (s *ContactStore) ImportWhatsAppConversation(
 		}
 	}
 
-	summaryText := buildWhatsAppSummary(chatName, messages)
+	summaryText := buildWhatsAppSummary(chatName, isGroup, messages)
 	var sum model.WhatsAppSummary
 	err = tx.QueryRow(ctx, `
 		INSERT INTO whatsapp_summaries (user_id, contact_id, conversation_id, summary, message_count)
@@ -142,7 +142,7 @@ func (s *ContactStore) ImportWhatsAppConversation(
 
 // buildWhatsAppSummary produces a NON-verbatim metadata summary (no message
 // bodies) — the only WhatsApp data ever handed to the external AI.
-func buildWhatsAppSummary(chatName string, messages []whatsapp.Message) string {
+func buildWhatsAppSummary(chatName string, isGroup bool, messages []whatsapp.Message) string {
 	counts := map[string]int{}
 	order := []string{}
 	media := 0
@@ -171,7 +171,11 @@ func buildWhatsAppSummary(chatName string, messages []whatsapp.Message) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "WhatsApp-gesprek '%s': %d berichten", chatName, len(messages))
+	conversationType := "1-op-1-gesprek"
+	if isGroup {
+		conversationType = "groepsgesprek"
+	}
+	fmt.Fprintf(&b, "WhatsApp-%s '%s': %d berichten", conversationType, chatName, len(messages))
 	if first != nil && last != nil {
 		fmt.Fprintf(&b, " tussen %s en %s", first.Format("02-01-2006"), last.Format("02-01-2006"))
 	}
@@ -243,7 +247,18 @@ func (s *ContactStore) ListWhatsAppConversations(ctx context.Context, userID str
 }
 
 // ListWhatsAppMessages returns messages of a conversation (in order).
-func (s *ContactStore) ListWhatsAppMessages(ctx context.Context, userID string, conversationID uuid.UUID, limit int) ([]model.WhatsAppMessage, error) {
+func (s *ContactStore) ListWhatsAppMessages(ctx context.Context, userID string, contactID, conversationID uuid.UUID, limit int) ([]model.WhatsAppMessage, error) {
+	var exists bool
+	if err := s.db.Pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM whatsapp_conversations
+			WHERE user_id = $1 AND contact_id = $2 AND id = $3
+		)`, userID, contactID, conversationID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, pgx.ErrNoRows
+	}
 	q := `SELECT id, user_id, conversation_id, sender, sent_at, body, kind, seq
 		FROM whatsapp_messages WHERE user_id = $1 AND conversation_id = $2 ORDER BY seq ASC`
 	args := []any{userID, conversationID}

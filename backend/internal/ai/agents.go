@@ -104,8 +104,8 @@ var Policies = map[string]ToolPolicy{
 	"notitiesVandaag":       {Agents: []string{"notes", "laventecare", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
 	"bulkArchiveerNotities": {Agents: []string{"notes", "brain"}, Mutates: true, RequiresConfirmation: true},
 	// Habits
-	"habitAanmaken":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
-	"habitVoltooien":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"habitAanmaken":  {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
+	"habitVoltooien": {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
 
 	"habitIncident":   {Agents: []string{"habits", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"habitsOverzicht": {Agents: []string{"habits", "dashboard", "brain"}, Mutates: false, RequiresConfirmation: false},
@@ -145,7 +145,6 @@ var Policies = map[string]ToolPolicy{
 	"laventecareBesluitMaken":       {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareChangeRequestMaken": {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
 	"laventecareSlaIncidentMaken":   {Agents: []string{"laventecare", "brain"}, Mutates: true, RequiresConfirmation: true},
-
 }
 
 // IsToolAllowed checks if the given agent may use the tool.

@@ -60,9 +60,9 @@ func TestShouldFireLastFiredAtTypes(t *testing.T) {
 
 	// 5. lastFiredAt in the past (long ago) - should fire
 	autoPast := copyMap(autoBase)
-	autoPast["lastFiredAt"] = now.Add(-2 * time.Minute).UnixMilli()
+	autoPast["lastFiredAt"] = now.Add(-24 * time.Hour).UnixMilli()
 	if !ShouldFire(autoPast, now, nil, nil) {
-		t.Error("expected ShouldFire to return true when lastFiredAt is in the past")
+		t.Error("expected ShouldFire to return true when lastFiredAt was on a previous day")
 	}
 }
 
@@ -72,4 +72,24 @@ func copyMap(src map[string]any) map[string]any {
 		dst[k] = v
 	}
 	return dst
+}
+func TestShouldFireHandlesAmsterdamDSTTransitions(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auto := map[string]any{
+		"_id":     "dst-auto",
+		"trigger": map[string]any{"triggerType": "time", "time": "02:30"},
+	}
+	spring := time.Date(2026, 3, 29, 3, 0, 0, 0, loc)
+	if !ShouldFire(auto, spring, nil, nil) {
+		t.Fatal("spring-forward 02:30 automation was not caught up at 03:00")
+	}
+	first := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC).In(loc)
+	second := time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC).In(loc)
+	auto["lastFiredAt"] = first.Format(time.RFC3339)
+	if ShouldFire(auto, second, nil, nil) {
+		t.Fatal("fall-back repeated 02:30 fired twice")
+	}
 }

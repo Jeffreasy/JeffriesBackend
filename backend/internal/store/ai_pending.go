@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
 // maxCodeGenerationAttempts bounds the collision-retry loop in Create. Codes
 // are 6 hex chars (16.7M possibilities) scoped to a single user's pending
 // rows, so a collision on the first attempt is already rare; this is a
@@ -65,7 +64,6 @@ func NewPendingStore(pool *pgxpool.Pool) *PendingStore {
 func (s *PendingStore) Create(ctx context.Context, userID, agentID, toolName, argsJSON, summary string) (*PendingAction, error) {
 	argsJSON = normalizeJSON(argsJSON)
 	expiresAt := time.Now().Add(10 * time.Minute)
-
 
 	for attempt := 0; attempt < maxCodeGenerationAttempts; attempt++ {
 		code := generateCode()
@@ -142,7 +140,7 @@ func (s *PendingStore) FindPendingByToolArgs(ctx context.Context, userID, toolNa
 	return &pa, nil
 }
 
-// Claim atomically claims a pending action for execution. Returns (nil, nil)
+// Claim atomically moves a pending action to executing before any side effect. Returns (nil, nil)
 // — not an error — if no matching pending row exists (already claimed,
 // rejected, or expired, or a TOCTOU race with a second claim attempt via a
 // different UI entry point). Callers must check for a nil result rather than
@@ -151,7 +149,9 @@ func (s *PendingStore) Claim(ctx context.Context, id, userID string) (*PendingAc
 	var pa PendingAction
 	err := s.pool.QueryRow(ctx,
 		`UPDATE ai_pending_actions
-		 SET status = 'confirmed', updated_at = now()
+		 SET status = 'executing', execution_key = COALESCE(execution_key, id::text),
+		     attempt_count = attempt_count + 1, started_at = now(), completed_at = NULL,
+		     result = NULL, error = NULL, updated_at = now()
 		 WHERE id = $1 AND user_id = $2 AND status = 'pending' AND expires_at > now()
 		 RETURNING id, user_id, agent_id, tool_name, args_json, summary, code, status, expires_at, created_at`,
 		id, userID,
@@ -192,14 +192,40 @@ func (s *PendingStore) Cancel(ctx context.Context, id, userID string) (*PendingA
 // bad/spoofed action id can never mutate another user's row — matches the
 // scoping every other mutating method here already uses.
 func (s *PendingStore) MarkStatus(ctx context.Context, id, userID, status string, result, errMsg *string) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE ai_pending_actions SET status = $3, result = $4, error = $5, updated_at = now() WHERE id = $1 AND user_id = $2`,
+	if status != "succeeded" && status != "failed" && status != "unknown" {
+		return fmt.Errorf("ongeldige terminale pending-actiestatus")
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE ai_pending_actions
+		 SET status = $3, result = $4, error = $5, completed_at = now(), updated_at = now()
+		 WHERE id = $1 AND user_id = $2 AND status = 'executing'`,
 		id, userID, status, result, errMsg,
 	)
 	if err != nil {
 		return wrapStoreError("status bijwerken", err)
 	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("pending actie heeft geen uitvoerende status")
+	}
 	return nil
+}
+
+// MarkStaleExecutingUnknown keeps crash windows visible instead of claiming an
+// external side effect succeeded or failed without evidence.
+func (s *PendingStore) MarkStaleExecutingUnknown(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		olderThan = 15 * time.Minute
+	}
+	message := "Uitvoering onderbroken; controleer het externe resultaat voordat je opnieuw probeert."
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE ai_pending_actions
+		 SET status='unknown', error=$2, completed_at=now(), updated_at=now()
+		 WHERE status='executing' AND started_at < now() - $1::interval`,
+		fmt.Sprintf("%f seconds", olderThan.Seconds()), message)
+	if err != nil {
+		return 0, wrapStoreError("stale uitvoeringen markeren", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // FindByCode finds a pending action by its confirmation code. Returns
@@ -258,4 +284,3 @@ func normalizeJSON(js string) string {
 	}
 	return string(normalized)
 }
-

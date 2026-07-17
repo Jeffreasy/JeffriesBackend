@@ -9,15 +9,15 @@ import (
 
 // BrainPreferences holds user AI behavior preferences.
 type BrainPreferences struct {
-	ID              string   `json:"id"`
-	UserID          string   `json:"user_id"`
-	DetailLevel     string   `json:"detail_level"`
-	Tone            string   `json:"tone"`
-	ProactiveLevel  string   `json:"proactive_level"`
-	FocusAreas      []string `json:"focus_areas"`
-	BriefingTime    *string  `json:"briefing_time,omitempty"`
-	QuietHoursStart *string  `json:"quiet_hours_start,omitempty"`
-	QuietHoursEnd   *string  `json:"quiet_hours_end,omitempty"`
+	ID              string    `json:"id"`
+	UserID          string    `json:"user_id"`
+	DetailLevel     string    `json:"detail_level"`
+	Tone            string    `json:"tone"`
+	ProactiveLevel  string    `json:"proactive_level"`
+	FocusAreas      []string  `json:"focus_areas"`
+	BriefingTime    *string   `json:"briefing_time,omitempty"`
+	QuietHoursStart *string   `json:"quiet_hours_start,omitempty"`
+	QuietHoursEnd   *string   `json:"quiet_hours_end,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

@@ -292,7 +292,7 @@ func TestParseNoteCaptureEnrichesTelegramNote(t *testing.T) {
 
 func TestClassifyUserFacingErrorMapsToDutch(t *testing.T) {
 	cases := map[string]string{
-		"context deadline exceeded":                     "De AI reageerde niet op tijd. Probeer het nog eens.",
+		"context deadline exceeded":                      "De AI reageerde niet op tijd. Probeer het nog eens.",
 		"Grok 429: rate limit exceeded":                  "Te veel aanvragen bij de AI. Wacht even en probeer het opnieuw.",
 		"request error: dial tcp: i/o timeout":           "De AI reageerde niet op tijd. Probeer het nog eens.",
 		"parse error: unexpected end of JSON input":      "Onverwacht antwoord van de AI-server. Probeer het opnieuw.",
@@ -328,7 +328,7 @@ func TestParseOptionalNoteDeadline(t *testing.T) {
 
 func TestClosestKnownCommandSuggestsTypo(t *testing.T) {
 	cases := map[string]string{
-		"/aproove":  "/approve",  // the exact reported typo class — missing/reordered letters, must still suggest
+		"/aproove":  "/approve", // the exact reported typo class — missing/reordered letters, must still suggest
 		"/aprove":   "/approve",
 		"/rejct":    "/reject",
 		"/breifing": "/briefing",

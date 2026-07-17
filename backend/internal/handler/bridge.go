@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -54,6 +55,23 @@ type bridgeDeviceStatusRequest struct {
 	CurrentState map[string]any `json:"current_state,omitempty"`
 }
 
+// ListDevices exposes only the device fields the LAN bridge needs. It is mounted
+// under the bridge-only key, avoiding use of the all-powerful application key.
+func (h *BridgeHandler) ListDevices(w http.ResponseWriter, r *http.Request) {
+	_ = h.commands.TouchBridge(r.Context())
+	devices, err := h.devices.GetAll(r.Context(), 0, 500)
+	if err != nil {
+		InternalError(w, r, fmt.Errorf("bridge device fetch: %w", err))
+		return
+	}
+	result := make([]bridgeDevice, 0, len(devices))
+	for _, device := range devices {
+		if mapped, ok := mapBridgeDevice(device); ok {
+			result = append(result, mapped)
+		}
+	}
+	JSON(w, http.StatusOK, result)
+}
 func (h *BridgeHandler) ClaimCommands(w http.ResponseWriter, r *http.Request) {
 	_ = h.commands.TouchBridge(r.Context()) // bridge liveness heartbeat
 	var input bridgeClaimRequest
@@ -182,26 +200,81 @@ func (h *BridgeHandler) UpdateDeviceStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	var input bridgeDeviceStatusRequest
 	if err := DecodeJSON(r, &input); err != nil {
 		RespondDecodeError(w, err)
 		return
 	}
+	status, currentState, err := validateBridgeDeviceStatus(input)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	if input.Status != "" {
-		if err := h.devices.SetStatus(r.Context(), id, input.Status); err != nil {
+	if status != "" {
+		if err := h.devices.SetStatus(r.Context(), id, status); err != nil {
 			InternalError(w, r, fmt.Errorf("status update: %w", err))
 			return
 		}
 	}
-	if input.CurrentState != nil {
-		if err := h.devices.UpdateState(r.Context(), id, input.CurrentState); err != nil {
+	if currentState != nil {
+		if err := h.devices.UpdateState(r.Context(), id, currentState); err != nil {
 			InternalError(w, r, fmt.Errorf("state update: %w", err))
 			return
 		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validateBridgeDeviceStatus(input bridgeDeviceStatusRequest) (string, map[string]any, error) {
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	if status != "" && status != "online" && status != "offline" {
+		return "", nil, fmt.Errorf("Ongeldige apparaatstatus.")
+	}
+	if input.CurrentState == nil {
+		return status, nil, nil
+	}
+
+	state := make(map[string]any, len(input.CurrentState))
+	for key, raw := range input.CurrentState {
+		switch key {
+		case "on":
+			value, ok := raw.(bool)
+			if !ok {
+				return "", nil, fmt.Errorf("Ongeldige waarde voor current_state.%s.", key)
+			}
+			state[key] = value
+		case "brightness":
+			value, ok := toIntVal(raw)
+			if !ok || value < 0 || value > 100 {
+				return "", nil, fmt.Errorf("Ongeldige waarde voor current_state.%s.", key)
+			}
+			state[key] = value
+		case "color_temp":
+			value, ok := toIntVal(raw)
+			if !ok || (value != 0 && (value < 2200 || value > 6500)) {
+				return "", nil, fmt.Errorf("Ongeldige waarde voor current_state.%s.", key)
+			}
+			state[key] = value
+		case "r", "g", "b":
+			value, ok := toIntVal(raw)
+			if !ok || value < 0 || value > 255 {
+				return "", nil, fmt.Errorf("Ongeldige waarde voor current_state.%s.", key)
+			}
+			state[key] = value
+		case "scene_id":
+			value, ok := toIntVal(raw)
+			if !ok || value < 0 || value > 32 {
+				return "", nil, fmt.Errorf("Ongeldige waarde voor current_state.%s.", key)
+			}
+			state[key] = value
+		default:
+			return "", nil, fmt.Errorf("Onbekend current_state-veld: %s.", key)
+		}
+	}
+	return status, state, nil
 }
 
 func mapBridgeDevice(d model.Device) (bridgeDevice, bool) {

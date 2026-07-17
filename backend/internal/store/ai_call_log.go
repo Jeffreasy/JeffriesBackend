@@ -56,13 +56,13 @@ func (s *AICallLogStore) Insert(ctx context.Context, e AICallLog) error {
 
 // AIUsageWindow is an aggregate over a time window.
 type AIUsageWindow struct {
-	Calls            int     `json:"calls"`
-	Errors           int     `json:"errors"`
-	PromptTokens     int64   `json:"promptTokens"`
-	CompletionTokens int64   `json:"completionTokens"`
-	TotalTokens      int64   `json:"totalTokens"`
-	AvgDurationMs    int     `json:"avgDurationMs"`
-	MaxDurationMs    int     `json:"maxDurationMs"`
+	Calls            int   `json:"calls"`
+	Errors           int   `json:"errors"`
+	PromptTokens     int64 `json:"promptTokens"`
+	CompletionTokens int64 `json:"completionTokens"`
+	TotalTokens      int64 `json:"totalTokens"`
+	AvgDurationMs    int   `json:"avgDurationMs"`
+	MaxDurationMs    int   `json:"maxDurationMs"`
 }
 
 // UsageSince aggregates AI calls created at or after `since`.

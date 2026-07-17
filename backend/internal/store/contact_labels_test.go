@@ -20,7 +20,7 @@ func TestNormalizeLabelColor(t *testing.T) {
 
 func TestNormalizeLabelName(t *testing.T) {
 	cases := map[string]string{
-		"  VIP  klant ": "VIP klant",
+		"  VIP  klant ":  "VIP klant",
 		"hardloopmaatje": "hardloopmaatje",
 		"a\t\tb  c":      "a b c",
 		"   ":            "",

@@ -285,7 +285,7 @@ func (e *HomeBotExecutor) resolveHabit(ctx context.Context, idValue, nameValue s
 		if err != nil {
 			return model.Habit{}, err
 		}
-		habit, err := e.habitStore.Get(ctx, id)
+		habit, err := e.habitStore.Get(ctx, e.userID, id)
 		if err != nil {
 			return model.Habit{}, err
 		}
@@ -417,7 +417,7 @@ func optionalStringPtr(value string) *string {
 	return &value
 }
 
-func createBunqPaymentRequestForInvoice(ctx context.Context, invoice *model.LCInvoice) (*bunq.PaymentRequest, error) {
+func createBunqPaymentRequestForInvoice(ctx context.Context, invoice *model.LCInvoice, idempotencyKey string) (*bunq.PaymentRequest, error) {
 	if invoice == nil {
 		return nil, fmt.Errorf("factuur ontbreekt")
 	}
@@ -444,9 +444,126 @@ func createBunqPaymentRequestForInvoice(ctx context.Context, invoice *model.LCIn
 		Currency:          invoice.Currency,
 		Description:       invoicePaymentDescription(invoice, amountCents),
 		MerchantReference: invoice.InvoiceNumber,
+		IdempotencyKey:    idempotencyKey,
 	})
 }
 
+func (e *HomeBotExecutor) createOrReconcileBunqPaymentRequest(ctx context.Context, invoiceID uuid.UUID) (map[string]any, error) {
+	// Never hold a database transaction or pool connection across bunq network
+	// I/O. BeginPaymentRequestAttempt's conditional PK reservation is the
+	// cross-instance single-writer gate; concurrent callers may list safely, but
+	// exactly one can reserve the remote POST.
+	invoice, err := e.laventeCareStore.GetInvoice(ctx, e.userID, invoiceID)
+	if err != nil {
+		return nil, err
+	}
+	if invoice.Status == "betaald" || invoice.Status == "geannuleerd" {
+		return nil, fmt.Errorf("factuur %s is %s en kan geen betaalverzoek krijgen", invoice.InvoiceNumber, invoice.Status)
+	}
+	if invoice.TotalCents <= 0 || invoice.TotalCents-invoice.PaidCents <= 0 {
+		return nil, fmt.Errorf("factuur %s heeft geen positief openstaand bedrag", invoice.InvoiceNumber)
+	}
+	if invoice.ProviderRequestID != nil || invoice.PaymentURL != nil {
+		return map[string]any{
+			"ok": true, "invoice": invoice,
+			"message": "Factuur heeft al een gekoppeld bunq betaalverzoek.",
+		}, nil
+	}
+
+	monetaryAccountID, err := requiredEnvInt("BUNQ_MONETARY_ACCOUNT_ID")
+	if err != nil {
+		return nil, err
+	}
+	userID, _ := optionalEnvInt("BUNQ_USER_ID")
+	cfg := bunq.Config{
+		Environment:       envOrDefault("BUNQ_ENVIRONMENT", "sandbox"),
+		APIKey:            strings.TrimSpace(os.Getenv("BUNQ_API_KEY")),
+		DeviceDescription: envOrDefault("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
+	}
+	requests, err := bunq.ListPaymentRequests(ctx, cfg, userID, monetaryAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("bunq betaalverzoeken ophalen mislukt: %w", err)
+	}
+	for i := range requests {
+		request := &requests[i]
+		if request.MerchantReference != nil && strings.TrimSpace(*request.MerchantReference) == invoice.InvoiceNumber {
+			updated, err := e.persistBunqPaymentRequest(ctx, invoice, request)
+			if err != nil {
+				return nil, err
+			}
+			executionKey := pendingExecutionKey(ctx, invoiceID)
+			_ = e.laventeCareStore.SavePaymentRequestAttemptSuccess(ctx, e.userID, invoiceID, executionKey, strconv.Itoa(request.ID))
+			return map[string]any{
+				"ok": true, "invoice": updated, "paymentRequest": request,
+				"message": "Bestaand bunq betaalverzoek gevonden en gekoppeld.",
+			}, nil
+		}
+	}
+
+	executionKey := pendingExecutionKey(ctx, invoiceID)
+	attempt, shouldCreate, err := e.laventeCareStore.BeginPaymentRequestAttempt(ctx, e.userID, invoiceID, executionKey)
+	if err != nil {
+		return nil, err
+	}
+	if !shouldCreate {
+		return nil, fmt.Errorf("bunq betaalverzoek heeft status %s; geen tweede verzoek gemaakt. Controleer/reconcileer eerst het bestaande verzoek", attempt.Status)
+	}
+
+	request, err := createBunqPaymentRequestForInvoice(ctx, invoice, "invoice:"+invoiceID.String())
+	if err != nil {
+		if bunq.IsAmbiguousWrite(err) {
+			_ = e.laventeCareStore.MarkPaymentRequestAttemptUnknown(ctx, e.userID, invoiceID, err.Error())
+			return nil, fmt.Errorf("bunq resultaat is onzeker; er wordt uit veiligheid niet automatisch opnieuw verzonden: %w", err)
+		}
+		_ = e.laventeCareStore.MarkPaymentRequestAttemptFailed(ctx, e.userID, invoiceID, err.Error())
+		return nil, err
+	}
+	updated, err := e.persistBunqPaymentRequest(ctx, invoice, request)
+	if err != nil {
+		// Keep `creating`: a retry first lists bunq and links the already-created
+		// request instead of posting a duplicate.
+		return nil, err
+	}
+	if err := e.laventeCareStore.SavePaymentRequestAttemptSuccess(ctx, e.userID, invoiceID, executionKey, strconv.Itoa(request.ID)); err != nil {
+		slog.Warn("bunq attempt success persistence failed", "invoiceID", invoiceID, "error", err)
+	}
+	return map[string]any{
+		"ok": true, "invoice": updated, "paymentRequest": request,
+		"message": "Bunq betaalverzoek aangemaakt en factuur gemarkeerd als verstuurd.",
+	}, nil
+}
+
+func (e *HomeBotExecutor) persistBunqPaymentRequest(ctx context.Context, invoice *model.LCInvoice, request *bunq.PaymentRequest) (*model.LCInvoice, error) {
+	if request == nil || request.ID <= 0 {
+		return nil, fmt.Errorf("bunq betaalverzoek bevat geen geldig provider-id")
+	}
+	providerID := strconv.Itoa(request.ID)
+	paymentProvider := "bunq"
+	merchantReference := invoice.InvoiceNumber
+	paymentURL := ""
+	if request.BunqMeShareURL != nil {
+		paymentURL = strings.TrimSpace(*request.BunqMeShareURL)
+	}
+	if request.MerchantReference != nil && strings.TrimSpace(*request.MerchantReference) != "" {
+		merchantReference = strings.TrimSpace(*request.MerchantReference)
+	}
+	paymentStatus := strings.TrimSpace(request.Status)
+	if err := e.laventeCareStore.UpdateInvoiceStatus(ctx, e.userID, invoice.ID, model.LCInvoiceStatusUpdate{
+		Status: "verstuurd", PaymentProvider: &paymentProvider,
+		ProviderRequestID: &providerID, MerchantReference: &merchantReference,
+		PaymentURL: optionalStringPtr(paymentURL), PaymentStatus: optionalStringPtr(paymentStatus),
+	}); err != nil {
+		return nil, err
+	}
+	return e.laventeCareStore.GetInvoice(ctx, e.userID, invoice.ID)
+}
+
+func pendingExecutionKey(ctx context.Context, invoiceID uuid.UUID) string {
+	if value, ok := ctx.Value(pendingExecutionKeyContextKey{}).(string); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return "invoice:" + invoiceID.String()
+}
 func envOrDefault(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -2383,20 +2500,20 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 
 	case "afspraakBewerken":
 		var args struct {
-			EventID              string `json:"eventId"`
-			EventIDDB            string `json:"event_id"`
-			Titel                string `json:"titel"`
-			Title                string `json:"title"`
-			StartDatum           string `json:"startDatum"`
-			StartDatumDB         string `json:"start_datum"`
-			StartIso             string `json:"startIso"`
-			StartTijd            string `json:"startTijd"`
-			StartTijdDB          string `json:"start_tijd"`
-			EindDatum            string `json:"eindDatum"`
-			EindDatumDB          string `json:"eind_datum"`
-			EindIso              string `json:"eindIso"`
-			EindTijd             string `json:"eindTijd"`
-			EindTijdDB           string `json:"eind_tijd"`
+			EventID              string  `json:"eventId"`
+			EventIDDB            string  `json:"event_id"`
+			Titel                string  `json:"titel"`
+			Title                string  `json:"title"`
+			StartDatum           string  `json:"startDatum"`
+			StartDatumDB         string  `json:"start_datum"`
+			StartIso             string  `json:"startIso"`
+			StartTijd            string  `json:"startTijd"`
+			StartTijdDB          string  `json:"start_tijd"`
+			EindDatum            string  `json:"eindDatum"`
+			EindDatumDB          string  `json:"eind_datum"`
+			EindIso              string  `json:"eindIso"`
+			EindTijd             string  `json:"eindTijd"`
+			EindTijdDB           string  `json:"eind_tijd"`
 			Heledag              *bool   `json:"heledag"`
 			AllDay               *bool   `json:"allDay"`
 			Locatie              *string `json:"locatie"`
@@ -2664,7 +2781,7 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 			return e.jsonResponse(nil, err)
 		}
 		datum := firstNonEmpty(args.Datum, todayAmsterdamISO())
-		existing, err := e.habitStore.GetLog(ctx, habit.ID, datum)
+		existing, err := e.habitStore.GetLog(ctx, e.userID, habit.ID, datum)
 		if err != nil && err != pgx.ErrNoRows {
 			return e.jsonResponse(nil, err)
 		}
@@ -3003,89 +3120,8 @@ func (e *HomeBotExecutor) Execute(ctx context.Context, toolName string, argsJSON
 		if err != nil {
 			return e.invalidUUIDResponse("invoice_id", err)
 		}
-		invoice, err := e.laventeCareStore.GetInvoice(ctx, e.userID, invoiceID)
-		if err != nil {
-			return e.jsonResponse(nil, err)
-		}
-		if invoice.Status == "betaald" || invoice.Status == "geannuleerd" {
-			return e.jsonResponse(nil, fmt.Errorf("factuur %s is %s en kan geen betaalverzoek krijgen", invoice.InvoiceNumber, invoice.Status))
-		}
-		if invoice.TotalCents <= 0 {
-			return e.jsonResponse(nil, fmt.Errorf("factuur %s heeft geen positief bedrag", invoice.InvoiceNumber))
-		}
-		if invoice.ProviderRequestID != nil || invoice.PaymentURL != nil {
-			return e.jsonResponse(map[string]any{
-				"ok":      true,
-				"invoice": invoice,
-				"message": "Factuur heeft al een gekoppeld bunq betaalverzoek.",
-			}, nil)
-		}
-
-		monetaryAccountID, err := requiredEnvInt("BUNQ_MONETARY_ACCOUNT_ID")
-		if err != nil {
-			return e.jsonResponse(nil, err)
-		}
-		userID, _ := optionalEnvInt("BUNQ_USER_ID")
-		cfg := bunq.Config{
-			Environment:       envOrDefault("BUNQ_ENVIRONMENT", "sandbox"),
-			APIKey:            strings.TrimSpace(os.Getenv("BUNQ_API_KEY")),
-			DeviceDescription: envOrDefault("BUNQ_DEVICE_DESCRIPTION", "JeffriesHomeapp Render"),
-		}
-		requests, err := bunq.ListPaymentRequests(ctx, cfg, userID, monetaryAccountID)
-		if err != nil {
-			return e.jsonResponse(nil, fmt.Errorf("bunq betaalverzoeken ophalen mislukt: %w", err))
-		}
-		var existingReq *bunq.PaymentRequest
-		for _, req := range requests {
-			if req.MerchantReference != nil && strings.TrimSpace(*req.MerchantReference) == invoice.InvoiceNumber {
-				existingReq = &req
-				break
-			}
-		}
-
-		var request *bunq.PaymentRequest
-		var message string
-		if existingReq != nil {
-			request = existingReq
-			message = "Bestaand bunq betaalverzoek gevonden en gekoppeld."
-		} else {
-			request, err = createBunqPaymentRequestForInvoice(ctx, invoice)
-			if err != nil {
-				return e.jsonResponse(nil, err)
-			}
-			message = "Bunq betaalverzoek aangemaakt en factuur gemarkeerd als verstuurd."
-		}
-
-		providerID := strconv.Itoa(request.ID)
-		paymentProvider := "bunq"
-		merchantReference := invoice.InvoiceNumber
-		paymentURL := ""
-		if request.BunqMeShareURL != nil {
-			paymentURL = strings.TrimSpace(*request.BunqMeShareURL)
-		}
-		if request.MerchantReference != nil && strings.TrimSpace(*request.MerchantReference) != "" {
-			merchantReference = strings.TrimSpace(*request.MerchantReference)
-		}
-		paymentStatus := strings.TrimSpace(request.Status)
-		if err := e.laventeCareStore.UpdateInvoiceStatus(ctx, e.userID, invoice.ID, model.LCInvoiceStatusUpdate{
-			Status:            "verstuurd",
-			PaymentProvider:   &paymentProvider,
-			ProviderRequestID: &providerID,
-			MerchantReference: &merchantReference,
-			PaymentURL:        optionalStringPtr(paymentURL),
-			PaymentStatus:     optionalStringPtr(paymentStatus),
-		}); err != nil {
-			return e.jsonResponse(nil, err)
-		}
-		updated, _ := e.laventeCareStore.GetInvoice(ctx, e.userID, invoice.ID)
-		return e.jsonResponse(map[string]any{
-			"ok":             true,
-			"invoice":        updated,
-			"paymentRequest": request,
-			"message":        message,
-		}, nil)
-
-
+		result, err := e.createOrReconcileBunqPaymentRequest(ctx, invoiceID)
+		return e.jsonResponse(result, err)
 	case "laventecareKlantMaken":
 		var args model.LCCompanyCreate
 		if err := e.parseArgs(argsJSON, &args); err != nil {

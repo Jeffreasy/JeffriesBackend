@@ -113,6 +113,15 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+func addUsage(total *Usage, next Usage) {
+	if total == nil {
+		return
+	}
+	total.PromptTokens += next.PromptTokens
+	total.CompletionTokens += next.CompletionTokens
+	total.TotalTokens += next.TotalTokens
+}
+
 type ResponsesAPIResponse struct {
 	OutputText string `json:"output_text"`
 	Output     []struct {
@@ -164,7 +173,7 @@ func (c *GrokClient) Chat(
 	}
 	messages = append(messages, Message{Role: "user", Content: strPtr(userMessage)})
 
-	var totalUsage *Usage
+	totalUsage := &Usage{}
 	var toolsUsed []string
 
 	for round := 0; round < MaxToolRounds; round++ {
@@ -227,7 +236,7 @@ func (c *GrokClient) Chat(
 		if err := json.Unmarshal(body, &grokResp); err != nil {
 			return ChatResult{Error: fmt.Sprintf("parse error: %v", err)}
 		}
-		totalUsage = &grokResp.Usage
+		addUsage(totalUsage, grokResp.Usage)
 
 		if len(grokResp.Choices) == 0 {
 			return ChatResult{Error: "Geen response van Grok"}
@@ -314,7 +323,7 @@ func (c *GrokClient) Chat(
 		slog.Warn("[Grok] MAX_ROUNDS synthesis failed", "error", synthErr)
 		content = "Ik heb te veel data moeten ophalen om dit in één keer te verwerken. Probeer een specifiekere vraag."
 	} else if synthUsage != nil {
-		totalUsage = synthUsage
+		addUsage(totalUsage, *synthUsage)
 	}
 
 	return ChatResult{

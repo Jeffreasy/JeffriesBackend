@@ -3,7 +3,7 @@
 
 # Pinned to the Go minor that matches go.mod (go 1.25.x) so the toolchain can't
 # silently jump a major version on a floating `golang:alpine` rebuild.
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.12-alpine AS builder
 
 WORKDIR /src
 
@@ -18,11 +18,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # ─── Runtime ──────────────────────────────────────────────────────────────────
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -G app app
 
 COPY --from=builder /api /api
-COPY backend/migrations/ /migrations/
 
 EXPOSE 8000
+
+USER app
 
 CMD ["/api"]

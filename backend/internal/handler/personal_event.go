@@ -37,7 +37,7 @@ func NewPersonalEventHandler(s *store.PersonalEventStore, cfg *config.Config) *P
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /personal-events [get]
 func (h *PersonalEventHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -74,7 +74,7 @@ func (h *PersonalEventHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /personal-events/date/{date} [get]
 func (h *PersonalEventHandler) ListByDate(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	date := chi.URLParam(r, "date")
 	if userID == "" || date == "" {
 		Error(w, http.StatusBadRequest, "userId en date verplicht")
@@ -99,7 +99,7 @@ func (h *PersonalEventHandler) ListByDate(w http.ResponseWriter, r *http.Request
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /personal-events/upcoming [get]
 func (h *PersonalEventHandler) ListUpcoming(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	if userID == "" {
 		Error(w, http.StatusBadRequest, "userId verplicht")
 		return
@@ -130,10 +130,11 @@ func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		RespondDecodeError(w, err)
 		return
 	}
-	if e.UserID == "" || e.EventID == "" {
-		Error(w, http.StatusBadRequest, "user_id en event_id verplicht")
+	if e.EventID == "" {
+		Error(w, http.StatusBadRequest, "event_id verplicht")
 		return
 	}
+	e.UserID = h.cfg.HomeappUserID
 	if e.StartDatum != "" && e.EindDatum != "" && e.EindDatum < e.StartDatum {
 		Error(w, http.StatusBadRequest, "einddatum ligt vóór startdatum")
 		return
@@ -171,7 +172,7 @@ func (h *PersonalEventHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /personal-events/{eventID}/status [patch]
 func (h *PersonalEventHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
+	userID := h.cfg.HomeappUserID
 	eventID := chi.URLParam(r, "eventID")
 	var body struct {
 		Status string `json:"status"`

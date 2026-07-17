@@ -40,6 +40,10 @@ Frontend/Telegram -> Render API -> device_commands -> lokale bridge via Render A
 Aanbevolen Render API/background-engine env:
 
 ```bash
+APP_ENV=production
+APP_SECRET_KEY=<unieke random secret van minimaal 32 tekens>
+LAVENTECARE_SECRET_KEY=<andere unieke random secret van minimaal 32 tekens>
+BRIDGE_API_KEY=<derde unieke random secret van minimaal 32 tekens>
 START_BACKGROUND_ENGINE=true
 LIGHT_COMMAND_MODE=queue
 ENGINE_CRONS_ENABLED=true
@@ -48,7 +52,7 @@ ENGINE_COMMAND_POLLER_ENABLED=false
 TELEGRAM_BOT_ENABLED=true
 TELEGRAM_BOT_TOKEN=<Telegram bot token>
 TELEGRAM_CHAT_ID=<jouw Telegram chat id>
-TELEGRAM_WEBAPP_URL=https://jeffrieshomeapp.com
+TELEGRAM_WEBAPP_URL=https://jeffries-homeapp.vercel.app
 DATABASE_URL=<Render internal Postgres URL>
 ```
 
@@ -56,7 +60,7 @@ Aanbevolen lokale bridge env op je pc:
 
 ```bash
 BRIDGE_API_URL=https://jeffriesbackend.onrender.com/api/v1
-BRIDGE_API_KEY=<moet exact matchen met BRIDGE_API_KEY op Render; leeg laten = valt terug op APP_SECRET_KEY>
+BRIDGE_API_KEY=<moet exact matchen met BRIDGE_API_KEY op Render; nooit APP_SECRET_KEY>
 BRIDGE_STATUS_POLL_ENABLED=true
 ENGINE_CRONS_ENABLED=false
 ENGINE_AUTOMATIONS_ENABLED=false
@@ -69,6 +73,17 @@ Start lokaal alleen de bridge met:
 cd backend
 go run ./cmd/engine
 ```
+
+## Productiegeheimen
+
+De backend start buiten `development` niet met zwakke of ontbrekende kerngeheimen. Genereer elke waarde onafhankelijk en gebruik minimaal 32 willekeurige tekens:
+
+- `APP_SECRET_KEY` beveiligt de eigenaar-API.
+- `LAVENTECARE_SECRET_KEY` is verplicht in productie en versleutelt de access-vault; deze waarde mag nooit gelijk zijn aan een ander geheim.
+- `BRIDGE_API_KEY` is verplicht zodra queue/bridge-modus actief is. De cloud-API en lokale bridge delen deze ene bridgewaarde, maar deze mag nooit gelijk zijn aan `APP_SECRET_KEY`.
+- `LAVENTECARE_INTAKE_SECRET` is optioneel. Zonder waarde blijft de publieke intake-route gesloten; met een waarde gebruikt de route uitsluitend dit Bearer-geheim.
+
+Een ontbrekende `DATABASE_URL` is altijd een configuratiefout. Bewaar alle echte waarden alleen in `.env`/Render secrets en commit ze nooit.
 
 ## Lokaal ontwikkelen (zonder Docker)
 
@@ -101,11 +116,10 @@ BUNQ_ENVIRONMENT=sandbox
 BUNQ_API_KEY=<bunq api key>
 BUNQ_USER_ID=<bunq user id>
 BUNQ_MONETARY_ACCOUNT_ID=<bunq monetary account id>
-BUNQ_CALLBACK_SECRET=<lange random secret>
 BUNQ_DEVICE_DESCRIPTION="JeffriesHomeapp Render"
 ```
 
-De backend houdt facturen alvast klaar met `payment_provider=bunq`, `merchant_reference` en velden voor provider-request-id/betaallink. Live RequestInquiry-aanmaak blijft bewust achter de bevestigingslaag, zodat Telegram/UI nooit ongemerkt bankacties uitvoeren.
+De backend houdt facturen klaar met `payment_provider=bunq`, `merchant_reference` en provider-id/betaallink. Live RequestInquiry-aanmaak blijft achter de bevestigingslaag. Een stabiele bunq client-request-id, een lokale één-poging-reservering per factuur en voorafgaande provider-reconciliatie voorkomen een tweede POST bij gelijktijdige of onzekere uitvoering.
 
 ## Integratie-status
 
@@ -116,8 +130,10 @@ De frontend kan de echte runtime-status uitlezen via:
 | `GET /api/v1/settings/overview` | Integratievlaggen, queue-status, modules en tellingen |
 | `GET /api/v1/settings/telegram/status` | Telegram bot/token/owner/webhook/long-polling status |
 | `GET /api/v1/sync/status` | Rooster, persoonlijke agenda en Gmail sync metadata |
-| `POST /api/v1/sync/calendar?userId=...` | Handmatige Google Calendar sync + pending afspraak push |
-| `POST /api/v1/sync/gmail?userId=...` | Handmatige Gmail sync met echte Gmail API upsert |
+| `POST /api/v1/sync/calendar` | Handmatige Google Calendar sync + pending afspraak push voor de geconfigureerde eigenaar |
+| `POST /api/v1/sync/gmail` | Handmatige Gmail sync voor de geconfigureerde eigenaar |
+
+`GET /api/v1/contacts` retourneert per pagina direct een JSON-array. `limit` is standaard 200 en maximaal 200; `offset` is standaard 0 en maximaal 10000. De sortering is stabiel op naam (met id als tie-breaker). `q` zoekt hoofdletterongevoelig in naam, e-mail, notities en toegewezen labelnamen. De frontend moet pagina's ophalen totdat een pagina minder dan `limit` resultaten bevat.
 
 ## Project structuur
 
@@ -147,7 +163,7 @@ JeffriesBackend/
 
 ## API overzicht
 
-Voor een vollediger contract: zie `backend/docs/api-overview.md`, `backend/docs/swagger.json` en live `/api/v1/swagger/index.html`.
+Voor een vollediger contract: zie `backend/docs/api-overview.md` en `backend/docs/swagger.json`. De live Swagger-UI op `/api/v1/swagger/index.html` is uitsluitend beschikbaar in `development`; productie retourneert 404.
 
 | Methode | Route | Beschrijving |
 |---|---|---|

@@ -266,6 +266,16 @@ func cmdToInt(v any) int {
 	}
 }
 
+func clampCommandInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
 func commandToWizParams(command map[string]any) map[string]any {
 	wizParams := map[string]any{}
 
@@ -278,29 +288,33 @@ func commandToWizParams(command map[string]any) map[string]any {
 	}
 
 	if b, ok := command["dimming"]; ok {
-		wizParams["dimming"] = cmdToInt(b)
+		wizParams["dimming"] = clampCommandInt(cmdToInt(b), 10, 100)
 	} else if b, ok := command["brightness"]; ok {
-		wizParams["dimming"] = cmdToInt(b)
+		wizParams["dimming"] = clampCommandInt(cmdToInt(b), 10, 100)
 	}
 
 	if temp, ok := command["temp"]; ok {
-		wizParams["temp"] = cmdToInt(temp)
+		wizParams["temp"] = clampCommandInt(cmdToInt(temp), 2200, 6500)
 	} else if kelvin, ok := command["color_temp"]; ok {
-		wizParams["temp"] = cmdToInt(kelvin)
+		wizParams["temp"] = clampCommandInt(cmdToInt(kelvin), 2200, 6500)
 	} else if mireds, ok := command["color_temp_mireds"]; ok {
-		wizParams["temp"] = wiz.MiredsToKelvin(cmdToInt(mireds))
+		wizParams["temp"] = clampCommandInt(wiz.MiredsToKelvin(cmdToInt(mireds)), 2200, 6500)
 	}
 
 	if r, ok := command["r"]; ok {
-		wizParams["r"] = cmdToInt(r)
-		wizParams["g"] = cmdToInt(command["g"])
-		wizParams["b"] = cmdToInt(command["b"])
+		wizParams["r"] = clampCommandInt(cmdToInt(r), 0, 255)
+		wizParams["g"] = clampCommandInt(cmdToInt(command["g"]), 0, 255)
+		wizParams["b"] = clampCommandInt(cmdToInt(command["b"]), 0, 255)
 	}
 
 	if sid, ok := command["sceneId"]; ok {
-		wizParams["sceneId"] = cmdToInt(sid)
+		if sceneID := cmdToInt(sid); sceneID > 0 {
+			wizParams["sceneId"] = clampCommandInt(sceneID, 1, 32)
+		}
 	} else if sid, ok := command["scene_id"]; ok {
-		wizParams["sceneId"] = cmdToInt(sid)
+		if sceneID := cmdToInt(sid); sceneID > 0 {
+			wizParams["sceneId"] = clampCommandInt(sceneID, 1, 32)
+		}
 	}
 
 	return wizParams

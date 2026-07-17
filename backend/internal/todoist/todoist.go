@@ -26,7 +26,6 @@ type Client struct {
 	httpClient *http.Client
 }
 
-
 // NewClient creates a new Todoist API client.
 func NewClient(token, projectID string) *Client {
 	return &Client{
@@ -35,7 +34,6 @@ func NewClient(token, projectID string) *Client {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
-
 
 // Task represents a Todoist task.
 type Task struct {
@@ -91,15 +89,14 @@ type syncResponse struct {
 var eidRegex = regexp.MustCompile(`\[EID:(.*?)\]`)
 
 // SyncDiensten syncs upcoming shifts to Todoist.
-func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResult, error) {
+func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst, syncDate time.Time) (*SyncResult, error) {
 	if c.token == "" {
 		return nil, fmt.Errorf("TODOIST_API_TOKEN not configured")
 	}
-
-	today := strings.Split(fmt.Sprintf("%v", ctx.Value("today")), " ")[0]
-	if today == "<nil>" || today == "" {
-		today = "2026-01-01" // fallback
+	if syncDate.IsZero() {
+		return nil, fmt.Errorf("todoist sync date is required")
 	}
+	today := AmsterdamDate(syncDate).Format("2006-01-02")
 
 	// Filter upcoming
 	var aankomend []Dienst
@@ -162,7 +159,12 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 		if dueStr == "" {
 			continue
 		}
-		if dueStr[:10] < today {
+		dueDate := todoistDueDate(dueStr)
+		if dueDate == "" {
+			slog.Warn("todoist task has invalid due date; leaving it untouched", "taskID", t.ID)
+			continue
+		}
+		if dueDate < today {
 			commands = append(commands, itemClose(t.ID))
 			result.Closed++
 		} else {
@@ -184,6 +186,34 @@ func (c *Client) SyncDiensten(ctx context.Context, diensten []Dienst) (*SyncResu
 	result.Failed = failed
 	slog.Info("✅ todoist sync done", "created", result.Created, "updated", result.Updated, "closed", result.Closed, "deleted", result.Deleted, "failed", failed)
 	return result, nil
+}
+
+func amsterdamLocation() *time.Location {
+	location, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		return time.FixedZone("Europe/Amsterdam", 1*60*60)
+	}
+	return location
+}
+
+// AmsterdamDate converts an instant to its calendar date in the business
+// timezone. Keeping this as time.Time makes the sync boundary explicit and
+// avoids untyped context values or server-local date formatting.
+func AmsterdamDate(now time.Time) time.Time {
+	local := now.In(amsterdamLocation())
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+}
+
+func todoistDueDate(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < len("2006-01-02") {
+		return ""
+	}
+	candidate := value[:10]
+	if parsed, err := time.Parse("2006-01-02", candidate); err == nil {
+		return parsed.Format("2006-01-02")
+	}
+	return ""
 }
 
 // taskArgs builds the Sync API args for a shift task (content/description/due/

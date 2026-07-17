@@ -59,6 +59,9 @@ func (s *ChatStore) GetHistory(ctx context.Context, chatID int64, limit int) ([]
 		msgs = append(msgs, m)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	// Reverse to chronological order
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
