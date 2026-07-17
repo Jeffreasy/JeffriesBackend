@@ -39,20 +39,20 @@ pwsh -NoProfile -File .\scripts\production-readiness.ps1 -Mode OpenDashboards
 - Voor de laatste PR-commit `a02b783` zijn `frontend`, `secret-scan`, Vercel en Vercel Preview Comments groen. CodeRabbit is alleen overgeslagen omdat de PR draft is. De laatste Vercel-preview heeft status **READY**.
 - De geauthenticeerde browser-smoke tegen de branch-preview is geslaagd voor Dashboard, Contacten, LaventeCare Portal en Instellingen, zonder consolefouten.
 - De Homeapp-productie-URL reageert nog op de oude productiecommit `fd7ffa5`; PR #21 is niet gemerged of naar productie gepromoveerd. De auditwijzigingen en de nieuwe Production-envvariabele zijn daar dus nog niet door een nieuwe deployment geactiveerd.
-- De brede lokale auditverificatie van de vier projecten is uitgevoerd. Na de laatste Auth tenant-keywijziging zijn de gerichte crypto/config/runtime-tests en een volledige compile-pass groen; de volledige database-integratiesuite moet na de current-tree sanitization opnieuw op een verse testdatabase draaien. De wizard is de korte operationele herhaalcheck, niet een vervanging van CI.
+- De brede lokale auditverificatie van de vier projecten is uitgevoerd. De Auth current tree is inmiddels gesaneerd en current-tree/staged secret-scans plus de volledige compile-pass zijn groen. Een verse database-migratierun en de volledige database-integratiesuite blijven vóór productie verplicht. De wizard is de korte operationele herhaalcheck, niet een vervanging van CI.
 
 ### Release-status per onderdeel
 
 | Onderdeel | Huidige status | Productie-impact tot nu toe |
 | --- | --- | --- |
 | Homeapp | Draft-PR #21 op `a02b783`; CI groen; preview READY; geauthenticeerde smoke groen | Geen productiedeploy; productie staat nog op `fd7ffa5` |
-| Backend | Lokale auditwijzigingen; productie-release nog niet uitgevoerd | Geen release vanuit deze afrondingsrun |
-| Publieke frontend | Lokale auditwijzigingen; productie-release nog niet uitgevoerd | Geen release vanuit deze afrondingsrun |
-| Auth | Tenant-keybron lokaal gerepareerd; gerichte tests en compile-pass groen; current-tree sanitization en volledige DB-hercheck nog af te ronden | Geen Auth-deploy, productiemigratie of keyrotatie uitgevoerd |
+| Backend | [Draft-PR #29](https://github.com/Jeffreasy/JeffriesBackend/pull/29); lokale tests, CI en secret-scan groen | Geen release vanuit deze afrondingsrun |
+| Publieke frontend | [Draft-PR #1](https://github.com/Jeffreasy/LaventeCareFrontend/pull/1); lokale checks en 14/14 Playwright groen; Vercel-preview READY; CI-lockfilefix opnieuw in uitvoering | Geen bewuste productpromotie vanuit deze afrondingsrun |
+| Auth | [Draft-PR #2](https://github.com/Jeffreasy/LaventeCareAuthSystems/pull/2); current tree gesaneerd, secret-scans en compile-pass groen; verse DB-hercheck nog vereist | Geen Auth-deploy, productiemigratie of keyrotatie uitgevoerd |
 
 ## Aanbevolen resterende volgorde
 
-1. Rond eerst de current-tree sanitization van Auth af. Commit of deploy geen database-dump, echte ciphertext, productie-verifiers of vooringevulde wachtwoordhashes. Laat daarna staged/current-tree secret-scans slagen.
+1. Laat Auth-PR #2 en de publieke frontend-PR #1 volledig groen worden. De current-tree sanitization en secret-scans zijn afgerond; voer voor Auth nog een verse database-migratierun en volledige database-integratiesuite uit.
 2. Controleer PR #21 en geef afzonderlijk toestemming voor productie. Controleer vóór merge/promotie dat de PR-head `a02b783` is (of een later opnieuw gecontroleerd commit), monitor daarna de resulterende Vercel-productiedeployment en herhaal de owner/login-smoke.
 3. Roteer gecompromitteerde providercredentials één provider per keer volgens de tabel hieronder: nieuwe credential maken, alle consumenten bijwerken, redeploy/herstarten, smoke-testen en pas daarna de oude credential intrekken.
 4. Rond de Auth-PR af, inclusief alle drie migratieparen. Maak daarna een verse databaseback-up en test exact die commit plus migraties op staging.
@@ -93,7 +93,7 @@ Deze waarden zijn geen providercredentials, maar moeten bij een rotatie atomair 
 
 ## Secret-artifacts en Git-geschiedenis: juiste volgorde
 
-De Auth-current-tree sanitization is op de statusdatum nog niet afgerond. Dit is een **releaseblokker**, geen productieactie. Controleer vóór een Auth-branch/PR minimaal dat:
+De Auth-current-tree sanitization is afgerond in draft-PR #2: de getrackte dump, echte hashes/ciphertexts/verifier en bekende plaintext credentials zijn uit de huidige tree verwijderd. Current-tree en staged secret-scans, compile-pass en `git diff --check` zijn groen. De resterende **releaseblokker** is een verse database-migratierun plus database-integratietest. Daarbij geldt dat:
 
 - de getrackte databaseback-up `backup_before_email_security_20260202_183058.sql` — alleen indien operationeel nodig — eerst als versleutelde, toegangsbeperkte back-up is veiliggesteld, daarna niet meer in de huidige Git-tree staat en back-up/dump-patronen worden genegeerd;
 - seed- en correctiemigraties geen echte SMTP-ciphertext, productie-verifiers of herbruikbare vooringevulde wachtwoordhashes bevatten;
@@ -176,8 +176,8 @@ Nooit de waarde van `TENANT_SECRET_KEY` vervangen terwijl V1-ciphertext nog best
 ## Wat echt handmatig blijft
 
 - Nieuwe credentials aanmaken en oude intrekken in Todoist, bunq, Google, Entra, BotFather/Telegram, Clerk, xAI, Groq en Render PostgreSQL. Dit vereist jouw ingelogde provideraccounts en soms MFA/consent.
-- Expliciet goedkeuren dat de getrackte Auth-dump na eventuele veilige archivering uit Git wordt verwijderd en dat de geïnventariseerde seed-/tooling-artifacts worden gesanitized.
-- PR #21 reviewen/mergen of bewust naar productie promoveren. De READY-preview en smoke-test nemen die productie-keuze niet over.
+- De drie draft-PR's reviewen/mergen of bewust naar productie promoveren. READY-previews en smoke-tests nemen die productie-keuze niet over.
+
 - Een verse Auth-databaseback-up/snapshot maken en de restore op staging bevestigen.
 - Op de bekende bestaande live Render-services Auto-Deploy rond de migratie coördineren en één migrator kiezen. De lokale blueprint mag dit niet automatisch overnemen.
 - Na credentialrotatie eventueel een gecoördineerde Git-history rewrite goedkeuren; dit verandert gedeelde refs en vereist opnieuw clonen.
